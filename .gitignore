@@ -1,0 +1,21 @@
+# secrets
+.env
+service_account.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Node modules (if any)
+node_modules/

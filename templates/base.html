@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>
+    {% block title %}
+    {% endblock %}
+  </title>
+  <link rel="icon" type="image/png" href="C:/Users/KuetcheVal/Music/Newton's Nerds Automate Project/Front-End/static/favicon.png">
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Bootstrap + Bootswatch (Flatly theme) -->
+  <link href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/flatly/bootstrap.min.css" rel="stylesheet" />
+  <!-- Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
+  <link rel="shortcut icon" href="C:/Users/KuetcheVal/Downloads/Newton_s-Nerds-Logo.ico" type="image/x-icon">
+  {% block styles %}
+
+  {% endblock %}
+  <style>
+    
+  /* General */
+  body {
+    background: #f8f9fa;
+    color: #333;
+    font-family: "Segoe UI", sans-serif;
+  }
+    
+    /* Navbar */
+    .navbar {
+      background: linear-gradient(135deg, #005c97, #363795);
+    }
+    .navbar-brand {
+      font-weight: bold;
+    }
+
+    /* Footer */
+    footer {
+      background: #363795;
+      color: white;
+      padding: 20px 0;
+      text-align: center;
+      margin-top: 50px;
+      transition: background-color .3s, color .3s;
+    }
+
+    /* Dark Mode - Lightened */
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #1e1e2a;
+        color: #eee;
+      }
+      .navbar {
+        background: linear-gradient(135deg, #2a2a3a, #444466);
+      }
+      .hero {
+        background: linear-gradient(135deg, #2a2a3a, #444466);
+        color: #f4f6f9;
+      }
+      .card {
+        background-color: #2c2c3c;
+        color: #eee;
+      }
+      .card-header {
+        color: #f4f6f9;
+      }
+      footer {
+        background: #2a2a3a;
+        color: #f4f6f9;
+      }
+      a.btn-outline-info, a.btn-outline-success, a.btn-outline-warning, a.btn-outline-danger {
+        color: #f4f6f9 !important;
+        border-color: #f4f6f9 !important;
+      }
+    }
+
+    /* Responsive tweaks */
+    @media (max-width: 576px) {
+      .hero h1 {
+        font-size: 2rem;
+      }
+      .hero p {
+        font-size: 1rem;
+      }
+      .btn-lg {
+        font-size: 0.9rem;
+        padding: 0.5rem 1rem;
+      }
+      .thumb { 
+        height: 140px; 
+      }
+    }
+
+    /* Extra large screens - add spacing around cards */
+    @media (min-width: 1400px) {
+      .card {
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+    <div class="container container-fluid">
+      <a class="navbar-brand fw-bold" href="{{ url_for('home_page') }}">📚 Newton's Nerds</a>
+    </div>
+  </nav>
+
+  {% block content %}
+
+  {% endblock %}
+
+  <!-- Footer -->
+  <footer>
+    <p>&copy; 2025 Newton's Nerds | {{message}}</p>
+  </footer>
+
+</body>
+</html>

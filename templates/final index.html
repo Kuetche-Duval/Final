@@ -1,0 +1,133 @@
+{% extends 'base.html' %}
+
+{% block title %}
+Newton's Nerds
+{% endblock %}
+
+{% block styles %}
+<style>
+  /* Hero Section */
+  .hero {
+    background: linear-gradient(135deg, #005c97, #363795);
+    color: white;
+    padding: 80px 20px;
+    text-align: center;
+    border-radius: 0 0 50% 50% / 10%;
+    transition: all 0.3s ease;
+  }
+  .hero h1 {
+    font-weight: bold;
+    font-size: 2.5rem;
+    margin-bottom: 15px;
+  }
+  .hero p {
+    font-size: 1.2rem;
+    margin-bottom: 25px;
+  }
+  .hero .btn {
+    font-weight: bold;
+  }
+
+  /* Main container */
+  main.container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  /* Cards */
+  .card {
+    border: none;
+    border-radius: 20px;
+    transition: transform .2s, box-shadow .3s, background-color .3s, color .3s;
+  }
+  .card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0px 8px 20px rgba(0,0,0,0.15);
+  }
+  .card-header {
+    border-radius: 20px 20px 0 0 !important;
+    font-weight: bold;
+    font-size: 1.1rem;
+  }
+
+  /* Buttons */
+  .btn-outline-info, .btn-outline-success, .btn-outline-warning, .btn-outline-danger {
+    transition: all 0.2s ease;
+  }
+  .btn-outline-info:hover { background-color: #17a2b8; color: white; }
+  .btn-outline-success:hover { background-color: #28a745; color: white; }
+  .btn-outline-warning:hover { background-color: #ffc107; color: #212529; }
+  .btn-outline-danger:hover { background-color: #dc3545; color: white; }
+
+  /* Dark mode support */
+  @media (prefers-color-scheme: dark) {
+    body { background-color: #121212; color: #e0e0e0; }
+    .card { background-color: #1e1e2a; color: #e0e0e0; }
+    .card-header { color: #fff; }
+    .hero { color: #fff; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+  <!-- Hero -->
+  <div class="hero">
+    <h1>📚 Study Smarter, Not Harder</h1>
+    <p class="lead">Timetable • Notes • Resources • Motivation • Forms</p>
+    <a href="{{ url_for('rules_page') }}" target="_blank" class="btn btn-light btn-lg shadow">
+      <i class="bi bi-whatsapp"></i> Join WhatsApp Group
+    </a>
+  </div>
+
+  <!-- Main Content -->
+  <main class="container my-5">
+
+    <!-- Timetable -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-header bg-info text-white">
+        🕒 Timetable
+      </div>
+      <div class="card-body">
+        <p>Check your study schedule with detailed hours here.</p>
+        <a href="{{ url_for('content_page') }}#today_timetable" class="btn btn-outline-info">View Timetable</a>
+      </div>
+    </div>
+
+    <!-- Motivation & Bible Verses -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-header bg-success text-white">
+        💡 Motivation & Verses
+      </div>
+      <div class="card-body">
+        <blockquote class="blockquote">
+          “I can do all things through Christ who strengthens me.” – Philippians 4:13
+        </blockquote>
+        <a href="{{ url_for('content_page') }}#daily_motivation" class="btn btn-outline-success">See More Quotes</a>
+      </div>
+    </div>
+
+    <!-- Resources / Ask Questions -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-header bg-warning text-white">
+        📂 Ask & Share Questions
+      </div>
+      <div class="card-body">
+        <p>Ask any academic question or discussion topic. Your question will be visible to all members for discussion in the WhatsApp group.</p>
+        <a href="{{ url_for('questions_page') }}" class="btn btn-outline-warning">Ask Questions</a>
+      </div>
+    </div>
+
+    <!-- Google Forms / Quizzes -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-header bg-danger text-white">
+        📝 Practice Forms
+      </div>
+      <div class="card-body">
+        <p>Try mock exams and quizzes to prepare well.</p>
+        <a href="{{ url_for('content_page') }}#google_forms_quizzes" class="btn btn-outline-danger">View Forms</a>
+      </div>
+    </div>
+
+  </main>
+{% endblock %}

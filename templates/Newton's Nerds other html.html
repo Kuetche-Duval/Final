@@ -1,0 +1,206 @@
+{% extends 'base.html' %}
+
+{% block title %}
+Newton's Nerds - Content Page
+{% endblock %}
+
+{% block styles %}
+<style>
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  .hero-img { width: 100%; border-radius: 14px; object-fit: cover; }
+  .thumb { width: 100%; height: 180px; object-fit: cover; border-radius: 10px; }
+  .section { margin-top: 32px; }
+
+  .card {
+    border-radius: 14px; 
+    transition: transform .2s, box-shadow .3s, background-color .3s, color .3s; 
+    background-color: #fff; 
+    color: #111; 
+  }
+  .card:hover { 
+    transform: translateY(-5px); 
+    box-shadow: 0 8px 20px rgba(0,0,0,0.15); 
+  }
+
+  /* Tables */
+  th, td { padding: 0.75rem; border: 1px solid #ddd; }
+  th { background-color: #f0f0f0; }
+  .table-striped > tbody > tr:nth-of-type(odd) { background-color: #fafafa; }
+  .table-hover tbody tr:hover { background-color: #f5f5f5; }
+
+  /* Buttons */
+  a.btn-outline-info, a.btn-outline-success, a.btn-outline-warning, a.btn-outline-secondary { 
+    transition: all 0.3s; 
+  }
+  a.btn-outline-info:hover { background-color: #17a2b8; color: white; }
+  a.btn-outline-success:hover { background-color: #28a745; color: white; }
+  a.btn-outline-warning:hover { background-color: #ffc107; color: #212529; }
+  a.btn-outline-secondary:hover { background-color: #6c757d; color: white; }
+
+  /* Dark Mode */
+  @media (prefers-color-scheme: dark) {
+    body { background-color: #12121e; color: #eee; }
+    .card { background-color: #1e1e2c; color: #eee; }
+    .card-header { background-color: #2a2a3c !important; color: #f4f6f9 !important; }
+    table { background-color: #2c2c3c; color: #eee; }
+    th { background-color: #33334d; }
+    td, th { border-color: #444466; }
+    .table-striped > tbody > tr:nth-of-type(odd) { background-color: rgba(255,255,255,0.05); }
+    .table-hover tbody tr:hover { background-color: rgba(255,255,255,0.1); }
+    .list-group-item { background-color: #1e1e2c; color: #eee; border-color: #444466; }
+    .list-group-item:hover { background-color: rgba(255,255,255,0.08); }
+    a.btn-outline-info, a.btn-outline-success, a.btn-outline-warning, a.btn-outline-secondary { 
+      color: #f4f6f9 !important; border-color: #f4f6f9 !important; 
+    }
+    a.btn-outline-info:hover, a.btn-outline-success:hover, a.btn-outline-warning:hover, a.btn-outline-secondary:hover {
+      background-color: rgba(244,246,249,0.1); color: #fff !important;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+
+  <!-- 1) TODAY + DRIVE IMAGE CARD -->
+  <section class="section">
+    <div class="row g-4">
+      <div class="col-lg-7" id="today_timetable">
+        <div class="card shadow">
+          <div class="card-header bg-info text-white fw-bold">
+            🕒 Today’s Timetable (Example)
+          </div>
+          <div class="card-body">
+            <div class="table-responsive">
+              <table class="table table-hover align-middle">
+                <thead>
+                  <tr>
+                    {% for title in sheet_title %}
+                    <th>{{ title }}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for val in today_date %}
+                  {% set row = sheet_content[val[0] - 2] %}
+                  <tr>
+                    <td>{{ val[1] }}</td>
+                    <td>{{ row[1] }}</td>
+                    <td>{{ row[2] }}</td>
+                    <td><a href="https://meet.google.com/your-link" target="_blank">{{ row[3] }}</a></td>
+                    <td>{{ row[4] }}</td>
+                    <td>{{ row[5] }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <a class="btn btn-outline-info" href="#" role="button">Add to Calendar (.ics)</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-5" id="daily_motivation">
+        <div class="card shadow h-100">
+          <div class="card-header bg-success text-white fw-bold">💡 Daily Motivation</div>
+          <div class="card-body">
+            <img class="hero-img mb-3"
+                 src="/drive-image/1tTyhT4O_LoCaU8OL0DcCjuVm3o1z9gzY"
+                 alt="Motivation Image" />
+            <h5 class="card-title">“Stay Consistent”</h5>
+            <p class="card-text small text-muted">
+              Success = small efforts repeated daily.
+            </p>
+            <a class="btn btn-outline-success" href="#">See all quotes</a>
+          </div> 
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2) IMAGE GALLERY -->
+  <section class="section">
+    <h4 class="mb-3">🖼️ Motivation / Prayers / Verses (Gallery)</h4>
+    <div class="row g-3">
+      {% for item in dr_values %}
+      <div class="col-6 col-md-4 col-lg-3">
+        <div class="card shadow-sm">
+          <img class="thumb" src="/drive-image/{{ item[1][1]}}" alt="{{ item['title'] }}" />
+          <div class="card-body">
+            <div class="fw-bold small">{{ item[0] }}</div>
+            <div class="text-muted small">{{ item[1][0] }}</div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <!-- 3) FULL TIMETABLE (WEEK) -->
+  <section class="section">
+    <h4 class="mb-3">📅 Full Timetable (Week)</h4>
+    <div class="table-responsive">
+      <table class="table table-striped table-hover align-middle">
+        <thead class="table-primary">
+          <tr>
+            {% for title in sheet_title %}
+            <th>{{ title }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for value in sheet_content %}
+          <tr>
+            {% for val in value %}
+            <td>{{ val }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 4) LINKS: DRIVE + GOOGLE FORMS -->
+  <section class="section">
+    <div class="row g-4" id="notes_and_ressources">
+      <div class="col-md-6">
+        <div class="card shadow">
+          <div class="card-header bg-warning fw-bold">📂 Notes & Resources (Drive)</div>
+          <div class="card-body">
+            <p class="mb-2">All PDFs and notes are in the shared Drive:</p>
+            <a class="btn btn-warning" target="_blank" href="https://drive.google.com/drive/folders/16iL3bG1KHn3l-RDtrgof2kkA3DAILgbo">
+              Open Shared Drive
+            </a>
+            <p class="mt-3 small text-muted">Tip: keep folders by subject → Math / Physics / Chemistry…</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-6" id="google_forms_quizzes">
+        <div class="card shadow">
+          <div class="card-header bg-secondary text-white fw-bold">📝 Google Forms (Quizzes)</div>
+          <div class="card-body">
+            <ul class="list-group">
+              {% for form in form_list %}
+              <li class="list-group-item d-flex justify-content-between align-items-center">
+                <div>
+                  <div class="fw-bold">{{ form['title'] }}</div>
+                  <div class="small text-muted">{{ form.get('description', '') }}</div>
+                </div>
+                <a class="btn btn-outline-secondary" target="_blank" href="https://drive.google.com/forms/d/{{ form['id'] }}/edit?usp=drivesdk">Open</a>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+{% endblock %}

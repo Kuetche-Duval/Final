@@ -1,0 +1,141 @@
+{% extends 'base.html' %}
+
+{% block title %}
+  Newton's Nerds - content page
+{% endblock %}
+
+{% block styles %}
+<style>
+  /* 📝 Rules list styling */
+  .rules-list {
+    list-style: none; /* remove default bullets */
+    padding: 0;
+    margin: 0;
+  }
+
+  .rules-list li {
+    position: relative;
+    background: #fff;
+    margin-bottom: 10px;
+    padding: 12px 16px 12px 40px; /* left space for icon */
+    border-radius: 10px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    font-size: 15px;
+    transition: all 0.25s ease;
+  }
+
+  /* little checkmark icon */
+  .rules-list li::before {
+    content: "✔";
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 14px;
+    color: #0d6efd;
+    font-weight: bold;
+  }
+
+  .rules-list li:hover {
+    transform: translateX(4px);
+    background: rgba(13,110,253,0.08);
+  }
+
+  .span {
+        color: #007bff;
+        font-weight: bold;
+        font-family: 'Times New Roman', Times, serif;
+      }
+
+  input[type="checkbox"] {
+  /* Make the checkbox larger and blue */
+  width: 18px;
+  height: 18px;
+  accent-color: #007bff; /* changes checkmark color */
+  }
+
+  /* Highlight label when checked */
+  input[type="checkbox"]:checked + label {
+    color: #0d6efd;
+    font-weight: bold;
+  }
+
+
+  @media (prefers-color-scheme: dark) {
+    .rules-list li {
+      background: #2c2c3c;
+      color: #eee;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    }
+    
+    .rules-list li::before {
+      color: #4da3ff;
+    }
+    .rules-list li:hover {
+      background: rgba(13,110,253,0.2);
+    }
+  }
+</style>
+{% endblock %}
+
+
+{% block content %}
+<div class="container py-4">
+  <section class="section">
+    <div class="row g-4">
+      <div class="col-12">
+        <div class="card shadow">
+          <div class="card-header bg-primary text-white fw-bold">🛡️ StudyHub Group Rules & Guidelines</div>
+          <div class="card-body">
+            <ul class="rules-list">
+              {% for row in rules %}
+              <li class="list-group-item">{{ row[0] }} ✨ {{ row[1] }} <p><span class="span">{{ row[2] }}</span></p></li>
+              {% endfor %}
+            </ul>
+            
+            <div class="form-check mt-3">
+              <input class="form-check-input" type="checkbox" value="" id="agreeCheck">
+              <label class="form-check-label" for="agreeCheck">
+                I have read and agree to follow the rules
+              </label>
+            </div>
+            <button id="joinBtn" class="btn btn-success mt-2" disabled>
+              Join WhatsApp Group
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const agreeCheck = document.getElementById('agreeCheck');
+  const joinBtn = document.getElementById('joinBtn');
+
+  // Initial disabled style
+  joinBtn.style.transition = 'all 0.3s';
+  joinBtn.style.opacity = '0.6';
+  joinBtn.style.cursor = 'not-allowed';
+
+  // Enable/disable button based on checkbox
+  agreeCheck.addEventListener('change', () => {
+    if (agreeCheck.checked) {
+      joinBtn.disabled = false;
+      joinBtn.style.opacity = '1';
+      joinBtn.style.cursor = 'pointer';
+    } else {
+      joinBtn.disabled = true;
+      joinBtn.style.opacity = '0.6';
+      joinBtn.style.cursor = 'not-allowed';
+    }
+  });
+
+  // Redirect to WhatsApp group when clicked
+  joinBtn.addEventListener('click', () => {
+    window.location.href = "https://chat.whatsapp.com/YourInviteLinkHere";
+  });
+});
+</script>
+{% endblock %}

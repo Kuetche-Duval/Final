@@ -1,0 +1,146 @@
+{% extends 'base.html' %}
+
+{% block title %}
+  Newton's Nerds - Questions
+{% endblock %}
+
+{% block styles %}
+<style>
+  .question-list { list-style: none; padding: 0; }
+  .question-list li {
+    background: #fff;
+    margin-bottom: 12px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    cursor: pointer;
+    transition: background .3s;
+  }
+  .question-list li:hover { background: #f1f1ff; }
+
+  .modal textarea {
+    min-height: 200px;
+    font-family: monospace;
+    white-space: pre-wrap;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .question-list li { background: #33334d; color: #eee; }
+    .modal-content { background-color: #2c2c3c; color: #eee; }
+    .modal textarea { background: #1e1e2a; color: #eee; }
+    .card { background-color: #2a2a3d; color: #eee; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="row g-4">
+    <div class="col-12">
+      <div class="card shadow">
+        <div class="card-header bg-primary text-white fw-bold">
+          💬 Ask & Answer Questions
+        </div>
+        <div class="card-body">
+
+          <!-- ================== New Question Form ================== -->
+          <h5 class="mb-3">🙋 Ask a Question</h5>
+          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4">
+            <div class="mb-3">
+              <label for="name" class="form-label">Your Name (optional):</label>
+              <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous">
+            </div>
+            <div class="mb-3">
+              <label for="category" class="form-label">Category:</label>
+              <select class="form-select" id="category" name="category" required>
+                <option value="">-- Select Category --</option>
+                {% for c in categories %}
+                  <option value="{{c}}">{{c}}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="mb-3">
+              <label for="question" class="form-label">Your Question:</label>
+              <textarea class="form-control" id="question" name="question" rows="4" required></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">➕ Submit Question</button>
+          </form>
+          <hr>
+
+          <!-- ================== Category Filter ================== -->
+          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-3">
+            <label for="categoryFilter" class="form-label">📂 Filter by category:</label>
+            <select class="form-select" id="categoryFilter" name="category" onchange="this.form.submit()">
+              <option value="">All</option>
+              {% for c in categories %}
+                <option value="{{c}}" {% if selected_category == c %}selected{% endif %}>{{c}}</option>
+              {% endfor %}
+            </select>
+          </form>
+
+          <!-- ================== Questions List ================== -->
+          <h5 class="mb-3">📑 Questions:</h5>
+          <ul class="question-list">
+            {% for q in questions %}
+              <li onclick="openAnswerModal(`{{ q[0] or 'Anonymous' }}`, `{{ q[2]|e }}`)">
+                <span class="fw-bold text-primary">{{ q[0] or "Anonymous" }}</span> 
+                <small class="text-muted">({{ q[1] }})</small><br>
+                {{ q[2] }}
+              </li>
+            {% else %}
+              <li class="text-muted">No questions yet. Be the first to ask!</li>
+            {% endfor %}
+          </ul>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================== Answer Modal ================== -->
+<div class="modal fade" id="answerModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content rounded-3 shadow-lg">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title">✍️ Answer Question</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Preview & Write:</label>
+        <textarea id="answerText" class="form-control"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" onclick="copyAnswer()">📋 Copy</button>
+        <a id="whatsappBtn" class="btn btn-success" target="_blank">📲 Send to WhatsApp</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let currentQuestion = "";
+
+  function openAnswerModal(author, question) {
+    currentQuestion = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
+    document.getElementById("answerText").value = currentQuestion;
+    new bootstrap.Modal(document.getElementById('answerModal')).show();
+  }
+
+  function copyAnswer() {
+    const text = document.getElementById("answerText").value;
+    navigator.clipboard.writeText(text).then(() => {
+      alert("✅ Answer copied to clipboard!");
+    });
+  }
+
+  document.getElementById("whatsappBtn").addEventListener("click", function() {
+    const text = encodeURIComponent(document.getElementById("answerText").value);
+    // 🔒 Replace with your actual group invite link
+    const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID";
+    this.href = `${groupLink}?text=${text}`;
+  });
+</script>
+{% endblock %}

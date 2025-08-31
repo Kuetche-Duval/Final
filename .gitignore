@@ -1,0 +1,4 @@
+service_account.json
+templates/.env
+__pycache__/drive.cpython-313.pyc
+__pycache__/sheets.cpython-313.pyc

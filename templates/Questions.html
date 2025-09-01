@@ -70,13 +70,14 @@
           <!-- ================== Category Filter ================== -->
           <form method="POST" action="{{ url_for('questions_page') }}" class="mb-3">
             <label for="categoryFilter" class="form-label">📂 Filter by category:</label>
-            <select class="form-select" id="categoryFilter" name="category" onchange="this.form.submit()">
+            <select class="form-select" id="categoryFilter" name="filter_category" onchange="this.form.submit()">
               <option value="">All</option>
               {% for c in categories %}
                 <option value="{{c}}" {% if selected_category == c %}selected{% endif %}>{{c}}</option>
               {% endfor %}
             </select>
           </form>
+
 
           <!-- ================== Questions List ================== -->
           <h5 class="mb-3">📑 Questions:</h5>

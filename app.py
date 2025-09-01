@@ -1,29 +1,42 @@
 import os
 import base64
+from pathlib import Path
 from flask import Flask, render_template, url_for, redirect, Response, request
 from dotenv import load_dotenv
 import requests
 import datetime
+import json
 
-# Load .env automatically
+# --- Load .env ---
 load_dotenv()
 
-# --- Secure secrets and credentials ---
+# --- Decode service account from Base64 ---
 SERVICE_ACCOUNT_B64 = os.environ.get("SERVICE_ACCOUNT_JSON_B64")
 SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_account.json")
+
 if SERVICE_ACCOUNT_B64:
-    with open(SERVICE_ACCOUNT_PATH, "wb") as f:
-        f.write(base64.b64decode(SERVICE_ACCOUNT_B64))
     try:
-        os.chmod(SERVICE_ACCOUNT_PATH, 0o600)
-    except PermissionError:
-        pass  # Mobile (Pydroid/Termux) may not allow chmod
+        b64 = "".join(SERVICE_ACCOUNT_B64.split())
+        data = base64.b64decode(b64)
+        json.loads(data.decode("utf-8"))  # sanity check
+        tmp = SERVICE_ACCOUNT_PATH + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        Path(tmp).replace(SERVICE_ACCOUNT_PATH)
+        try:
+            os.chmod(SERVICE_ACCOUNT_PATH, 0o600)
+        except PermissionError:
+            pass
+    except Exception as ex:
+        raise RuntimeError(f"Failed to decode/write service account: {ex}")
+elif not os.path.exists(SERVICE_ACCOUNT_PATH):
+    raise RuntimeError("Missing service account credentials and SERVICE_ACCOUNT_JSON_B64 not set.")
 
-# --- Flask app setup ---
+# --- Flask setup ---
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "fallback-secret")  # Must be set in .env
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "fallback-secret")
 
-# --- App globals ---
+# --- Globals ---
 message = "Study hard, pray harder."
 categories = [
     "Mathematics", "Biology", "Computer Science",
@@ -33,7 +46,6 @@ categories = [
 # --- Imports that depend on service account ---
 from sheets import from_google_sheets, check_date, append_row, read_rules, clear_sheet, get_questions, reload_time
 from drive import from_google_drive, folders_and_images
-
 
 # --- Routes ---
 @app.route("/")
@@ -97,8 +109,7 @@ def rules_page():
     except Exception as e:
         return f"Error loading rules: {str(e)}", 500
 
-
 # --- Entry point ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=True)

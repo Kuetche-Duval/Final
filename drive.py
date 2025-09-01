@@ -14,9 +14,8 @@ def get_work_drive():
     )
     return GoogleDrive(gauth)
 
-# Cache setup
 _cache = {"data": None, "timestamp": 0}
-CACHE_TTL = int(os.environ.get("DRIVE_CACHE_TTL", "180"))  # default 3 minutes
+CACHE_TTL = int(os.environ.get("DRIVE_CACHE_TTL", "180"))
 
 def from_google_drive(base_folder_id, mimeType="image/jpeg"):
     drive = get_work_drive()

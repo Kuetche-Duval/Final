@@ -10,14 +10,15 @@ timetable_key = os.environ.get("TIMETABLE_SHEET_KEY")
 questions_key = os.environ.get("QUESTIONS_SHEET_KEY")
 group_rules_key = os.environ.get("GROUP_RULES_SHEET_KEY")
 
-now = datetime.now()
-reload_time = now.time()
+reload_time = datetime.now().time()
 
-# Cache setup
+# --- Cache ---
 _cache = {"timetable": None, "questions": None, "rules": None, "timestamp": 0}
-CACHE_TTL = int(os.environ.get("SHEETS_CACHE_TTL", "180"))  # default 3 minutes
+CACHE_TTL = int(os.environ.get("SHEETS_CACHE_TTL", "180"))
 
 def get_work_sheet(key):
+    if not key:
+        raise RuntimeError("Sheet key missing in .env")
     return gc.open_by_key(key).sheet1
 
 def from_google_sheets():
@@ -29,7 +30,7 @@ def from_google_sheets():
     return data
 
 def check_date():
-    week = now.strftime("%a").upper()
+    week = datetime.now().strftime("%a").upper()
     col = get_work_sheet(timetable_key).col_values(1)
     return [(i, val) for i, val in enumerate(col, start=1) if val == week]
 

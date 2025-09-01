@@ -70,28 +70,52 @@
           <!-- ================== Category Filter ================== -->
           <form method="POST" action="{{ url_for('questions_page') }}" class="mb-3">
             <label for="categoryFilter" class="form-label">📂 Filter by category:</label>
-            <select class="form-select" id="categoryFilter" name="filter_category" onchange="this.form.submit()">
+            <select class="form-select" id="categoryFilter" name="categoryFilter" onchange="this.form.submit()">
               <option value="">All</option>
               {% for c in categories %}
                 <option value="{{c}}" {% if selected_category == c %}selected{% endif %}>{{c}}</option>
               {% endfor %}
             </select>
+            
           </form>
-
 
           <!-- ================== Questions List ================== -->
           <h5 class="mb-3">📑 Questions:</h5>
           <ul class="question-list">
             {% for q in questions %}
-              <li onclick="openAnswerModal(`{{ q[0] or 'Anonymous' }}`, `{{ q[2]|e }}`)">
-                <span class="fw-bold text-primary">{{ q[0] or "Anonymous" }}</span> 
-                <small class="text-muted">({{ q[1] }})</small><br>
-                {{ q[2] }}
-              </li>
+            <li class="question-item">
+              <div class="d-flex justify-content-between align-items-start">
+                <div>
+                  <span class="fw-bold text-primary">{{ q[0] or 'Anonymous' }}</span>
+                  <small class="text-muted">({{ q[1] }})</small><br>
+                  <div class="mt-1">{{ q[2] }}</div>
+                </div>
+            
+                <!-- visible Answer button (and optional Copy button) -->
+                <div class="ms-3 text-end">
+                  <button type="button"
+                          class="btn btn-sm btn-outline-primary answer-btn"
+                          data-author="{{ q[0]|e }}"
+                          data-question="{{ q[2]|e }}">
+                    Answer
+                  </button>
+                  <button type="button"
+                          class="btn btn-sm btn-outline-secondary copy-btn"
+                          data-question="{{ q[2]|e }}">
+                    Copy
+                  </button>
+                </div>
+              </div>
+            
+              <!-- keep data attributes on the li for fallback if you prefer -->
+              <!-- data-author/data-question not required here because buttons carry them -->
+            </li>            
+        
             {% else %}
               <li class="text-muted">No questions yet. Be the first to ask!</li>
             {% endfor %}
           </ul>
+          
 
         </div>
       </div>
@@ -122,26 +146,126 @@
 
 {% block scripts %}
 <script>
-  let currentQuestion = "";
-
-  function openAnswerModal(author, question) {
-    currentQuestion = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
-    document.getElementById("answerText").value = currentQuestion;
-    new bootstrap.Modal(document.getElementById('answerModal')).show();
+document.addEventListener("DOMContentLoaded", function () {
+  // Helper: decode HTML entities (data-* may contain escaped HTML)
+  function decodeHtml(html) {
+    const txt = document.createElement("textarea");
+    txt.innerHTML = html || "";
+    return txt.value;
   }
 
-  function copyAnswer() {
-    const text = document.getElementById("answerText").value;
-    navigator.clipboard.writeText(text).then(() => {
-      alert("✅ Answer copied to clipboard!");
+  // Autosize helper
+  function autosizeTextarea(el) {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }
+
+  // Open answer modal and fill textarea
+  function openAnswerModal(author, question) {
+    const textarea = document.getElementById("answerText");
+    const text = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
+    if (textarea) {
+      textarea.value = text;
+      autosizeTextarea(textarea);
+    }
+    // show bootstrap modal if available
+    try {
+      if (typeof bootstrap !== "undefined" && bootstrap.Modal) {
+        const modalEl = document.getElementById("answerModal");
+        if (modalEl) {
+          new bootstrap.Modal(modalEl).show();
+          return;
+        }
+      }
+    } catch (err) {
+      // fallthrough to fallback if bootstrap not available
+    }
+    // Fallback: if Bootstrap modal isn't available, show a simple prompt with the text
+    // (user can copy/paste)
+    try {
+      window.alert("Answer box (Bootstrap missing) — the prepared answer is copied to your clipboard.");
+      navigator.clipboard.writeText(text).catch(()=>{ /* ignore */ });
+    } catch (e) {
+      // nothing else
+    }
+  }
+
+  // Copy arbitrary text with fallback prompt
+  function copyTextToClipboard(text, btn) {
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        // small feedback
+        if (btn) {
+          const prev = btn.innerHTML;
+          btn.innerHTML = "Copied ✓";
+          setTimeout(()=> btn.innerHTML = prev, 1200);
+        } else {
+          alert("Copied to clipboard!");
+        }
+      }).catch(() => {
+        // fallback to prompt
+        window.prompt("Copy (Ctrl+C / Cmd+C) — text below:", text);
+      });
+    } else {
+      // fallback
+      window.prompt("Copy (Ctrl+C / Cmd+C) — text below:", text);
+    }
+  }
+
+  // Copy answer button used in modal
+  window.copyAnswer = function () {
+    const textarea = document.getElementById("answerText");
+    const text = textarea ? textarea.value : "";
+    copyTextToClipboard(text);
+  };
+
+  // WhatsApp button behavior
+  const whatsappBtn = document.getElementById("whatsappBtn");
+  if (whatsappBtn) {
+    whatsappBtn.addEventListener("click", function (e) {
+      // build link on click so it always uses current textarea content
+      const textarea = document.getElementById("answerText");
+      const text = textarea ? textarea.value : "";
+      const encoded = encodeURIComponent(text || "");
+      const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID"; // replace
+      // use href format that sends message text when opening in mobile/desktop
+      this.href = `${groupLink}?text=${encoded}`;
     });
   }
 
-  document.getElementById("whatsappBtn").addEventListener("click", function() {
-    const text = encodeURIComponent(document.getElementById("answerText").value);
-    // 🔒 Replace with your actual group invite link
-    const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID";
-    this.href = `${groupLink}?text=${text}`;
+  // Attach delegated handlers for Answer + Copy buttons
+  document.body.addEventListener("click", function (ev) {
+    const answerBtn = ev.target.closest && ev.target.closest(".answer-btn");
+    if (answerBtn) {
+      const rawAuthor = answerBtn.getAttribute("data-author") || "";
+      const rawQuestion = answerBtn.getAttribute("data-question") || "";
+      const author = decodeHtml(rawAuthor);
+      const question = decodeHtml(rawQuestion);
+      openAnswerModal(author, question);
+      ev.preventDefault();
+      return;
+    }
+
+    const copyBtn = ev.target.closest && ev.target.closest(".copy-btn");
+    if (copyBtn) {
+      const rawQ = copyBtn.getAttribute("data-question") || "";
+      const question = decodeHtml(rawQ);
+      copyTextToClipboard(question, copyBtn);
+      ev.preventDefault();
+      return;
+    }
   });
+
+  // Attach autosize to the answer textarea (if present)
+  const answerTextEl = document.getElementById("answerText");
+  if (answerTextEl) {
+    answerTextEl.addEventListener("input", function () {
+      autosizeTextarea(this);
+    });
+  }
+
+}); // DOMContentLoaded
 </script>
 {% endblock %}

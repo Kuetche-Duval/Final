@@ -25,6 +25,20 @@ Newton's Nerds - Content Page
     transform: translateY(-5px); 
     box-shadow: 0 8px 20px rgba(0,0,0,0.15); 
   }
+  /* Make footer stretch full width on this page (override constrained container) */
+  footer {
+    width: 100% !important;
+    left: 0;
+    right: 0;
+    position: relative; /* keep footer in normal flow, not fixed */
+    box-sizing: border-box;
+  }
+
+  /* small spacing to match nav feel */
+  footer .container {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
 
   /* Tables */
   th, td { padding: 0.75rem; border: 1px solid #ddd; }
@@ -119,7 +133,7 @@ Newton's Nerds - Content Page
             <p class="card-text small text-muted">
               Success = small efforts repeated daily.
             </p>
-            <a class="btn btn-outline-success" href="#">See all quotes</a>
+            <a class="btn btn-outline-success" href="https://drive.google.com/drive/folders/1A7Hu5mNYkaUS1wVtCtoVMEd2u7QxZy3h?usp=drive_link">See all quotes</a>
           </div>
         </div>
       </div>
@@ -147,7 +161,8 @@ Newton's Nerds - Content Page
           {% endfor %}
         </div>
       </section>
-      
+    </div>
+  </section>
 
   <!-- 3) FULL TIMETABLE (WEEK) -->
   <section class="section">

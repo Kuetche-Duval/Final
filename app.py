@@ -77,21 +77,58 @@ def content_page():
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
     try:
+        # filter dropdown uses name "categoryFilter" in your template
+        selected_category = request.form.get("categoryFilter", "")
+
+        # handle new question submission
         if request.method == "POST":
-            username = request.form.get("username", "Anonymous")
-            questionText = request.form.get("questionText", "").strip()
+            # if the user submitted a new question the form fields are name/category/question
+            # note: categoryFilter also triggers POST when filter is used; above we already captured it
+            username = request.form.get("name", "Anonymous").strip()
+            questionText = request.form.get("question", "").strip()
             choiceSelected = request.form.get("category", "Other")
 
             if questionText:
                 append_row([choiceSelected, username, questionText])
-            return redirect(url_for("questions_page"))
+                # after append, redirect to GET so the new data appears (cache invalidated in append_row)
+                return redirect(url_for("questions_page"))
 
+        # Reload sheet at midnight (keep your existing behaviour)
         if reload_time == datetime.time(0, 0):
             clear_sheet()
 
-        return render_template("Questions.html", questions=get_questions(), message=message, categories=categories)
+        # fetch all questions (get_questions handles cache)
+        all_questions = get_questions()
+        # remove any empty rows (safety)
+        all_questions = [q for q in all_questions if any(cell is not None and str(cell).strip() != "" for cell in q)]
+
+        # build categories from sheet (column 0 is category)
+        derived_categories = sorted({str(q[0]).strip() for q in all_questions if len(q) > 0 and q[0]})
+
+        # filter by category — assuming sheet columns: 0=Category,1=Name,2=Question
+        if selected_category and selected_category != "All":
+            questions = [q for q in all_questions if len(q) > 0 and str(q[0]).strip() == selected_category.strip()]
+        else:
+            questions = all_questions
+
+        return render_template(
+            "Questions.html",
+            questions=questions,
+            message=message,
+            categories=derived_categories or categories,  # fallback to your static list if sheet empty
+            selected_category=selected_category
+        )
     except Exception as e:
-        return f"Error in questions page: {str(e)}", 500
+        # friendly error response (avoid crashing)
+        return render_template(
+            "Questions.html",
+            questions=[],
+            message=message,
+            categories=categories,
+            selected_category="",
+            error=f"Unable to load questions right now: {e}"
+        ), 200
+
 
 @app.route("/drive-image/<file_id>")
 def drive_image(file_id):

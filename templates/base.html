@@ -62,7 +62,7 @@
         background-color: #2c2c3c;
         color: #eee;
       }
-      .card-header {
+      .text-muted {
         color: #f4f6f9;
       }
       footer {
@@ -101,16 +101,16 @@
       }
     }
     /* =========================
-   Upgraded Modern Dark Mode
+   Upgraded Dark Mode
    ========================= */
 @media (prefers-color-scheme: dark) {
   :root {
-    --body-bg: #181a20;        /* Modern dark slate background */
-    --card-bg: #1f2230;        /* Slightly lighter card background */
-    --text: #f3f4f6;           /* Softer near-white text */
-    --muted: #a0a4b8;          /* Muted gray for secondary text */
-    --primary: #4da6ff;        /* Bright blue accent */
-    --accent: #ffb84d;         /* Warm highlight accent */
+    --body-bg: #1a1b26fa;        /* Deep dark background */
+    --card-bg: #1a1b26;        /* Softer dark card */
+    --text: #f0f0f5;           /* Almost white text */
+    --muted: #9ca3af;          /* Medium muted gray */
+    --primary: #4da6ff;        /* Brighter accent blue */
+    --accent: #ffb84d;         /* Warm secondary accent */
   }
 
   body {
@@ -121,71 +121,66 @@
   .card {
     background: var(--card-bg);
     color: var(--text);
-    border: 1px solid rgba(255,255,255,0.06);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
   }
 
-  /* Question list */
+  /* Question list items */
   .question-list li {
     background: var(--card-bg);
     color: var(--text);
-    border: 1px solid rgba(255,255,255,0.05);
-    box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.06);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
   }
   .question-list li:hover {
-    background: rgba(255,255,255,0.04);
+    background: rgba(255,255,255,0.05);
     transform: translateY(-3px);
-    box-shadow: 0 8px 18px rgba(0,0,0,0.4);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.45);
   }
 
-  /* Forms */
+  /* Form elements */
   .form-control, .form-select, textarea {
-    background: #252838;
+    background: rgba(61, 61, 71, 0);
     color: var(--text);
-    border: 1px solid rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.15);
   }
   .form-control:focus, .form-select:focus, textarea:focus {
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(77,166,255,0.25);
-    background: #202432;
+    box-shadow: 0 0 0 3px rgba(77,166,255,0.3);
+    background: #1c1c2b;
+    color: var(--text)
   }
 
   /* Headers */
-  .question-header { color: var(--text); }
+  .question-header {
+    color: var(--text);
+  }
   .question-header .author { color: var(--text); }
   .question-header .dot { color: var(--muted); }
   .question-header .category { color: var(--primary); }
 
-  /* Messages */
+  /* Message text + time */
   .message-text { color: var(--text); }
   .message-time { color: var(--muted); }
 
-  /* Modal */
-  .modal-content {
-    background: #20232f;
-    color: var(--text);
-    border: 1px solid rgba(255,255,255,0.08);
-  }
-  .modal textarea {
-    background: #181a24;
-    color: var(--text);
-    border: 1px solid rgba(255,255,255,0.12);
-  }
+  /* Modals */
+  .modal-content { background: #1b1b27; color: var(--text); border: 1px solid rgba(255,255,255,0.08); }
+  .modal textarea { background: #12121a; color: var(--text); border: 1px solid rgba(255,255,255,0.15); }
 
   /* Tables */
-  table { background-color: #1f2230; color: var(--text); }
-  th { background-color: #292d3d; color: #fff; }
-  td, th { border-color: #3a3d52; }
-  .table-striped > tbody > tr:nth-of-type(odd) { background-color: rgba(255,255,255,0.04); }
-  .table-hover tbody tr:hover { background-color: rgba(255,255,255,0.08); }
+  table { background-color: #1e1e2c; color: var(--text); }
+  th { background-color: #2a2a3c; color: #fff; }
+  td, th { border-color: #33334d; }
+  .table-striped > tbody > tr:nth-of-type(odd) { background-color: rgba(255,255,255,0.05); }
+  .table-hover tbody tr:hover { background-color: rgba(255,255,255,0.1); }
 
   /* List groups */
   .list-group-item {
-    background-color: #1f2230;
+    background-color: #1a1b26;
     color: var(--text);
-    border-color: #33364a;
+    border-color: #33334d;
   }
-  .list-group-item:hover { background-color: rgba(255,255,255,0.06); }
+  .list-group-item:hover { background-color: rgba(255,255,255,0.07); }
 
   /* Buttons */
   .btn, a.btn {
@@ -198,29 +193,6 @@
     color: #fff;
   }
 
-   /* Headings / titles below images */
-   .card-title, 
-  .image-title, 
-  .section h2, 
-  .section h3 {
-    color: #f5f6fa;   /* bright, modern white */
-    font-weight: 600;
-  }
-
-  /* Descriptive text / paragraphs */
-  .card-text, 
-  .image-caption, 
-  .section p {
-    color: #cfd2dc;   /* softer gray, but readable */
-    font-weight: 400;
-  }
-
-  /* If text overlaps images directly (optional enhancement) */
-  .image-caption, 
-  .overlay-text {
-    text-shadow: 0 1px 3px rgba(0,0,0,0.7); /* boosts legibility */
-  }
-
   /* Outline buttons */
   a.btn-outline-info, a.btn-outline-success, a.btn-outline-warning, a.btn-outline-secondary {
     color: var(--text) !important;
@@ -231,7 +203,6 @@
   a.btn-outline-warning:hover { background: #ffc107; color: #212529 !important; }
   a.btn-outline-secondary:hover { background: #6c757d; color: #fff !important; }
 }
-
 
   </style>
 </head>

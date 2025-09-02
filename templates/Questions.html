@@ -254,31 +254,6 @@
   }
   
   /* =========================
-     Dark mode support
-     ========================= */
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --card-bg: #1c1c29;
-      --muted: #bfc4d6;
-      --primary: #7fb4ff;
-      --body-bg: #0f0f16;
-      --text: #e8e8ee;
-    }
-  
-    body { background: var(--body-bg); color: var(--text); }
-  
-    .card { background: var(--card-bg); box-shadow: none; }
-    .question-list li { background: var(--card-bg); color: var(--text); box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
-    .question-list li:hover { background: rgba(255,255,255,0.02); }
-    .form-control, .form-select, textarea {
-      background: #21212b; color: var(--text); border: 1px solid rgba(255,255,255,0.06);
-    }
-    .modal textarea { background: #181822; color: var(--text); }
-    .message-time { color: var(--muted); }
-    .question-header .category { color: var(--primary); }
-  }
-  
-  /* =========================
      Utility tweaks
      ========================= */
   /* ensure copy button & answer button don't wrap text badly */

@@ -46,6 +46,7 @@ STATIC_CATEGORIES = [
     "Mathematics", "Biology", "Computer Science",
     "Further Mathematics", "Chemistry", "Physics", "Other"
 ]
+MOTIVATION_VERSES = ["A new commandment I give to you: Love one another; as I have loved you, so you must love one another."]
 
 # --- Imports that rely on the service account file being present ---
 # these modules should exist in your project (you provided earlier versions)

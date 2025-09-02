@@ -6,7 +6,7 @@
 
 {% block styles %}
 <style>
-  .question-list { list-style: none; padding: 0; }
+  .question-list { list-style: none; padding: 0; margin: 0; }
   .question-list li {
     background: #fff;
     margin-bottom: 12px;
@@ -14,9 +14,46 @@
     border-radius: 10px;
     box-shadow: 0 2px 6px rgba(0,0,0,0.08);
     cursor: pointer;
-    transition: background .3s;
+    transition: background .3s, transform .15s;
   }
-  .question-list li:hover { background: #f1f1ff; }
+  .question-list li:hover { background: #f1f1ff; transform: translateY(-2px); }
+
+  /* header (author • category) */
+  .question-header {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: nowrap;      /* prevent wrapping */
+    white-space: nowrap;    /* force single line */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 700;
+    color: #333;
+  }
+  .question-header .author { font-weight: 700; margin-right: 6px; }
+  .question-header .dot { color: #6c757d; margin-right: 6px; }
+  .question-header .category { color: #0d6efd; font-weight: 600; }
+
+  .message-text { margin-top: 6px; white-space: pre-wrap; color: #222; }
+
+  /* Time style similar to chat apps (small, muted, right-aligned) */
+  .message-time {
+    font-size: 0.78rem;
+    color: #6c757d;
+    margin-top: 6px;
+    display: inline-block;
+    min-width: 65px;
+    text-align: right;
+  }
+
+  /* Position action buttons/time to the right inside the list item */
+  .msg-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    margin-left: 12px;
+  }
 
   .modal textarea {
     min-height: 200px;
@@ -24,11 +61,20 @@
     white-space: pre-wrap;
   }
 
+  /* Dark mode adapt */
   @media (prefers-color-scheme: dark) {
     .question-list li { background: #33334d; color: #eee; }
     .modal-content { background-color: #2c2c3c; color: #eee; }
     .modal textarea { background: #1e1e2a; color: #eee; }
     .card { background-color: #2a2a3d; color: #eee; }
+    .message-time { color: #bfc4d6; }
+    .question-header .category { color: #7fb4ff; }
+  }
+
+  /* small screens: allow header to truncate with ellipsis but keep icon/time visible */
+  @media (max-width: 576px) {
+    .question-header { max-width: calc(100% - 100px); } /* leaves room for buttons/time */
+    .msg-actions { min-width: 80px; }
   }
 </style>
 {% endblock %}
@@ -76,46 +122,54 @@
                 <option value="{{c}}" {% if selected_category == c %}selected{% endif %}>{{c}}</option>
               {% endfor %}
             </select>
-            
           </form>
 
           <!-- ================== Questions List ================== -->
           <h5 class="mb-3">📑 Questions:</h5>
           <ul class="question-list">
             {% for q in questions %}
+            {# normalized rows: [category, name, question, time] (sheets.py ensures 4 cols) #}
+            {% set category = q[0] if q|length > 0 else '' %}
+            {% set author = q[1] if q|length > 1 and q[1] else 'Anonymous' %}
+            {% set question_text = q[2] if q|length > 2 else '' %}
+            {% set time_only = q[3] if q|length > 3 else '' %}
+
             <li class="question-item">
               <div class="d-flex justify-content-between align-items-start">
-                <div>
-                  <span class="fw-bold text-primary">{{ q[0] or 'Anonymous' }}</span>
-                  <small class="text-muted">({{ q[1] }})</small><br>
-                  <div class="mt-1">{{ q[2] }}</div>
+                <div style="flex:1; min-width:0;">
+                  <div class="question-header">
+                    <span class="author">{{ author }}</span>
+                    <span class="dot">•</span>
+                    <span class="category">{{ category }}</span>
+                  </div>
+
+                  <div class="message-text">{{ question_text }}</div>
+                  <div class="d-flex justify-content-end">
+                    <small class="text-muted message-time">{{ time_only }}</small>
+                  </div>
                 </div>
-            
+
                 <!-- visible Answer button (and optional Copy button) -->
-                <div class="ms-3 text-end">
+                <div class="ms-3 text-end msg-actions">
                   <button type="button"
                           class="btn btn-sm btn-outline-primary answer-btn"
-                          data-author="{{ q[0]|e }}"
-                          data-question="{{ q[2]|e }}">
+                          data-author="{{ author|e }}"
+                          data-question="{{ question_text|e }}"
+                          data-timestamp="{{ time_only|e }}">
                     Answer
                   </button>
                   <button type="button"
                           class="btn btn-sm btn-outline-secondary copy-btn"
-                          data-question="{{ q[2]|e }}">
+                          data-question="{{ question_text|e }}">
                     Copy
                   </button>
                 </div>
               </div>
-            
-              <!-- keep data attributes on the li for fallback if you prefer -->
-              <!-- data-author/data-question not required here because buttons carry them -->
-            </li>            
-        
+            </li>
             {% else %}
               <li class="text-muted">No questions yet. Be the first to ask!</li>
             {% endfor %}
           </ul>
-          
 
         </div>
       </div>
@@ -162,9 +216,10 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   // Open answer modal and fill textarea
-  function openAnswerModal(author, question) {
+  function openAnswerModal(author, question, timestamp) {
     const textarea = document.getElementById("answerText");
-    const text = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
+    const timePart = timestamp ? ` at ${timestamp}` : "";
+    const text = `❓ Question by ${author}${timePart}:\n${question}\n\n💡 My Answer:\n`;
     if (textarea) {
       textarea.value = text;
       autosizeTextarea(textarea);
@@ -181,8 +236,7 @@ document.addEventListener("DOMContentLoaded", function () {
     } catch (err) {
       // fallthrough to fallback if bootstrap not available
     }
-    // Fallback: if Bootstrap modal isn't available, show a simple prompt with the text
-    // (user can copy/paste)
+    // Fallback: if Bootstrap modal isn't available, copy to clipboard and alert
     try {
       window.alert("Answer box (Bootstrap missing) — the prepared answer is copied to your clipboard.");
       navigator.clipboard.writeText(text).catch(()=>{ /* ignore */ });
@@ -241,9 +295,11 @@ document.addEventListener("DOMContentLoaded", function () {
     if (answerBtn) {
       const rawAuthor = answerBtn.getAttribute("data-author") || "";
       const rawQuestion = answerBtn.getAttribute("data-question") || "";
+      const rawTimestamp = answerBtn.getAttribute("data-timestamp") || "";
       const author = decodeHtml(rawAuthor);
       const question = decodeHtml(rawQuestion);
-      openAnswerModal(author, question);
+      const timestamp = decodeHtml(rawTimestamp);
+      openAnswerModal(author, question, timestamp);
       ev.preventDefault();
       return;
     }

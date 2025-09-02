@@ -6,98 +6,290 @@
 
 {% block styles %}
 <style>
-  .question-list { list-style: none; padding: 0; margin: 0; }
-  .question-list li {
+  /* =========================
+     Global / Container styles
+     ========================= */
+  :root{
+    --card-bg: #ffffff;
+    --muted: #6c757d;
+    --primary: #0d6efd;
+    --body-bg: #f4f6fb;
+    --text: #222;
+    --card-radius: 10px;
+  }
+  
+  body {
+    background: var(--body-bg);
+    color: var(--text);
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  
+  /* Card */
+  .card {
+    border-radius: 14px;
+    border: none;
+    background: var(--card-bg);
+    box-shadow: 0 6px 18px rgba(18, 24, 40, 0.06);
+  }
+  
+  /* Form elements (keeps Bootstrap defaults but adds clarity) */
+  .form-control, .form-select, textarea {
+    border-radius: 8px;
+    border: 1px solid rgba(0,0,0,0.12);
+    padding: 10px 12px;
+    transition: border-color .18s ease, box-shadow .18s ease;
     background: #fff;
+    color: var(--text);
+  }
+  .form-control:focus, .form-select:focus, textarea:focus {
+    outline: none;
+    border-color: rgba(13,110,253,0.9);
+    box-shadow: 0 0 0 4px rgba(13,110,253,0.08);
+  }
+  
+  /* Buttons small adjustments */
+  .btn {
+    border-radius: 8px;
+    font-weight: 600;
+  }
+  .btn-sm { padding: 6px 10px; font-size: .82rem; }
+  
+  /* =========================
+     Question list & items
+     ========================= */
+  .question-list { 
+    list-style: none; 
+    padding: 0; 
+    margin: 0; 
+  }
+  
+  .question-list li {
+    background: var(--card-bg);
     margin-bottom: 12px;
     padding: 12px 16px;
-    border-radius: 10px;
+    border-radius: var(--card-radius);
     box-shadow: 0 2px 6px rgba(0,0,0,0.08);
     cursor: pointer;
-    transition: background .3s, transform .15s;
+    transition: background .18s ease, transform .12s ease, box-shadow .18s ease;
   }
-  .question-list li:hover { background: #f1f1ff; transform: translateY(-2px); }
-
-  /* Question header: desktop and default */
+  
+  .question-list li:hover {
+    background: #f1f6ff;
+    transform: translateY(-3px);
+    box-shadow: 0 8px 22px rgba(16, 24, 40, 0.08);
+  }
+  
+  /* Layout helper: main left content + actions column */
+  .question-item > .d-flex { 
+    align-items: flex-start; 
+    gap: 12px;
+  }
+  
+  /* =========================
+     Header (author • category)
+     ========================= */
+  /* Default desktop: compact single-line header */
   .question-header {
-      font-weight: bold;
-      display: flex;
-      flex-wrap: nowrap; /* default: keep on one line */
-      gap: 6px;
-      align-items: center;
-      color: #555;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: nowrap;      /* keep on one line on wider screens */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 700;
+    color: #222;
+    font-size: 0.96rem;
   }
-
-  /* Name part always stays on one line */
+  
+  /* Styling of subparts */
   .question-header .author {
-      white-space: nowrap;
+    display: inline-block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 40ch; /* desktop cap for long names */
   }
-
-  /* Subject: desktop truncates with … if too long */
-  .question-header .subject {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: calc(100% - 60px); /* leaves space for name and gap */
+  .question-header .dot {
+    color: var(--muted);
+    margin: 0 6px;
+    flex: 0 0 auto;
   }
-
-  /* MOBILE: allow wrapping so subject is fully visible */
-  @media (max-width: 480px) {
-      .question-header {
-          flex-wrap: wrap; /* allow name and subject to stack if needed */
-      }
-      .question-header .subject {
-          white-space: normal; /* allow wrapping */
-          max-width: 100%;     /* use full width */
-      }
+  .question-header .category {
+    display: inline-block;
+    color: var(--primary);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 28ch; /* desktop cap for long categories */
   }
-
-  .question-header .dot { color: #6c757d; margin-right: 6px; }
-  .question-header .category { color: #0d6efd; font-weight: 600; }
-
-  .message-text { margin-top: 6px; white-space: pre-wrap; color: #222; }
-
-  /* Time style similar to chat apps (small, muted, right-aligned) */
+  
+  /* Message text */
+  .message-text {
+    margin-top: 8px;
+    white-space: pre-wrap;
+    line-height: 1.45;
+    color: #222;
+  }
+  
+  /* Chat-like time */
   .message-time {
     font-size: 0.78rem;
-    color: #6c757d;
-    margin-top: 6px;
+    color: var(--muted);
+    margin-top: 8px;
     display: inline-block;
     min-width: 65px;
     text-align: right;
   }
-
-  /* Position action buttons/time to the right inside the list item */
+  
+  /* Action buttons/time column (right) */
   .msg-actions {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 6px;
-    margin-left: 12px;
+    gap: 8px;
+    margin-left: 8px;
+    flex: 0 0 auto;
   }
-
-  .modal textarea {
-    min-height: 200px;
-    font-family: monospace;
-    white-space: pre-wrap;
+  
+  /* Make sure buttons don't overflow */
+  .msg-actions .btn {
+    white-space: nowrap;
   }
-
-  /* Dark mode adapt */
-  @media (prefers-color-scheme: dark) {
-    .question-list li { background: #33334d; color: #eee; }
-    .modal-content { background-color: #2c2c3c; color: #eee; }
-    .modal textarea { background: #1e1e2a; color: #eee; }
-    .card { background-color: #2a2a3d; color: #eee; }
-    .message-time { color: #bfc4d6; }
-    .question-header .category { color: #7fb4ff; }
+  
+  /* =========================
+     Modal adjustments
+     ========================= */
+  .modal-content { border-radius: 12px; }
+  .modal textarea { 
+    min-height: 180px; 
+    font-family: "Consolas", "Courier New", monospace;
+    background: #fafafa;
   }
-
-  /* small screens: allow header to truncate with ellipsis but keep icon/time visible */
+  
+  /* =========================
+     Small screen / portrait behavior
+     ========================= */
+  /* When width is small (phones), stack author and category so both are readable */
   @media (max-width: 576px) {
-    .question-header { max-width: calc(100% - 100px); } /* leaves room for buttons/time */
-    .msg-actions { min-width: 80px; }
+    /* Allow left content to take available width */
+    .question-item > .d-flex { gap: 8px; }
+  
+    .question-header {
+      display: flex;
+      flex-direction: column;  /* stack vertically (author then category) */
+      align-items: flex-start;
+      white-space: normal;     /* allow wrapping */
+      overflow: visible;
+      text-overflow: initial;
+      font-size: 0.98rem;
+      line-height: 1.12;
+    }
+  
+    /* Author wraps fully if long */
+    .question-header .author {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: initial;
+      max-width: 100%;
+      margin-bottom: 4px;
+      font-weight: 700;
+    }
+  
+    /* Dot becomes inline before the category on the second line */
+    .question-header .dot {
+      display: inline-block;
+      margin: 0 6px 0 0;
+    }
+  
+    /* Category wraps fully */
+    .question-header .category {
+      white-space: normal;
+      max-width: 100%;
+      overflow: visible;
+      text-overflow: initial;
+      font-weight: 600;
+      color: var(--primary);
+    }
+  
+    /* Left block should grow and allow actions to move below */
+    .question-item > .d-flex > div:first-child {
+      flex: 1 1 auto;
+      min-width: 0; /* prevents overflow */
+    }
+  
+    /* Move actions (buttons/time) to the bottom row to avoid squeezing the header */
+    .msg-actions {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      margin-left: 0;
+      margin-top: 8px;
+    }
+  
+    /* Time goes below the message and is left-aligned on small screens */
+    .message-time {
+      display: block;
+      text-align: left;
+      margin-top: 8px;
+    }
+  
+    /* Make action buttons slightly smaller on small screens */
+    .msg-actions .btn {
+      padding: 6px 8px;
+      font-size: 0.82rem;
+    }
   }
-</style>
+  
+  /* =========================
+     Accessibility & focus
+     ========================= */
+  .question-list li:focus-within,
+  .question-list li:focus {
+    outline: 2px solid rgba(13,110,253,0.12);
+    outline-offset: 2px;
+  }
+  
+  /* =========================
+     Dark mode support
+     ========================= */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --card-bg: #1c1c29;
+      --muted: #bfc4d6;
+      --primary: #7fb4ff;
+      --body-bg: #0f0f16;
+      --text: #e8e8ee;
+    }
+  
+    body { background: var(--body-bg); color: var(--text); }
+  
+    .card { background: var(--card-bg); box-shadow: none; }
+    .question-list li { background: var(--card-bg); color: var(--text); box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+    .question-list li:hover { background: rgba(255,255,255,0.02); }
+    .form-control, .form-select, textarea {
+      background: #21212b; color: var(--text); border: 1px solid rgba(255,255,255,0.06);
+    }
+    .modal textarea { background: #181822; color: var(--text); }
+    .message-time { color: var(--muted); }
+    .question-header .category { color: var(--primary); }
+  }
+  
+  /* =========================
+     Utility tweaks
+     ========================= */
+  /* ensure copy button & answer button don't wrap text badly */
+  .copy-btn, .answer-btn { white-space: nowrap; }
+  
+  /* small visual polish for the header dot */
+  .question-header .dot { font-size: .92rem; line-height: 1; }
+  
+  /* End of styles */
+  </style>
+  
 {% endblock %}
 
 {% block content %}

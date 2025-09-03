@@ -141,6 +141,7 @@ def content_page():
 
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
+    message = None
     try:
         if request.method == "POST":
             submitted_question = (request.form.get("question") or "").strip()
@@ -151,7 +152,7 @@ def questions_page():
                 try:
                     append_row([choice_selected, username, question_text])
                     flash("Question submitted — thanks!", "success")
-                except Exception as ex:
+                except Exception:
                     app.logger.exception("Failed to append question")
                     flash("Could not submit question at this time. Try again later.", "danger")
                 return redirect(url_for("questions_page"))
@@ -160,17 +161,13 @@ def questions_page():
                 return redirect(url_for("questions_page"))
 
         selected_category = (request.args.get("categoryFilter") or "").strip()
-        all_questions = get_questions() or []
+        all_questions = get_questions_safe()
         all_questions = [
             q for q in all_questions
             if isinstance(q, (list, tuple)) and any((cell is not None and str(cell).strip()) for cell in q)
         ]
 
-        derived_set = {
-            str(q[0]).strip()
-            for q in all_questions
-            if len(q) > 0 and q[0]
-        }
+        derived_set = {str(q[0]).strip() for q in all_questions if len(q) > 0 and q[0]}
         extra_categories = [c for c in sorted(derived_set) if c not in STATIC_CATEGORIES]
         categories_for_ui = STATIC_CATEGORIES + extra_categories
 
@@ -186,7 +183,8 @@ def questions_page():
             categories=categories_for_ui,
             selected_category=selected_category
         )
-    except Exception as e:
+
+    except Exception:
         app.logger.exception("Error in questions_page")
         return render_template(
             "questions.html",
@@ -196,6 +194,7 @@ def questions_page():
             selected_category="",
             error="Unable to load questions right now. Please try again later."
         ), 200
+
 
 @app.route("/drive-image/<file_id>")
 def drive_image(file_id):

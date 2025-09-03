@@ -232,14 +232,6 @@ def admin_page():
             result = "❌ Invalid secret!"
     return render_template("admin.html", result=result, message=FOOTER_MESSAGE)
 
-
-# --- Global error handler ---
-@app.errorhandler(Exception)
-def handle_exception(e):
-    app.logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
-    return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 500
-
-
 # --- App entry ---
 if __name__ == "__main__":
     # Use Render environment port & bind 0.0.0.0

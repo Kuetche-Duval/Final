@@ -2,15 +2,13 @@
 import os
 import base64
 import json
-from pathlib import Path
-from flask import (
-    Flask, render_template, url_for, redirect, request, flash
-)
-from dotenv import load_dotenv
 import random
 import logging
 import traceback
+from flask import Flask, render_template, url_for, redirect, request, flash
+from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 # --- Service account handling ---
@@ -20,7 +18,7 @@ SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_acco
 if SERVICE_ACCOUNT_B64:
     try:
         data = base64.b64decode(SERVICE_ACCOUNT_B64.strip())
-        json.loads(data.decode("utf-8"))  # check valid JSON
+        json.loads(data.decode("utf-8"))  # validate JSON
         with open(SERVICE_ACCOUNT_PATH, "wb") as fh:
             fh.write(data)
         try:
@@ -49,12 +47,9 @@ MOTIVATION_VERSES = [
     ("Trust in the Lord with all your heart and lean not on your own understanding.", "Proverbs 3:5"),
 ]
 
-# --- Imports ---
+# --- Import sheet/drive services ---
 try:
-    from sheets import (
-        from_google_sheets, check_date, append_row,
-        read_rules, get_questions, clear_sheet
-    )
+    from sheets import from_google_sheets, check_date, append_row, read_rules, get_questions, clear_sheet
 except ImportError as e:
     def fail(*a, **k): raise RuntimeError(f"sheets.py missing: {e}")
     from_google_sheets = check_date = append_row = read_rules = get_questions = clear_sheet = fail
@@ -96,41 +91,40 @@ def content_page():
 
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
-    if request.method == "POST":
-        submitted_question = (request.form.get("question") or "").strip()
-        if submitted_question:
-            username = (request.form.get("name") or "Anonymous").strip()
-            choice_selected = (request.form.get("category") or "Other").strip()
-            try:
+    try:
+        if request.method == "POST":
+            submitted_question = (request.form.get("question") or "").strip()
+            if submitted_question:
+                username = (request.form.get("name") or "Anonymous").strip()
+                choice_selected = (request.form.get("category") or "Other").strip()
                 append_row([choice_selected, username, submitted_question])
                 flash("✅ Question submitted!", "success")
-            except Exception:
-                flash("❌ Could not submit question. Try again later.", "danger")
-        else:
-            flash("⚠️ Please enter a question.", "warning")
-        return redirect(url_for("questions_page"))
+            else:
+                flash("⚠️ Please enter a question.", "warning")
+            return redirect(url_for("questions_page"))
 
-    selected_category = request.args.get("categoryFilter", "").strip()
-    try:
+        selected_category = request.args.get("categoryFilter", "").strip()
         all_questions = get_questions() or []
-    except Exception:
-        all_questions = []
 
-    derived_set = {str(q[0]).strip() for q in all_questions if q and len(q) > 0 and q[0]}
-    categories_for_ui = STATIC_CATEGORIES + [c for c in sorted(derived_set) if c not in STATIC_CATEGORIES]
+        derived_set = {str(q[0]).strip() for q in all_questions if q and len(q) > 0 and q[0]}
+        categories_for_ui = STATIC_CATEGORIES + [c for c in sorted(derived_set) if c not in STATIC_CATEGORIES]
 
-    if selected_category:
-        questions = [q for q in all_questions if len(q) > 0 and str(q[0]).strip() == selected_category]
-    else:
-        questions = all_questions
+        if selected_category:
+            questions = [q for q in all_questions if len(q) > 0 and str(q[0]).strip() == selected_category]
+        else:
+            questions = all_questions
 
-    return render_template(
-        "questions.html",
-        questions=questions,
-        message=FOOTER_MESSAGE,
-        categories=categories_for_ui,
-        selected_category=selected_category
-    )
+        return render_template(
+            "questions.html",
+            questions=questions,
+            message=FOOTER_MESSAGE,
+            categories=categories_for_ui,
+            selected_category=selected_category
+        )
+    except Exception as e:
+        app.logger.error("Questions page error: %s\n%s", e, traceback.format_exc())
+        flash("❌ Failed to load questions. Try again later.", "danger")
+        return render_template("questions.html", questions=[], message=FOOTER_MESSAGE, categories=STATIC_CATEGORIES, selected_category="")
 
 @app.route("/about")
 def about():
@@ -173,6 +167,7 @@ def handle_exception(e):
     app.logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
     return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 500
 
+# --- App entry ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)

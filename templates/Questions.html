@@ -7,8 +7,8 @@
 {% block styles %}
 <style>
   .question-list { list-style: none; padding: 0; }
-  .question-item { border-bottom: 1px solid #eee; padding: 0.5rem 0; display: flex; }
-  .question-header { font-weight: bold; margin-bottom: 0.25rem; }
+  .question-item { border-bottom: 1px solid #eee; padding: 0.5rem 0; display: flex; flex-direction: column; }
+  .question-header { font-weight: bold; margin-bottom: 0.25rem; display: flex; justify-content: space-between; align-items: center; }
   .author { color: #007bff; }
   .category { color: #28a745; font-style: italic; }
   .dot { margin: 0 0.25rem; }
@@ -48,14 +48,26 @@
   {% if questions %}
   <ul class="list-group">
     {% for q in questions %}
-    <li class="list-group-item">
-      <strong>[{{ q[0] if q|length > 0 else "Other" }}]</strong>
-      {{ q[2] if q|length > 2 else "No question text" }}
-      <br>
-      <span class="text-muted small">
-        Asked by {{ q[1] if q|length > 1 else "Anonymous" }}
-        {% if q|length > 3 %} at {{ q[3] }}{% endif %}
-      </span>
+    <li class="list-group-item question-item">
+      <div class="question-header">
+        <div>
+          <strong>[{{ q[0] if q|length > 0 else "Other" }}]</strong>
+          {{ q[2] if q|length > 2 else "No question text" }}
+          <br>
+          <span class="text-muted small">
+            Asked by {{ q[1] if q|length > 1 else "Anonymous" }}
+            {% if q|length > 3 %} at {{ q[3] }}{% endif %}
+          </span>
+        </div>
+        <div class="msg-actions">
+          <button class="btn btn-sm btn-outline-secondary copy-btn"
+                  data-question="{{ q[2]|e }}">📋 Copy</button>
+          <button class="btn btn-sm btn-outline-primary answer-btn"
+                  data-author="{{ q[1]|e }}"
+                  data-question="{{ q[2]|e }}"
+                  data-timestamp="{{ q[3]|e if q|length > 3 else '' }}">💡 Answer</button>
+        </div>
+      </div>
     </li>
     {% endfor %}
   </ul>
@@ -63,8 +75,28 @@
   <p class="text-muted">No questions available.</p>
   {% endif %}
 </div>
-{% endblock %}
 
+<!-- Answer Modal -->
+<div class="modal fade" id="answerModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Answer Question</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <textarea id="answerText" class="form-control" rows="5"></textarea>
+      </div>
+      <div class="modal-footer">
+        <a id="whatsappBtn" class="btn btn-success" target="_blank">Send to WhatsApp</a>
+        <button type="button" class="btn btn-secondary" onclick="copyAnswer()">Copy</button>
+        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
 
 {% block scripts %}
 <script>

@@ -207,43 +207,173 @@ footer {
     outline-offset: 2px;
 }
 
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
+/* =========================
+   Dark mode — improved styles
+   Replace the existing @media (prefers-color-scheme: dark) block with this
+   ========================= */
+   @media (prefers-color-scheme: dark) {
+    /* Palette tuned for contrast & legibility */
     :root {
-        --body-bg: #1e1e2e;
-        --card-bg: #2b2c3b;
-        --text: #f3f4f6;
-        --muted: #a0a4b8;
-        --primary: #4da6ff;
+        --body-bg: #0f1115;           /* near-black background */
+        --card-bg: rgba(18,20,24,0.96); /* slightly translucent card */
+        --text: #e8eef6;             /* very light text */
+        --muted: #9aa4b2;            /* muted text */
+        --primary: #58a6ff;          /* bright blue accent */
         --accent: #ffb84d;
-        --shadow-1: 0 6px 18px rgba(0,0,0,0.55);
-        --shadow-hover: 0 14px 36px rgba(0,0,0,0.55);
-        --btn-bg: #4da6ff;
-        --btn-color: #fff;
-        --btn-hover-bg: #0066ff;
+        --card-radius: 14px;
+        --shadow-1: 0 8px 24px rgba(2,6,23,0.6);
+        --shadow-hover: 0 14px 44px rgba(2,6,23,0.65);
+        --btn-bg: #58a6ff;
+        --btn-color: #061624;
+        --btn-hover-bg: #2b8cff;
+        --glass-border: rgba(255,255,255,0.04);
     }
 
-    body { background: var(--body-bg); color: var(--text); }
-    .card { background: var(--card-bg); color: var(--text); border: 1px solid rgba(255,255,255,0.05); box-shadow: var(--shadow-1); }
-    .card:hover { box-shadow: var(--shadow-hover); transform: translateY(-4px); }
-    .question-list li { background: var(--card-bg); color: var(--text); border: 1px solid rgba(255,255,255,0.04); box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
-    .question-list li:hover { background: rgba(255,255,255,0.03); }
-    .form-control, .form-select, textarea { background: #22232e; color: var(--text); border: 1px solid rgba(255,255,255,0.08); }
-    .form-control:focus, .form-select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(77,166,255,0.25); background: #1c1c2b; }
-    .navbar { background: linear-gradient(135deg, #222233, #333355); }
-    .navbar-brand { color: #f3f4f6; }
-    .hero { background: linear-gradient(135deg, #222233, #333355); color: #f3f4f6; }
-    footer { background: #222233; color: #f3f4f6; }
-    .text-muted { color: var(--muted); }
-    .card-text, .image-caption, .section p { color: #cfd2dc; }
-    table { background-color: #22232e; color: var(--text); }
-    th { background-color: #292d3d; color: var(--text); }
-    td, th { border-color: #33334d; }
-    .table-striped > tbody > tr:nth-of-type(odd) { background-color: rgba(255,255,255,0.02); }
-    .table-hover tbody tr:hover { background-color: rgba(255,255,255,0.05); }
-    .btn, a.btn { color: var(--btn-color); border-color: var(--btn-bg); background: var(--btn-bg); }
-    .btn:hover, a.btn:hover { background: var(--btn-hover-bg); color: #fff; }
-    .image-caption, .overlay-text { text-shadow: 0 2px 8px rgba(0,0,0,0.85); }
+    /* Page background & text */
+    body {
+        background: linear-gradient(180deg, #0b0c0f 0%, #0f1115 100%);
+        color: var(--text);
+    }
+
+    /* Cards: subtle glass + border + readable */
+    .card {
+        background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+        color: var(--text);
+        border: 1px solid var(--glass-border);
+        box-shadow: var(--shadow-1);
+        backdrop-filter: blur(6px) saturate(120%);
+    }
+    .card:hover {
+        box-shadow: var(--shadow-hover);
+        transform: translateY(-4px);
+    }
+
+    /* Thumbnails & images */
+    .thumb {
+        border-radius: 10px;
+        box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+        background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.05));
+    }
+
+    /* Headings */
+    h1, h2, h3, h4, h5 {
+        color: var(--text);
+        text-shadow: 0 2px 10px rgba(0,0,0,0.6);
+    }
+
+    /* Controls / forms — high contrast & focus */
+    .form-control, .form-select, textarea {
+        background: #0f1318;
+        color: var(--text);
+        border: 1px solid rgba(255,255,255,0.06);
+        box-shadow: none;
+    }
+    .form-control::placeholder, textarea::placeholder {
+        color: rgba(230,235,245,0.32);
+    }
+    .form-control:focus, .form-select:focus, textarea:focus {
+        outline: none;
+        border-color: rgba(88,166,255,0.95);
+        box-shadow: 0 6px 18px rgba(88,166,255,0.08);
+        background: #0b0e12;
+    }
+
+    /* Buttons */
+    .btn {
+        background: var(--btn-bg);
+        color: var(--btn-color);
+        border: 1px solid rgba(255,255,255,0.04);
+        box-shadow: 0 6px 18px rgba(2,6,23,0.55);
+    }
+    .btn:hover, .btn:focus {
+        background: var(--btn-hover-bg);
+        color: #fff;
+        transform: translateY(-2px);
+        box-shadow: 0 10px 26px rgba(43,140,255,0.14);
+    }
+    .btn-outline { 
+        background: transparent;
+        color: var(--primary);
+        border: 1px solid rgba(88,166,255,0.12);
+    }
+    .btn-outline:hover {
+        background: rgba(88,166,255,0.06);
+        color: var(--btn-color);
+    }
+
+    /* Questions list styling (cards look consistent) */
+    .question-list li {
+        background: linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.01));
+        color: var(--text);
+        border: 1px solid rgba(255,255,255,0.03);
+        box-shadow: 0 6px 18px rgba(2,6,23,0.6);
+    }
+    .question-list li:hover {
+        background: linear-gradient(180deg, rgba(88,166,255,0.03), rgba(255,255,255,0.01));
+        transform: translateY(-4px);
+    }
+    .question-header .category {
+        background: rgba(88,166,255,0.08);
+        color: var(--primary);
+        padding: 4px 8px;
+        border-radius: 8px;
+        font-weight: 600;
+        display: inline-block;
+    }
+
+    /* Message / meta text */
+    .message-text, .card-text, .image-caption {
+        color: rgba(232,238,246,0.94);
+    }
+    .message-time, .text-muted {
+        color: var(--muted);
+    }
+
+    /* Table styles for readability */
+    table { color: var(--text); border-color: rgba(255,255,255,0.04); }
+    th { background: rgba(255,255,255,0.02); color: var(--text); }
+    td { border-color: rgba(255,255,255,0.03); }
+
+    /* Modal enhancements */
+    .modal-content {
+        background: linear-gradient(180deg, rgba(18,20,24,0.98), rgba(14,16,20,0.98));
+        color: var(--text);
+        border: 1px solid rgba(255,255,255,0.04);
+        box-shadow: 0 18px 46px rgba(2,6,23,0.7);
+        border-radius: 14px;
+    }
+    .modal-header, .modal-footer { border: none; }
+    .modal .form-control {
+        background: #0c0e12;
+        color: var(--text);
+        border: 1px solid rgba(255,255,255,0.04);
+    }
+
+    /* Footer */
+    footer { background: linear-gradient(90deg,#12121a, #171726); color: var(--muted); border-top: 1px solid rgba(255,255,255,0.02); }
+
+    /* Links */
+    a { color: var(--primary); }
+    a:hover { color: var(--btn-hover-bg); text-decoration: underline; }
+
+    /* Accessibility: clear focus outlines */
+    :focus {
+        outline: 3px solid rgba(88,166,255,0.18);
+        outline-offset: 3px;
+    }
+
+    /* Small screens adjustments */
+    @media (max-width: 768px) {
+        .card { padding: 14px; }
+        .hero h1 { font-size: 1.9rem; }
+    }
+
+    /* Subtle animated accent for primary buttons (reduced motion respected) */
+    @media (prefers-reduced-motion: no-preference) {
+        .btn {
+            transition: transform .18s cubic-bezier(.2,.9,.2,1), box-shadow .18s;
+        }
+    }
 }
 
 /* --------------------------

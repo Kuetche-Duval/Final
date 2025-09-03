@@ -193,21 +193,6 @@ def questions_page():
         flash("❌ Failed to load questions. Try again later.", "danger")
         return render_template("questions.html", questions=[], message=FOOTER_MESSAGE, categories=STATIC_CATEGORIES, selected_category="")
 
-
-@app.route("/about")
-def about():
-    return render_template("about.html", message=FOOTER_MESSAGE)
-
-
-@app.route("/contact", methods=["GET", "POST"])
-def contact():
-    msg = None
-    if request.method == "POST":
-        content = request.form.get("message") or ""
-        msg = "✅ Message sent!" if content else "❌ Please enter a message."
-    return render_template("contact.html", message=FOOTER_MESSAGE, form_message=msg)
-
-
 @app.route("/rules")
 def rules_page():
     try:
@@ -231,6 +216,14 @@ def admin_page():
         else:
             result = "❌ Invalid secret!"
     return render_template("admin.html", result=result, message=FOOTER_MESSAGE)
+
+
+# --- Global error handler ---
+@app.errorhandler(Exception)
+def handle_exception(e):
+    app.logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
+    return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 500
+
 
 # --- App entry ---
 if __name__ == "__main__":

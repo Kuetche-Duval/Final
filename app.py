@@ -276,18 +276,27 @@ def rules_page():
         return render_template("rules.html", rules=[], message=message, error="Unable to load rules right now."), 500
 
 # Optional: keep admin clear if you want manual clear (remove if you prefer)
-@app.route("/admin/clear-questions", methods=["POST"])
-def admin_clear_questions():
-    admin_secret = os.environ.get("ADMIN_CLEAR_SECRET")
-    provided = request.form.get("secret") or ""
-    if not admin_secret or provided != admin_secret:
-        return "Unauthorized", 401
-    try:
-        clear_sheet()
-        return "Cleared", 200
-    except Exception as e:
-        app.logger.exception("Failed to clear questions")
-        return f"Failed: {e}", 500
+# -------------------------
+# Admin: clear questions manually
+# -------------------------
+from flask import jsonify
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin_page():
+    message = None
+    if request.method == "POST":
+        admin_secret = os.environ.get("ADMIN_CLEAR_SECRET")
+        provided_secret = (request.form.get("secret") or "").strip()
+        if provided_secret == admin_secret:
+            try:
+                clear_sheet()
+                message = "✅ All questions cleared successfully."
+            except Exception as e:
+                message = f"❌ Failed to clear questions: {e}"
+        else:
+            message = "❌ Invalid secret!"
+    return render_template("admin.html", result=message, message="All You Do, Do It With Love ❤️❤️❤️")
+
 
 # --- Entry point ---
 if __name__ == "__main__":

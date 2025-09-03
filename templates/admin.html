@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+
+{% block title %}
+Admin Clear Questions
+{% endblock %}
+
+{% block styles %}
+<style>
+.admin-card {
+    background: var(--card-bg);
+    padding: 30px 25px;
+    border-radius: var(--card-radius);
+    box-shadow: var(--shadow-1);
+    max-width: 450px;
+    margin: 60px auto;
+    text-align: center;
+    transition: transform .25s ease, box-shadow .25s ease;
+}
+.admin-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-hover);
+}
+.admin-card h2 {
+    font-size: 1.8rem;
+    margin-bottom: 20px;
+    color: var(--primary);
+}
+.admin-card form input[type="password"] {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: var(--card-radius);
+    border: 1px solid rgba(0,0,0,0.15);
+    margin-bottom: 18px;
+    font-size: 1rem;
+}
+.admin-card form button {
+    width: 100%;
+    padding: 12px;
+    border-radius: var(--card-radius);
+    border: none;
+    background: var(--btn-bg);
+    color: var(--btn-color);
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .25s ease;
+}
+.admin-card form button:hover {
+    background: var(--btn-hover-bg);
+}
+.admin-card p.message {
+    margin-top: 16px;
+    color: var(--text);
+    font-size: 0.95rem;
+}
+footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="admin-card">
+    <h2>Admin: Clear Questions</h2>
+    <form action="{{ url_for('admin_page') }}" method="POST">
+        <input type="password" name="secret" placeholder="Enter admin secret" required>
+        <button type="submit">Clear All Questions</button>
+    </form>
+    {% if result %}
+        <p class="message">{{ result }}</p>
+    {% endif %}
+</div>
+{% endblock %}

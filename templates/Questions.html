@@ -45,7 +45,7 @@
 
           <!-- ================== New Question Form ================== -->
           <h5 class="mb-3">🙋 Ask a Question</h5>
-          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4">
+          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4" novalidate>
             <div class="mb-3">
               <label for="name" class="form-label">Your Name (optional):</label>
               <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous">
@@ -55,7 +55,7 @@
               <select class="form-select" id="category" name="category" required>
                 <option value="">-- Select Category --</option>
                 {% for c in categories %}
-                  <option value="{{c}}">{{c}}</option>
+                  <option value="{{ c }}">{{ c }}</option>
                 {% endfor %}
               </select>
             </div>
@@ -67,25 +67,32 @@
           </form>
           <hr>
 
-          <!-- ================== Category Filter ================== -->
-          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-3">
+          <!-- ================== Category Filter (use GET) ================== -->
+          <form method="GET" action="{{ url_for('questions_page') }}" class="mb-3">
             <label for="categoryFilter" class="form-label">📂 Filter by category:</label>
-            <select class="form-select" id="categoryFilter" name="category" onchange="this.form.submit()">
+            <select class="form-select" id="categoryFilter" name="categoryFilter" onchange="this.form.submit()">
               <option value="">All</option>
               {% for c in categories %}
-                <option value="{{c}}" {% if selected_category == c %}selected{% endif %}>{{c}}</option>
+                <option value="{{ c }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
               {% endfor %}
             </select>
           </form>
 
           <!-- ================== Questions List ================== -->
           <h5 class="mb-3">📑 Questions:</h5>
-          <ul class="question-list">
+          <ul class="question-list" id="questionsList">
             {% for q in questions %}
-              <li onclick="openAnswerModal(`{{ q[0] or 'Anonymous' }}`, `{{ q[2]|e }}`)">
-                <span class="fw-bold text-primary">{{ q[0] or "Anonymous" }}</span> 
-                <small class="text-muted">({{ q[1] }})</small><br>
-                {{ q[2] }}
+              {% set cat = q[0] if q|length > 0 else "Other" %}
+              {% set author = q[1] if q|length > 1 and q[1] else "Anonymous" %}
+              {% set text = q[2] if q|length > 2 else "" %}
+              <li tabindex="0"
+                  class="question-item"
+                  data-author="{{ author|e }}"
+                  data-category="{{ cat|e }}"
+                  data-question="{{ text|e }}">
+                <span class="fw-bold text-primary">{{ cat }}</span>
+                <small class="text-muted">({{ author }})</small><br>
+                {{ text }}
               </li>
             {% else %}
               <li class="text-muted">No questions yet. Be the first to ask!</li>
@@ -104,11 +111,11 @@
     <div class="modal-content rounded-3 shadow-lg">
       <div class="modal-header bg-primary text-white">
         <h5 class="modal-title">✍️ Answer Question</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
         <label class="form-label">Preview & Write:</label>
-        <textarea id="answerText" class="form-control"></textarea>
+        <textarea id="answerText" class="form-control" rows="8"></textarea>
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline-secondary" onclick="copyAnswer()">📋 Copy</button>
@@ -121,26 +128,65 @@
 
 {% block scripts %}
 <script>
-  let currentQuestion = "";
-
-  function openAnswerModal(author, question) {
-    currentQuestion = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
-    document.getElementById("answerText").value = currentQuestion;
-    new bootstrap.Modal(document.getElementById('answerModal')).show();
+document.addEventListener('DOMContentLoaded', function () {
+  function decodeHtml(html) {
+    var txt = document.createElement('textarea');
+    txt.innerHTML = html || '';
+    return txt.value;
   }
 
-  function copyAnswer() {
-    const text = document.getElementById("answerText").value;
-    navigator.clipboard.writeText(text).then(() => {
-      alert("✅ Answer copied to clipboard!");
+  const list = document.getElementById('questionsList');
+  list && list.addEventListener('click', function (ev) {
+    const li = ev.target.closest('.question-item');
+    if (!li) return;
+    const author = decodeHtml(li.getAttribute('data-author'));
+    const question = decodeHtml(li.getAttribute('data-question'));
+    openAnswerModal(author, question);
+  });
+
+  list && list.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      const li = ev.target.closest('.question-item');
+      if (!li) return;
+      ev.preventDefault();
+      const author = decodeHtml(li.getAttribute('data-author'));
+      const question = decodeHtml(li.getAttribute('data-question'));
+      openAnswerModal(author, question);
+    }
+  });
+
+  window.openAnswerModal = function(author, question) {
+    const text = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
+    const t = document.getElementById('answerText');
+    if (t) t.value = text;
+    try {
+      const modalEl = document.getElementById('answerModal');
+      new bootstrap.Modal(modalEl).show();
+    } catch (e) {
+      console.warn('Bootstrap modal failed to open:', e);
+    }
+  };
+
+  window.copyAnswer = function () {
+    const text = document.getElementById('answerText').value || '';
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(()=> {
+        alert('✅ Answer copied to clipboard!');
+      }).catch(()=> { alert('Could not copy to clipboard.'); });
+    } else {
+      alert('Clipboard not supported.');
+    }
+  };
+
+  const whatsappBtn = document.getElementById('whatsappBtn');
+  if (whatsappBtn) {
+    whatsappBtn.addEventListener('click', function () {
+      const text = encodeURIComponent(document.getElementById('answerText').value || '');
+      const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID"; // update
+      this.href = `${groupLink}?text=${text}`;
     });
   }
-
-  document.getElementById("whatsappBtn").addEventListener("click", function() {
-    const text = encodeURIComponent(document.getElementById("answerText").value);
-    // 🔒 Replace with your actual group invite link
-    const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID";
-    this.href = `${groupLink}?text=${text}`;
-  });
+});
 </script>
 {% endblock %}

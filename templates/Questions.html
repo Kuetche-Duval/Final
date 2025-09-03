@@ -5,146 +5,83 @@
 {% endblock %}
 
 {% block styles %}
-
+<style>
+  .question-list { list-style: none; padding: 0; }
+  .question-item { border-bottom: 1px solid #eee; padding: 0.5rem 0; display: flex; }
+  .question-header { font-weight: bold; margin-bottom: 0.25rem; }
+  .author { color: #007bff; }
+  .category { color: #28a745; font-style: italic; }
+  .dot { margin: 0 0.25rem; }
+  .message-text { white-space: pre-wrap; margin-bottom: 0.25rem; }
+  .msg-actions button { margin-left: 0.25rem; }
+</style>
 {% endblock %}
 
 {% block content %}
 <div class="container py-4">
-  <div class="row g-4">
-    <div class="col-12">
-      <div class="card shadow">
-        <div class="card-header bg-primary text-white fw-bold">
-          💬 Ask & Answer Questions
-        </div>
-        <div class="card-body">
+  <h2 class="mb-3">❓ Ask & View Questions</h2>
 
-          <!-- ================== New Question Form ================== -->
-          <h5 class="mb-3">🙋 Ask a Question</h5>
-          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4">
-            <div class="mb-3">
-              <label for="name" class="form-label">Your Name (optional):</label>
-              <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous">
-            </div>
-            <div class="mb-3">
-              <label for="category" class="form-label">Category:</label>
-              <select class="form-select" id="category" name="category" required>
-                <option value="">-- Select Category --</option>
-                {% for c in categories %}
-                  <option value="{{c}}">{{c}}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div class="mb-3">
-              <label for="question" class="form-label">Your Question:</label>
-              <textarea class="form-control" id="question" name="question" rows="4" required></textarea>
-            </div>
-            <button type="submit" class="btn btn-primary">➕ Submit Question</button>
-          </form>
-          <hr>
+  <!-- Ask Form -->
+  <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4">
+    <input type="text" name="name" placeholder="Your name" class="form-control mb-2" />
+    <select name="category" class="form-select mb-2">
+      {% for cat in categories %}
+      <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
+      {% endfor %}
+    </select>
+    <textarea name="question" class="form-control mb-2" placeholder="Type your question..." required></textarea>
+    <button type="submit" class="btn btn-primary">Submit</button>
+  </form>
 
-          <!-- ================== Category Filter ================== -->
-          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-3">
-            <label for="categoryFilter" class="form-label">📂 Filter by category:</label>
-            <select class="form-select" id="categoryFilter" name="categoryFilter" onchange="this.form.submit()">
-              <option value="">All</option>
-              {% for c in categories %}
-                <option value="{{c}}" {% if selected_category == c %}selected{% endif %}>{{c}}</option>
-              {% endfor %}
-            </select>
-          </form>
+  <!-- Filter -->
+  <form method="GET" action="{{ url_for('questions_page') }}" class="mb-3">
+    <label for="categoryFilter" class="form-label">Filter by Category:</label>
+    <select id="categoryFilter" name="categoryFilter" class="form-select" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for cat in categories %}
+      <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
+      {% endfor %}
+    </select>
+  </form>
 
-          <!-- ================== Questions List ================== -->
-          <h5 class="mb-3">📑 Questions:</h5>
-          <ul class="question-list">
-            {% for q in questions %}
-            {# normalized rows: [category, name, question, time] (sheets.py ensures 4 cols) #}
-            {% set category = q[0] if q|length > 0 else '' %}
-            {% set author = q[1] if q|length > 1 and q[1] else 'Anonymous' %}
-            {% set question_text = q[2] if q|length > 2 else '' %}
-            {% set time_only = q[3] if q|length > 3 else '' %}
-
-            <li class="question-item">
-              <div class="d-flex justify-content-between align-items-start">
-                <div style="flex:1; min-width:0;">
-                  <div class="question-header">
-                    <span class="author">{{ author }}</span>
-                    <span class="dot">•</span>
-                    <span class="category">{{ category }}</span>
-                  </div>
-
-                  <div class="message-text">{{ question_text }}</div>
-                  <div class="d-flex justify-content-end">
-                    <small class="text-muted message-time">{{ time_only }}</small>
-                  </div>
-                </div>
-
-                <!-- visible Answer button (and optional Copy button) -->
-                <div class="ms-3 text-end msg-actions">
-                  <button type="button"
-                          class="btn btn-sm btn-outline-primary answer-btn"
-                          data-author="{{ author|e }}"
-                          data-question="{{ question_text|e }}"
-                          data-timestamp="{{ time_only|e }}">
-                    Answer
-                  </button>
-                  <button type="button"
-                          class="btn btn-sm btn-outline-secondary copy-btn"
-                          data-question="{{ question_text|e }}">
-                    Copy
-                  </button>
-                </div>
-              </div>
-            </li>
-            {% else %}
-              <li class="text-muted">No questions yet. Be the first to ask!</li>
-            {% endfor %}
-          </ul>
-
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ================== Answer Modal ================== -->
-<div class="modal fade" id="answerModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg modal-dialog-centered">
-    <div class="modal-content rounded-3 shadow-lg">
-      <div class="modal-header bg-primary text-white">
-        <h5 class="modal-title">✍️ Answer Question</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <label class="form-label">Preview & Write:</label>
-        <textarea id="answerText" class="form-control"></textarea>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-outline-secondary" onclick="copyAnswer()">📋 Copy</button>
-        <a id="whatsappBtn" class="btn btn-success" target="_blank">📲 Send to WhatsApp</a>
-      </div>
-    </div>
-  </div>
+  <!-- Question List -->
+  {% if questions %}
+  <ul class="list-group">
+    {% for q in questions %}
+    <li class="list-group-item">
+      <strong>[{{ q[0] if q|length > 0 else "Other" }}]</strong>
+      {{ q[2] if q|length > 2 else "No question text" }}
+      <br>
+      <span class="text-muted small">
+        Asked by {{ q[1] if q|length > 1 else "Anonymous" }}
+        {% if q|length > 3 %} at {{ q[3] }}{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-muted">No questions available.</p>
+  {% endif %}
 </div>
 {% endblock %}
+
 
 {% block scripts %}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
-  // Helper: decode HTML entities (data-* may contain escaped HTML)
+
   function decodeHtml(html) {
     const txt = document.createElement("textarea");
     txt.innerHTML = html || "";
     return txt.value;
   }
 
-  // Autosize helper
   function autosizeTextarea(el) {
     if (!el) return;
     el.style.height = "auto";
     el.style.height = el.scrollHeight + "px";
   }
 
-  // Open answer modal and fill textarea
   function openAnswerModal(author, question, timestamp) {
     const textarea = document.getElementById("answerText");
     const timePart = timestamp ? ` at ${timestamp}` : "";
@@ -153,97 +90,64 @@ document.addEventListener("DOMContentLoaded", function () {
       textarea.value = text;
       autosizeTextarea(textarea);
     }
-    // show bootstrap modal if available
     try {
       if (typeof bootstrap !== "undefined" && bootstrap.Modal) {
         const modalEl = document.getElementById("answerModal");
-        if (modalEl) {
-          new bootstrap.Modal(modalEl).show();
-          return;
-        }
+        if (modalEl) new bootstrap.Modal(modalEl).show();
+        return;
       }
-    } catch (err) {
-      // fallthrough to fallback if bootstrap not available
-    }
-    // Fallback: if Bootstrap modal isn't available, copy to clipboard and alert
-    try {
-      window.alert("Answer box (Bootstrap missing) — the prepared answer is copied to your clipboard.");
-      navigator.clipboard.writeText(text).catch(()=>{ /* ignore */ });
-    } catch (e) {
-      // nothing else
-    }
+    } catch {}
+    try { navigator.clipboard.writeText(text).catch(()=>{}); } catch {}
   }
 
-  // Copy arbitrary text with fallback prompt
   function copyTextToClipboard(text, btn) {
     if (!text) return;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(() => {
-        // small feedback
         if (btn) {
           const prev = btn.innerHTML;
           btn.innerHTML = "Copied ✓";
           setTimeout(()=> btn.innerHTML = prev, 1200);
-        } else {
-          alert("Copied to clipboard!");
         }
-      }).catch(() => {
-        // fallback to prompt
-        window.prompt("Copy (Ctrl+C / Cmd+C) — text below:", text);
-      });
-    } else {
-      // fallback
-      window.prompt("Copy (Ctrl+C / Cmd+C) — text below:", text);
-    }
+      }).catch(()=>{ window.prompt("Copy:", text); });
+    } else { window.prompt("Copy:", text); }
   }
 
-  // Copy answer button used in modal
   window.copyAnswer = function () {
     const textarea = document.getElementById("answerText");
     const text = textarea ? textarea.value : "";
     copyTextToClipboard(text);
   };
 
-  // WhatsApp button behavior
   const whatsappBtn = document.getElementById("whatsappBtn");
   if (whatsappBtn) {
-    whatsappBtn.addEventListener("click", function (e) {
-      // build link on click so it always uses current textarea content
+    whatsappBtn.addEventListener("click", function () {
       const textarea = document.getElementById("answerText");
       const text = textarea ? textarea.value : "";
       const encoded = encodeURIComponent(text || "");
-      const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID"; // replace
-      // use href format that sends message text when opening in mobile/desktop
+      const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID"; // replace with real group
       this.href = `${groupLink}?text=${encoded}`;
     });
   }
 
-  // Attach delegated handlers for Answer + Copy buttons
   document.body.addEventListener("click", function (ev) {
     const answerBtn = ev.target.closest && ev.target.closest(".answer-btn");
     if (answerBtn) {
-      const rawAuthor = answerBtn.getAttribute("data-author") || "";
-      const rawQuestion = answerBtn.getAttribute("data-question") || "";
-      const rawTimestamp = answerBtn.getAttribute("data-timestamp") || "";
-      const author = decodeHtml(rawAuthor);
-      const question = decodeHtml(rawQuestion);
-      const timestamp = decodeHtml(rawTimestamp);
-      openAnswerModal(author, question, timestamp);
-      ev.preventDefault();
-      return;
+      openAnswerModal(
+        decodeHtml(answerBtn.getAttribute("data-author")),
+        decodeHtml(answerBtn.getAttribute("data-question")),
+        decodeHtml(answerBtn.getAttribute("data-timestamp"))
+      );
+      ev.preventDefault(); return;
     }
 
     const copyBtn = ev.target.closest && ev.target.closest(".copy-btn");
     if (copyBtn) {
-      const rawQ = copyBtn.getAttribute("data-question") || "";
-      const question = decodeHtml(rawQ);
-      copyTextToClipboard(question, copyBtn);
-      ev.preventDefault();
-      return;
+      copyTextToClipboard(decodeHtml(copyBtn.getAttribute("data-question")), copyBtn);
+      ev.preventDefault(); return;
     }
   });
 
-  // Attach autosize to the answer textarea (if present)
   const answerTextEl = document.getElementById("answerText");
   if (answerTextEl) {
     answerTextEl.addEventListener("input", function () {
@@ -251,6 +155,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-}); // DOMContentLoaded
+});
 </script>
 {% endblock %}

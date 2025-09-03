@@ -4,52 +4,41 @@ import base64
 import json
 from pathlib import Path
 from flask import (
-    Flask, render_template, url_for, redirect, Response,
-    request, flash
+    Flask, render_template, url_for, redirect, request, flash
 )
 from dotenv import load_dotenv
-import requests
-import datetime
 import random
 import logging
-from datetime import timedelta
+import traceback
 
 load_dotenv()
 
-# --- Service account handling (Base64 -> file) ---
+# --- Service account handling ---
 SERVICE_ACCOUNT_B64 = os.environ.get("SERVICE_ACCOUNT_JSON_B64")
 SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_account.json")
 
 if SERVICE_ACCOUNT_B64:
     try:
-        b64 = "".join(SERVICE_ACCOUNT_B64.split())
-        data = base64.b64decode(b64)
-        json.loads(data.decode("utf-8"))  # sanity check
-        tmp = SERVICE_ACCOUNT_PATH + ".tmp"
-        with open(tmp, "wb") as fh:
+        data = base64.b64decode(SERVICE_ACCOUNT_B64.strip())
+        json.loads(data.decode("utf-8"))  # check valid JSON
+        with open(SERVICE_ACCOUNT_PATH, "wb") as fh:
             fh.write(data)
-        Path(tmp).replace(SERVICE_ACCOUNT_PATH)
         try:
             os.chmod(SERVICE_ACCOUNT_PATH, 0o600)
         except Exception:
             pass
     except Exception as ex:
-        raise RuntimeError(f"Failed to decode/write service account: {ex}")
+        raise RuntimeError(f"Failed to decode service account: {ex}")
 else:
     if not os.path.exists(SERVICE_ACCOUNT_PATH):
-        raise RuntimeError(
-            "Missing service account credentials: set SERVICE_ACCOUNT_JSON_B64 or place "
-            f"a JSON at {SERVICE_ACCOUNT_PATH}."
-        )
+        raise RuntimeError("Missing service account JSON")
 
-# --- Flask app setup ---
+# --- Flask setup ---
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24))
 logging.basicConfig(level=logging.INFO)
-app.logger.setLevel(logging.INFO)
 
-# --- App constants ---
-message = "Study hard, pray harder."
+FOOTER_MESSAGE = "Study hard, pray harder."
 STATIC_CATEGORIES = [
     "Mathematics", "Biology", "Computer Science",
     "Further Mathematics", "Chemistry", "Physics", "Other"
@@ -60,27 +49,21 @@ MOTIVATION_VERSES = [
     ("Trust in the Lord with all your heart and lean not on your own understanding.", "Proverbs 3:5"),
 ]
 
-# --- sheets + drive imports (defensive) ---
+# --- Imports ---
 try:
     from sheets import (
         from_google_sheets, check_date, append_row,
-        read_rules, get_questions, clear_sheet, CACHE_TTL_QUESTIONS
+        read_rules, get_questions, clear_sheet
     )
-except Exception as e:
-    app.logger.exception("Failed to import sheets module.")
-    def _missing_sheets(*args, **kwargs):
-        raise RuntimeError(f"sheets module unavailable: {e}")
-    from_google_sheets = check_date = append_row = read_rules = get_questions = clear_sheet = _missing_sheets
-    CACHE_TTL_QUESTIONS = 30
+except ImportError as e:
+    def fail(*a, **k): raise RuntimeError(f"sheets.py missing: {e}")
+    from_google_sheets = check_date = append_row = read_rules = get_questions = clear_sheet = fail
 
 try:
     from drive import from_google_drive, folders_and_images
-except Exception as e:
-    app.logger.warning("drive.py import failed or not present: %s", e)
-    def from_google_drive(*args, **kwargs):
-        raise RuntimeError(f"drive module unavailable: {e}")
-    def folders_and_images(*args, **kwargs):
-        return []
+except ImportError:
+    def from_google_drive(*a, **k): return []
+    def folders_and_images(*a, **k): return []
 
 # -------------------------
 # Routes
@@ -89,157 +72,107 @@ except Exception as e:
 @app.route("/home")
 def home_page():
     verse, reference = random.choice(MOTIVATION_VERSES)
-    try:
-        return render_template("index.html", message="Smart for school, wise for eternity. ❤️", verse=verse, reference=reference)
-    except Exception as e:
-        app.logger.exception("Error rendering home page")
-        return f"Template render error: {e}", 500
+    return render_template("index.html", message=FOOTER_MESSAGE, verse=verse, reference=reference)
 
 @app.route("/content")
 def content_page():
     try:
         ws_values = from_google_sheets() or []
-        if not ws_values:
-            ws_title, ws_values = [], []
-        else:
-            ws_title = ws_values[0] if len(ws_values) > 0 else []
-            ws_values = ws_values[1:] if len(ws_values) > 1 else []
-
-        try:
-            dr_values = folders_and_images()
-        except Exception as ex:
-            app.logger.warning("folders_and_images failed: %s", ex)
-            dr_values = []
-
-        try:
-            form_list = from_google_drive(os.environ.get("FORMS_FOLDER_ID", ""), "application/vnd.google-apps.form")
-        except Exception as ex:
-            app.logger.info("from_google_drive issue or no forms: %s", ex)
-            form_list = []
-
+        ws_title = ws_values[0] if ws_values else []
+        ws_content = ws_values[1:] if len(ws_values) > 1 else []
+        dr_values = folders_and_images()
+        form_list = from_google_drive(os.environ.get("FORMS_FOLDER_ID", ""), "application/vnd.google-apps.form")
         return render_template(
             "content.html",
-            message=message,
-            sheet_content=ws_values,
+            message=FOOTER_MESSAGE,
+            sheet_content=ws_content,
             sheet_title=ws_title,
             today_date=check_date(),
             form_list=form_list,
             dr_values=dr_values
         )
     except Exception as e:
-        app.logger.exception("Error loading content page")
-        return render_template(
-            "content.html",
-            message=message,
-            sheet_content=[],
-            sheet_title=[],
-            today_date=[],
-            form_list=[],
-            dr_values=[],
-            error=f"Error loading content: {e}"
-        ), 500
+        return render_template("content.html", message=FOOTER_MESSAGE, sheet_content=[], sheet_title=[], today_date="", form_list=[], dr_values=[], error=str(e))
 
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
-    message = None
-    try:
-        if request.method == "POST":
-            submitted_question = (request.form.get("question") or "").strip()
-            if submitted_question:
-                username = (request.form.get("name") or "Anonymous").strip()
-                question_text = submitted_question
-                choice_selected = (request.form.get("category") or "").strip() or "Other"
-                try:
-                    append_row([choice_selected, username, question_text])
-                    flash("Question submitted — thanks!", "success")
-                except Exception:
-                    app.logger.exception("Failed to append question")
-                    flash("Could not submit question at this time. Try again later.", "danger")
-                return redirect(url_for("questions_page"))
-            else:
-                flash("Please enter a question before submitting.", "warning")
-                return redirect(url_for("questions_page"))
-
-        selected_category = (request.args.get("categoryFilter") or "").strip()
-        all_questions = get_questions_safe()
-        all_questions = [
-            q for q in all_questions
-            if isinstance(q, (list, tuple)) and any((cell is not None and str(cell).strip()) for cell in q)
-        ]
-
-        derived_set = {str(q[0]).strip() for q in all_questions if len(q) > 0 and q[0]}
-        extra_categories = [c for c in sorted(derived_set) if c not in STATIC_CATEGORIES]
-        categories_for_ui = STATIC_CATEGORIES + extra_categories
-
-        if selected_category:
-            questions = [q for q in all_questions if len(q) > 0 and str(q[0]).strip() == selected_category]
+    if request.method == "POST":
+        submitted_question = (request.form.get("question") or "").strip()
+        if submitted_question:
+            username = (request.form.get("name") or "Anonymous").strip()
+            choice_selected = (request.form.get("category") or "Other").strip()
+            try:
+                append_row([choice_selected, username, submitted_question])
+                flash("✅ Question submitted!", "success")
+            except Exception:
+                flash("❌ Could not submit question. Try again later.", "danger")
         else:
-            questions = all_questions
+            flash("⚠️ Please enter a question.", "warning")
+        return redirect(url_for("questions_page"))
 
-        return render_template(
-            "questions.html",
-            questions=questions,
-            message=message,
-            categories=categories_for_ui,
-            selected_category=selected_category
-        )
-
-    except Exception:
-        app.logger.exception("Error in questions_page")
-        return render_template(
-            "questions.html",
-            questions=[],
-            message=message,
-            categories=STATIC_CATEGORIES,
-            selected_category="",
-            error="Unable to load questions right now. Please try again later."
-        ), 200
-
-
-@app.route("/drive-image/<file_id>")
-def drive_image(file_id):
+    selected_category = request.args.get("categoryFilter", "").strip()
     try:
-        url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        r = requests.get(url, stream=True, timeout=10)
-        r.raise_for_status()
-        content_type = r.headers.get("Content-Type", "image/jpeg")
-        return Response(r.content, content_type=content_type)
-    except requests.exceptions.RequestException as re:
-        app.logger.exception("Drive image fetch failed")
-        return f"Image fetch error: {re}", 502
-    except Exception as e:
-        app.logger.exception("Unexpected drive image error")
-        return f"Image fetch error: {e}", 500
+        all_questions = get_questions() or []
+    except Exception:
+        all_questions = []
+
+    derived_set = {str(q[0]).strip() for q in all_questions if q and len(q) > 0 and q[0]}
+    categories_for_ui = STATIC_CATEGORIES + [c for c in sorted(derived_set) if c not in STATIC_CATEGORIES]
+
+    if selected_category:
+        questions = [q for q in all_questions if len(q) > 0 and str(q[0]).strip() == selected_category]
+    else:
+        questions = all_questions
+
+    return render_template(
+        "questions.html",
+        questions=questions,
+        message=FOOTER_MESSAGE,
+        categories=categories_for_ui,
+        selected_category=selected_category
+    )
+
+@app.route("/about")
+def about():
+    return render_template("about.html", message=FOOTER_MESSAGE)
+
+@app.route("/contact", methods=["GET", "POST"])
+def contact():
+    msg = None
+    if request.method == "POST":
+        content = request.form.get("message") or ""
+        msg = "✅ Message sent!" if content else "❌ Please enter a message."
+    return render_template("contact.html", message=FOOTER_MESSAGE, form_message=msg)
 
 @app.route("/rules")
 def rules_page():
     try:
         rules = read_rules() or []
-        return render_template("rules.html", rules=rules, message=message)
-    except Exception as e:
-        app.logger.exception("Error loading rules")
-        return render_template("rules.html", rules=[], message=message, error="Unable to load rules right now."), 500
+    except Exception:
+        rules = []
+    return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
 
-# Admin manual clear (optional)
-from flask import jsonify
 @app.route("/admin", methods=["GET", "POST"])
 def admin_page():
-    message = None
+    result = None
     if request.method == "POST":
-        admin_secret = os.environ.get("ADMIN_CLEAR_SECRET")
         provided_secret = (request.form.get("secret") or "").strip()
-        if provided_secret == admin_secret:
+        if provided_secret == os.environ.get("ADMIN_CLEAR_SECRET"):
             try:
                 clear_sheet()
-                message = "✅ All questions cleared successfully."
+                result = "✅ Questions cleared."
             except Exception as e:
-                message = f"❌ Failed to clear questions: {e}"
+                result = f"❌ Failed: {e}"
         else:
-            message = "❌ Invalid secret!"
-    return render_template("admin.html", result=message, message="All You Do, Do It With Love ❤️❤️❤️")
+            result = "❌ Invalid secret!"
+    return render_template("admin.html", result=result, message=FOOTER_MESSAGE)
 
-# --- Entry point ---
+# --- Global error handler ---
+@app.errorhandler(Exception)
+def handle_exception(e):
+    app.logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
+    return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 500
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("FLASK_DEBUG", "False").lower() in ("1", "true", "yes")
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    app.run(host="0.0.0.0", port=port, debug=False)

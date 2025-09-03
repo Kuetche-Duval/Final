@@ -7,186 +7,140 @@
 {% block styles %}
 <style>
   .question-list { list-style: none; padding: 0; }
-  .question-item { border-bottom: 1px solid #eee; padding: 0.5rem 0; display: flex; flex-direction: column; }
-  .question-header { font-weight: bold; margin-bottom: 0.25rem; display: flex; justify-content: space-between; align-items: center; }
-  .author { color: #007bff; }
-  .category { color: #28a745; font-style: italic; }
-  .dot { margin: 0 0.25rem; }
-  .message-text { white-space: pre-wrap; margin-bottom: 0.25rem; }
-  .msg-actions button { margin-left: 0.25rem; }
+  .question-list li {
+    background: #fff;
+    margin-bottom: 12px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    cursor: pointer;
+    transition: background .3s;
+  }
+  .question-list li:hover { background: #f1f1ff; }
+
+  .modal textarea {
+    min-height: 200px;
+    font-family: monospace;
+    white-space: pre-wrap;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .question-list li { background: #33334d; color: #eee; }
+    .modal-content { background-color: #2c2c3c; color: #eee; }
+    .modal textarea { background: #1e1e2a; color: #eee; }
+    .card { background-color: #2a2a3d; color: #eee; }
+  }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="container py-4">
-  <h2 class="mb-3">❓ Ask & View Questions</h2>
-
-  <!-- Ask Form -->
-  <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4">
-    <input type="text" name="name" placeholder="Your name" class="form-control mb-2" />
-    <select name="category" class="form-select mb-2">
-      {% for cat in categories %}
-      <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
-      {% endfor %}
-    </select>
-    <textarea name="question" class="form-control mb-2" placeholder="Type your question..." required></textarea>
-    <button type="submit" class="btn btn-primary">Submit</button>
-  </form>
-
-  <!-- Filter -->
-  <form method="GET" action="{{ url_for('questions_page') }}" class="mb-3">
-    <label for="categoryFilter" class="form-label">Filter by Category:</label>
-    <select id="categoryFilter" name="categoryFilter" class="form-select" onchange="this.form.submit()">
-      <option value="">All</option>
-      {% for cat in categories %}
-      <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
-      {% endfor %}
-    </select>
-  </form>
-
-  <!-- Question List -->
-  {% if questions %}
-  <ul class="list-group">
-    {% for q in questions %}
-    <li class="list-group-item question-item">
-      <div class="question-header">
-        <div>
-          <strong>[{{ q[0] if q|length > 0 else "Other" }}]</strong>
-          {{ q[2] if q|length > 2 else "No question text" }}
-          <br>
-          <span class="text-muted small">
-            Asked by {{ q[1] if q|length > 1 else "Anonymous" }}
-            {% if q|length > 3 %} at {{ q[3] }}{% endif %}
-          </span>
+  <div class="row g-4">
+    <div class="col-12">
+      <div class="card shadow">
+        <div class="card-header bg-primary text-white fw-bold">
+          💬 Ask & Answer Questions
         </div>
-        <div class="msg-actions">
-          <button class="btn btn-sm btn-outline-secondary copy-btn"
-                  data-question="{{ q[2]|e }}">📋 Copy</button>
-          <button class="btn btn-sm btn-outline-primary answer-btn"
-                  data-author="{{ q[1]|e }}"
-                  data-question="{{ q[2]|e }}"
-                  data-timestamp="{{ q[3]|e if q|length > 3 else '' }}">💡 Answer</button>
-        </div>
-      </div>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="text-muted">No questions available.</p>
-  {% endif %}
-</div>
+        <div class="card-body">
 
-<!-- Answer Modal -->
-<div class="modal fade" id="answerModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title">Answer Question</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <textarea id="answerText" class="form-control" rows="5"></textarea>
-      </div>
-      <div class="modal-footer">
-        <a id="whatsappBtn" class="btn btn-success" target="_blank">Send to WhatsApp</a>
-        <button type="button" class="btn btn-secondary" onclick="copyAnswer()">Copy</button>
-        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
+          <!-- ================== New Question Form ================== -->
+          <h5 class="mb-3">🙋 Ask a Question</h5>
+          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4">
+            <div class="mb-3">
+              <label for="name" class="form-label">Your Name (optional):</label>
+              <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous">
+            </div>
+            <div class="mb-3">
+              <label for="category" class="form-label">Category:</label>
+              <select class="form-select" id="category" name="category" required>
+                <option value="">-- Select Category --</option>
+                {% for c in categories %}
+                  <option value="{{c}}">{{c}}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="mb-3">
+              <label for="question" class="form-label">Your Question:</label>
+              <textarea class="form-control" id="question" name="question" rows="4" required></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">➕ Submit Question</button>
+          </form>
+          <hr>
+
+          <!-- ================== Category Filter ================== -->
+          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-3">
+            <label for="categoryFilter" class="form-label">📂 Filter by category:</label>
+            <select class="form-select" id="categoryFilter" name="category" onchange="this.form.submit()">
+              <option value="">All</option>
+              {% for c in categories %}
+                <option value="{{c}}" {% if selected_category == c %}selected{% endif %}>{{c}}</option>
+              {% endfor %}
+            </select>
+          </form>
+
+          <!-- ================== Questions List ================== -->
+          <h5 class="mb-3">📑 Questions:</h5>
+          <ul class="question-list">
+            {% for q in questions %}
+              <li onclick="openAnswerModal(`{{ q[0] or 'Anonymous' }}`, `{{ q[2]|e }}`)">
+                <span class="fw-bold text-primary">{{ q[0] or "Anonymous" }}</span> 
+                <small class="text-muted">({{ q[1] }})</small><br>
+                {{ q[2] }}
+              </li>
+            {% else %}
+              <li class="text-muted">No questions yet. Be the first to ask!</li>
+            {% endfor %}
+          </ul>
+
+        </div>
       </div>
     </div>
   </div>
 </div>
 
+<!-- ================== Answer Modal ================== -->
+<div class="modal fade" id="answerModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content rounded-3 shadow-lg">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title">✍️ Answer Question</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Preview & Write:</label>
+        <textarea id="answerText" class="form-control"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" onclick="copyAnswer()">📋 Copy</button>
+        <a id="whatsappBtn" class="btn btn-success" target="_blank">📲 Send to WhatsApp</a>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-document.addEventListener("DOMContentLoaded", function () {
+  let currentQuestion = "";
 
-  function decodeHtml(html) {
-    const txt = document.createElement("textarea");
-    txt.innerHTML = html || "";
-    return txt.value;
+  function openAnswerModal(author, question) {
+    currentQuestion = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
+    document.getElementById("answerText").value = currentQuestion;
+    new bootstrap.Modal(document.getElementById('answerModal')).show();
   }
 
-  function autosizeTextarea(el) {
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = el.scrollHeight + "px";
-  }
-
-  function openAnswerModal(author, question, timestamp) {
-    const textarea = document.getElementById("answerText");
-    const timePart = timestamp ? ` at ${timestamp}` : "";
-    const text = `❓ Question by ${author}${timePart}:\n${question}\n\n💡 My Answer:\n`;
-    if (textarea) {
-      textarea.value = text;
-      autosizeTextarea(textarea);
-    }
-    try {
-      if (typeof bootstrap !== "undefined" && bootstrap.Modal) {
-        const modalEl = document.getElementById("answerModal");
-        if (modalEl) new bootstrap.Modal(modalEl).show();
-        return;
-      }
-    } catch {}
-    try { navigator.clipboard.writeText(text).catch(()=>{}); } catch {}
-  }
-
-  function copyTextToClipboard(text, btn) {
-    if (!text) return;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(() => {
-        if (btn) {
-          const prev = btn.innerHTML;
-          btn.innerHTML = "Copied ✓";
-          setTimeout(()=> btn.innerHTML = prev, 1200);
-        }
-      }).catch(()=>{ window.prompt("Copy:", text); });
-    } else { window.prompt("Copy:", text); }
-  }
-
-  window.copyAnswer = function () {
-    const textarea = document.getElementById("answerText");
-    const text = textarea ? textarea.value : "";
-    copyTextToClipboard(text);
-  };
-
-  const whatsappBtn = document.getElementById("whatsappBtn");
-  if (whatsappBtn) {
-    whatsappBtn.addEventListener("click", function () {
-      const textarea = document.getElementById("answerText");
-      const text = textarea ? textarea.value : "";
-      const encoded = encodeURIComponent(text || "");
-      const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID"; // replace with real group
-      this.href = `${groupLink}?text=${encoded}`;
+  function copyAnswer() {
+    const text = document.getElementById("answerText").value;
+    navigator.clipboard.writeText(text).then(() => {
+      alert("✅ Answer copied to clipboard!");
     });
   }
 
-  document.body.addEventListener("click", function (ev) {
-    const answerBtn = ev.target.closest && ev.target.closest(".answer-btn");
-    if (answerBtn) {
-      openAnswerModal(
-        decodeHtml(answerBtn.getAttribute("data-author")),
-        decodeHtml(answerBtn.getAttribute("data-question")),
-        decodeHtml(answerBtn.getAttribute("data-timestamp"))
-      );
-      ev.preventDefault(); return;
-    }
-
-    const copyBtn = ev.target.closest && ev.target.closest(".copy-btn");
-    if (copyBtn) {
-      copyTextToClipboard(decodeHtml(copyBtn.getAttribute("data-question")), copyBtn);
-      ev.preventDefault(); return;
-    }
+  document.getElementById("whatsappBtn").addEventListener("click", function() {
+    const text = encodeURIComponent(document.getElementById("answerText").value);
+    // 🔒 Replace with your actual group invite link
+    const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID";
+    this.href = `${groupLink}?text=${text}`;
   });
-
-  const answerTextEl = document.getElementById("answerText");
-  if (answerTextEl) {
-    answerTextEl.addEventListener("input", function () {
-      autosizeTextarea(this);
-    });
-  }
-
-});
 </script>
 {% endblock %}

@@ -8,7 +8,7 @@ import traceback
 from flask import Flask, render_template, url_for, redirect, request, flash
 from dotenv import load_dotenv
 
-# Load environment variables
+# --- Load environment ---
 load_dotenv()
 
 # --- Service account handling ---
@@ -18,18 +18,15 @@ SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_acco
 if SERVICE_ACCOUNT_B64:
     try:
         data = base64.b64decode(SERVICE_ACCOUNT_B64.strip())
-        json.loads(data.decode("utf-8"))  # validate JSON
+        json.loads(data.decode("utf-8"))  # validate
         with open(SERVICE_ACCOUNT_PATH, "wb") as fh:
             fh.write(data)
-        try:
-            os.chmod(SERVICE_ACCOUNT_PATH, 0o600)
-        except Exception:
-            pass
+        try: os.chmod(SERVICE_ACCOUNT_PATH, 0o600)
+        except Exception: pass
     except Exception as ex:
         raise RuntimeError(f"Failed to decode service account: {ex}")
-else:
-    if not os.path.exists(SERVICE_ACCOUNT_PATH):
-        raise RuntimeError("Missing service account JSON")
+elif not os.path.exists(SERVICE_ACCOUNT_PATH):
+    raise RuntimeError("Missing service account JSON")
 
 # --- Flask setup ---
 app = Flask(__name__)
@@ -47,7 +44,7 @@ MOTIVATION_VERSES = [
     ("Trust in the Lord with all your heart and lean not on your own understanding.", "Proverbs 3:5"),
 ]
 
-# --- Import sheet/drive services ---
+# --- Sheets/Drive imports ---
 try:
     from sheets import from_google_sheets, check_date, append_row, read_rules, get_questions, clear_sheet
 except ImportError as e:
@@ -87,6 +84,7 @@ def content_page():
             dr_values=dr_values
         )
     except Exception as e:
+        app.logger.error("Content page error: %s\n%s", e, traceback.format_exc())
         return render_template("content.html", message=FOOTER_MESSAGE, sheet_content=[], sheet_title=[], today_date="", form_list=[], dr_values=[], error=str(e))
 
 @app.route("/questions", methods=["GET", "POST"])
@@ -97,14 +95,21 @@ def questions_page():
             if submitted_question:
                 username = (request.form.get("name") or "Anonymous").strip()
                 choice_selected = (request.form.get("category") or "Other").strip()
-                append_row([choice_selected, username, submitted_question])
-                flash("✅ Question submitted!", "success")
+                try:
+                    append_row([choice_selected, username, submitted_question])
+                    flash("✅ Question submitted!", "success")
+                except Exception as e:
+                    app.logger.error("Failed append_row: %s", e)
+                    flash("❌ Could not submit question. Try later.", "danger")
             else:
                 flash("⚠️ Please enter a question.", "warning")
             return redirect(url_for("questions_page"))
 
         selected_category = request.args.get("categoryFilter", "").strip()
-        all_questions = get_questions() or []
+        try:
+            all_questions = get_questions() or []
+        except Exception:
+            all_questions = []
 
         derived_set = {str(q[0]).strip() for q in all_questions if q and len(q) > 0 and q[0]}
         categories_for_ui = STATIC_CATEGORIES + [c for c in sorted(derived_set) if c not in STATIC_CATEGORIES]
@@ -169,5 +174,6 @@ def handle_exception(e):
 
 # --- App entry ---
 if __name__ == "__main__":
+    # ✅ Use Render environment port & bind 0.0.0.0
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)

@@ -5,69 +5,6 @@ Newton's Nerds
 {% endblock %}
 
 {% block styles %}
-<style>
-  /* Hero Section */
-  .hero {
-    background: linear-gradient(135deg, #005c97, #363795);
-    color: white;
-    padding: 80px 20px;
-    text-align: center;
-    border-radius: 0 0 50% 50% / 10%;
-    transition: all 0.3s ease;
-  }
-  .hero h1 {
-    font-weight: bold;
-    font-size: 2.5rem;
-    margin-bottom: 15px;
-  }
-  .hero p {
-    font-size: 1.2rem;
-    margin-bottom: 25px;
-  }
-  .hero .btn {
-    font-weight: bold;
-  }
-
-  /* Main container */
-  main.container {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 20px;
-  }
-
-  /* Cards */
-  .card {
-    border: none;
-    border-radius: 20px;
-    transition: transform .2s, box-shadow .3s, background-color .3s, color .3s;
-  }
-  .card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0px 8px 20px rgba(0,0,0,0.15);
-  }
-  .card-header {
-    border-radius: 20px 20px 0 0 !important;
-    font-weight: bold;
-    font-size: 1.1rem;
-  }
-
-  /* Buttons */
-  .btn-outline-info, .btn-outline-success, .btn-outline-warning, .btn-outline-danger {
-    transition: all 0.2s ease;
-  }
-  .btn-outline-info:hover { background-color: #17a2b8; color: white; }
-  .btn-outline-success:hover { background-color: #28a745; color: white; }
-  .btn-outline-warning:hover { background-color: #ffc107; color: #212529; }
-  .btn-outline-danger:hover { background-color: #dc3545; color: white; }
-
-  /* Dark mode support */
-  @media (prefers-color-scheme: dark) {
-    body { background-color: #121212; color: #e0e0e0; }
-    .card { background-color: #1e1e2a; color: #e0e0e0; }
-    .card-header { color: #fff; }
-    .hero { color: #fff; }
-  }
-</style>
 {% endblock %}
 
 {% block content %}
@@ -101,7 +38,7 @@ Newton's Nerds
       </div>
       <div class="card-body">
         <blockquote class="blockquote">
-          “I can do all things through Christ who strengthens me.” – Philippians 4:13
+          {{ verse }} – {{ reference }}
         </blockquote>
         <a href="{{ url_for('content_page') }}#daily_motivation" class="btn btn-outline-success">See More Quotes</a>
       </div>

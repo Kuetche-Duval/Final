@@ -181,7 +181,7 @@ def questions_page():
             questions = normalized_questions
 
         return render_template(
-            "questions.html",
+            "Questions.html",
             questions=questions,
             message=FOOTER_MESSAGE,
             categories=categories_for_ui,

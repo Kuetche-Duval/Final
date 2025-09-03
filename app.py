@@ -12,7 +12,6 @@ import requests
 import datetime
 import random
 import logging
-import threading
 from datetime import timedelta
 
 load_dotenv()
@@ -84,56 +83,6 @@ except Exception as e:
         return []
 
 # -------------------------
-# Daily midnight scheduler (in-process, optional)
-# -------------------------
-ENABLE_DAILY_CLEAR = os.environ.get("ENABLE_DAILY_CLEAR", "true").lower() in ("1", "true", "yes")
-
-_scheduler_timer = None
-_scheduler_lock = threading.Lock()
-
-def seconds_until_next_midnight():
-    now = datetime.datetime.now()
-    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return (tomorrow - now).total_seconds()
-
-def _run_clear_and_reschedule():
-    global _scheduler_timer
-    try:
-        app.logger.info("Midnight scheduler running: calling clear_sheet()")
-        try:
-            clear_sheet()
-            app.logger.info("clear_sheet() finished.")
-        except Exception as e:
-            app.logger.exception("clear_sheet() failed in scheduled run: %s", e)
-    finally:
-        try:
-            sec = seconds_until_next_midnight()
-            app.logger.info("Scheduling next midnight clear in %s seconds.", sec)
-            t = threading.Timer(sec, _run_clear_and_reschedule)
-            t.daemon = True
-            with _scheduler_lock:
-                _scheduler_timer = t
-            t.start()
-        except Exception:
-            app.logger.exception("Failed to schedule next midnight clear")
-
-def start_daily_midnight_scheduler():
-    global _scheduler_timer
-    if not ENABLE_DAILY_CLEAR:
-        app.logger.info("Daily clear scheduler disabled by env.")
-        return
-    with _scheduler_lock:
-        if _scheduler_timer is not None:
-            app.logger.info("Scheduler already running.")
-            return
-        sec = seconds_until_next_midnight()
-        app.logger.info("Starting midnight clear scheduler; first run in %s seconds.", sec)
-        t = threading.Timer(sec, _run_clear_and_reschedule)
-        t.daemon = True
-        _scheduler_timer = t
-        t.start()
-
-# -------------------------
 # Routes
 # -------------------------
 @app.route("/")
@@ -193,7 +142,6 @@ def content_page():
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
     try:
-        # Post = new question submission (PRG)
         if request.method == "POST":
             submitted_question = (request.form.get("question") or "").strip()
             if submitted_question:
@@ -211,9 +159,7 @@ def questions_page():
                 flash("Please enter a question before submitting.", "warning")
                 return redirect(url_for("questions_page"))
 
-        # GET: optional category filter via querystring
         selected_category = (request.args.get("categoryFilter") or "").strip()
-
         all_questions = get_questions() or []
         all_questions = [
             q for q in all_questions
@@ -275,12 +221,8 @@ def rules_page():
         app.logger.exception("Error loading rules")
         return render_template("rules.html", rules=[], message=message, error="Unable to load rules right now."), 500
 
-# Optional: keep admin clear if you want manual clear (remove if you prefer)
-# -------------------------
-# Admin: clear questions manually
-# -------------------------
+# Admin manual clear (optional)
 from flask import jsonify
-
 @app.route("/admin", methods=["GET", "POST"])
 def admin_page():
     message = None
@@ -297,18 +239,8 @@ def admin_page():
             message = "❌ Invalid secret!"
     return render_template("admin.html", result=message, message="All You Do, Do It With Love ❤️❤️❤️")
 
-
 # --- Entry point ---
 if __name__ == "__main__":
-    # Start scheduler when running directly (guard reloader)
-    try:
-        debug = os.environ.get("FLASK_DEBUG", "False").lower() in ("1", "true", "yes")
-        should_start_scheduler = ENABLE_DAILY_CLEAR and (not debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true")
-        if should_start_scheduler:
-            start_daily_midnight_scheduler()
-    except Exception:
-        app.logger.exception("Failed to start midnight clear scheduler at startup.")
-
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "False").lower() in ("1", "true", "yes")
     app.run(host="0.0.0.0", port=port, debug=debug)

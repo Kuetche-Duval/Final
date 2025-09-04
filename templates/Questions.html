@@ -1,34 +1,89 @@
 {% extends 'base.html' %}
 
 {% block title %}
-  Newton's Nerds - Questions
+  Ask a Questions
 {% endblock %}
 
 {% block styles %}
 <style>
-  .question-list { list-style: none; padding: 0; }
-  .question-list li {
-    background: #fff;
-    margin-bottom: 12px;
-    padding: 12px 16px;
-    border-radius: 10px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  /* Small, self-contained styles to give a chat-like feel and great dark-mode readability */
+  :root {
+    --accent-green: #25d366; /* WhatsApp-like green accent */
+    --muted-2: #98a0b3;
+    --bubble-radius: 14px;
+  }
+
+  .page-header {
+    display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px;
+  }
+
+  .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+  /* Question list like chat bubbles */
+  .question-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  .question-item {
+    display:flex; gap:12px; align-items:flex-start; justify-content:space-between;
+    padding:12px 14px; background: var(--card-bg); color: var(--text);
+    border-radius: var(--card-radius); box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+    transition: transform .15s ease, box-shadow .2s ease, background .12s ease;
     cursor: pointer;
-    transition: background .3s;
   }
-  .question-list li:hover { background: #f1f1ff; }
+  .question-item:hover { transform: translateY(-3px); box-shadow: 0 12px 34px rgba(0,0,0,0.06); }
 
-  .modal textarea {
-    min-height: 200px;
-    font-family: monospace;
-    white-space: pre-wrap;
+  .left {
+    display:flex; flex-direction:column; gap:6px; min-width:0; max-width:calc(100% - 90px);
+  }
+  .meta {
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  }
+  .category-badge {
+    background: rgba(37,211,102,0.12);
+    color: var(--accent-green);
+    padding:4px 8px; border-radius:10px; font-weight:700; font-size:.86rem;
+  }
+  .author {
+    color: var(--muted);
+    font-weight:700;
+    font-size:.88rem;
+    max-width:220px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .message-text { color: var(--text); font-size: .97rem; white-space:pre-wrap; word-break:break-word; }
+
+  .right {
+    display:flex; flex-direction:column; align-items:flex-end; gap:6px; min-width:72px;
+  }
+  .message-time { font-size:.78rem; color: var(--muted); }
+
+  /* Focus / keyboard navigation */
+  .question-item:focus {
+    outline: none;
+    box-shadow: 0 16px 46px rgba(0,0,0,0.12);
+    transform: translateY(-4px);
+    background: linear-gradient(180deg, rgba(37,211,102,0.06), var(--card-bg));
+  }
+  .question-item:focus .author { color: #0b6628; } /* deeper green for author on focus */
+
+  /* Form focus: always light for writing clarity */
+  .form-control:focus, .form-select:focus, textarea:focus {
+    background: #fff !important;
+    color: #111 !important;
+    border-color: var(--accent-green) !important;
+    box-shadow: 0 6px 20px rgba(37,211,102,0.12) !important;
   }
 
-  @media (prefers-color-scheme: dark) {
-    .question-list li { background: #33334d; color: #eee; }
-    .modal-content { background-color: #2c2c3c; color: #eee; }
-    .modal textarea { background: #1e1e2a; color: #eee; }
-    .card { background-color: #2a2a3d; color: #eee; }
+  /* Responsive tweaks */
+  @media (max-width: 576px) {
+    .right { min-width:56px; }
+    .author { max-width: 120px; }
+  }
+
+  /* Toast positioning */
+  .toast-container-fixed {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 11000;
   }
 </style>
 {% endblock %}
@@ -38,39 +93,56 @@
   <div class="row g-4">
     <div class="col-12">
       <div class="card shadow">
-        <div class="card-header bg-primary text-white fw-bold">
-          💬 Ask & Answer Questions
+        <div class="card-header bg-primary text-white fw-bold d-flex justify-content-between align-items-center">
+          <div>💬 Ask & Answer Questions</div>
+          <div class="small text-white-50">Newton's Nerds</div>
         </div>
         <div class="card-body">
 
-          <!-- ================== New Question Form ================== -->
-          <h5 class="mb-3">🙋 Ask a Question</h5>
-          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4" novalidate>
-            <div class="mb-3">
-              <label for="name" class="form-label">Your Name (optional):</label>
-              <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous">
-            </div>
-            <div class="mb-3">
-              <label for="category" class="form-label">Category:</label>
-              <select class="form-select" id="category" name="category" required>
-                <option value="">-- Select Category --</option>
-                {% for c in categories %}
-                  <option value="{{ c }}">{{ c }}</option>
-                {% endfor %}
+          <div class="page-header mb-3">
+            <h5 class="mb-0">🙋 Ask a Question</h5>
+            <div class="controls">
+              <input id="searchBox" class="form-control form-control-sm" placeholder="Search questions..." style="min-width:220px;">
+              <select id="sortSelect" class="form-select form-select-sm" style="width:170px">
+                <option value="none">Sort: Default</option>
+                <option value="new">Sort: Newest first</option>
+                <option value="old">Sort: Oldest first</option>
               </select>
             </div>
-            <div class="mb-3">
-              <label for="question" class="form-label">Your Question:</label>
-              <textarea class="form-control" id="question" name="question" rows="4" required></textarea>
+          </div>
+
+          <!-- New Question Form (functionality unchanged) -->
+          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4" novalidate>
+            <div class="row g-2">
+              <div class="col-md-4">
+                <label for="name" class="form-label small">Your Name (optional)</label>
+                <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous">
+              </div>
+              <div class="col-md-4">
+                <label for="category" class="form-label small">Category</label>
+                <select class="form-select" id="category" name="category" required>
+                  <option value="">-- Select Category --</option>
+                  {% for c in categories %}
+                    <option value="{{ c }}">{{ c }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-4 d-flex align-items-end">
+                <button type="submit" class="btn btn-success w-100">➕ Submit Question</button>
+              </div>
             </div>
-            <button type="submit" class="btn btn-primary">➕ Submit Question</button>
+
+            <div class="mb-3 mt-2">
+              <label for="question" class="form-label small">Your Question</label>
+              <textarea class="form-control" id="question" name="question" rows="3" required></textarea>
+            </div>
           </form>
           <hr>
 
-          <!-- ================== Category Filter (use GET) ================== -->
-          <form method="GET" action="{{ url_for('questions_page') }}" class="mb-3">
-            <label for="categoryFilter" class="form-label">📂 Filter by category:</label>
-            <select class="form-select" id="categoryFilter" name="categoryFilter" onchange="this.form.submit()">
+          <!-- Category Filter (GET) -->
+          <form method="GET" action="{{ url_for('questions_page') }}" class="mb-3 d-flex gap-2 align-items-center">
+            <label for="categoryFilter" class="form-label mb-0 small">📂 Filter by category:</label>
+            <select class="form-select form-select-sm" id="categoryFilter" name="categoryFilter" onchange="this.form.submit()" style="max-width:300px;">
               <option value="">All</option>
               {% for c in categories %}
                 <option value="{{ c }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
@@ -78,21 +150,37 @@
             </select>
           </form>
 
-          <!-- ================== Questions List ================== -->
-          <h5 class="mb-3">📑 Questions:</h5>
-          <ul class="question-list" id="questionsList">
+          <!-- Questions List -->
+          <h6 class="mb-2">📑 Questions</h6>
+          <ul class="question-list" id="questionsList" aria-live="polite">
             {% for q in questions %}
               {% set cat = q[0] if q|length > 0 else "Other" %}
               {% set author = q[1] if q|length > 1 and q[1] else "Anonymous" %}
               {% set text = q[2] if q|length > 2 else "" %}
+              {% set timestr = q[3] if q|length > 3 else "" %}
               <li tabindex="0"
                   class="question-item"
+                  role="button"
+                  aria-pressed="false"
                   data-author="{{ author|e }}"
                   data-category="{{ cat|e }}"
-                  data-question="{{ text|e }}">
-                <span class="fw-bold text-primary">{{ cat }}</span>
-                <small class="text-muted">({{ author }})</small><br>
-                {{ text }}
+                  data-question="{{ text|e }}"
+                  data-time="{{ timestr|e }}">
+                <div class="left">
+                  <div class="meta">
+                    <div class="category-badge">{{ cat }}</div>
+                    <div class="author" title="{{ author }}">{{ author }}</div>
+                  </div>
+                  <div class="message-text">{{ text }}</div>
+                </div>
+
+                <div class="right">
+                  <div class="message-time">{{ timestr | format_time }}</div>
+                  <div>
+                    <button class="btn btn-link btn-sm copy-btn" title="Copy answer template" aria-label="Copy answer">📋</button>
+                    <a class="btn btn-success btn-sm whatsapp-send" title="Send to WhatsApp" target="_blank">📲</a>
+                  </div>
+                </div>
               </li>
             {% else %}
               <li class="text-muted">No questions yet. Be the first to ask!</li>
@@ -105,7 +193,17 @@
   </div>
 </div>
 
-<!-- ================== Answer Modal ================== -->
+<!-- Toast container for feedback -->
+<div class="toast-container-fixed">
+  <div id="globalToast" class="toast align-items-center" role="alert" aria-live="assertive" aria-atomic="true">
+    <div class="d-flex">
+      <div class="toast-body" id="globalToastBody"></div>
+      <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Answer Modal (kept unchanged in functionality) -->
 <div class="modal fade" id="answerModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-centered">
     <div class="modal-content rounded-3 shadow-lg">
@@ -129,19 +227,74 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+  // small helper: decode HTML-encoded attributes safely
   function decodeHtml(html) {
-    var txt = document.createElement('textarea');
-    txt.innerHTML = html || '';
-    return txt.value;
+    const t = document.createElement('textarea');
+    t.innerHTML = html || '';
+    return t.value;
   }
 
+  // --- toast utility
+  const toastEl = document.getElementById('globalToast');
+  const toastBody = document.getElementById('globalToastBody');
+  const toast = new bootstrap.Toast(toastEl);
+
+  function showToast(msg, ms = 2000) {
+    toastBody.textContent = msg;
+    toast.show();
+    setTimeout(() => { try { toast.hide(); } catch(e){} }, ms);
+  }
+
+  // --- search with debounce
+  const searchBox = document.getElementById('searchBox');
+  const sortSelect = document.getElementById('sortSelect');
   const list = document.getElementById('questionsList');
+
+  function getItemsArray() {
+    return Array.from(list.querySelectorAll('.question-item'));
+  }
+
+  function filterAndSort() {
+    const q = (searchBox.value || '').trim().toLowerCase();
+    const sort = sortSelect.value;
+    let items = getItemsArray();
+
+    items.forEach(item => {
+      const author = decodeHtml(item.dataset.author).toLowerCase();
+      const category = decodeHtml(item.dataset.category).toLowerCase();
+      const text = decodeHtml(item.dataset.question).toLowerCase();
+      const match = !q || author.includes(q) || category.includes(q) || text.includes(q);
+      item.style.display = match ? '' : 'none';
+    });
+
+    // simple stable sort by time attribute (if present) when requested
+    if (sort === 'new' || sort === 'old') {
+      const container = list;
+      const visible = getItemsArray().filter(i => i.style.display !== 'none');
+      visible.sort((a, b) => {
+        const ta = a.dataset.time || '';
+        const tb = b.dataset.time || '';
+        // best effort: compare ISO-like or HH:MM strings, fallback to string compare
+        return (ta > tb ? 1 : (ta < tb ? -1 : 0));
+      });
+      if (sort === 'new') visible.reverse();
+      // append in new order (only visible ones)
+      visible.forEach(i => container.appendChild(i));
+    }
+  }
+
+  let debounceTimer = null;
+  searchBox && searchBox.addEventListener('input', function () {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(filterAndSort, 180);
+  });
+  sortSelect && sortSelect.addEventListener('change', filterAndSort);
+
+  // keyboard and click handlers to open answer modal
   list && list.addEventListener('click', function (ev) {
     const li = ev.target.closest('.question-item');
     if (!li) return;
-    const author = decodeHtml(li.getAttribute('data-author'));
-    const question = decodeHtml(li.getAttribute('data-question'));
-    openAnswerModal(author, question);
+    handleOpenModal(li);
   });
 
   list && list.addEventListener('keydown', function (ev) {
@@ -149,34 +302,61 @@ document.addEventListener('DOMContentLoaded', function () {
       const li = ev.target.closest('.question-item');
       if (!li) return;
       ev.preventDefault();
-      const author = decodeHtml(li.getAttribute('data-author'));
-      const question = decodeHtml(li.getAttribute('data-question'));
-      openAnswerModal(author, question);
+      handleOpenModal(li);
     }
   });
 
-  window.openAnswerModal = function(author, question) {
-    const text = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
+  function handleOpenModal(li) {
+    const author = decodeHtml(li.dataset.author);
+    const question = decodeHtml(li.dataset.question);
     const t = document.getElementById('answerText');
-    if (t) t.value = text;
+    if (t) t.value = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
     try {
       const modalEl = document.getElementById('answerModal');
       new bootstrap.Modal(modalEl).show();
     } catch (e) {
       console.warn('Bootstrap modal failed to open:', e);
     }
-  };
+  }
 
+  // copy buttons on each item — fill modal content & copy template to clipboard
+  document.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      const li = this.closest('.question-item');
+      const author = decodeHtml(li.dataset.author);
+      const question = decodeHtml(li.dataset.question);
+      const text = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(()=> showToast('Copied answer template ✅')).catch(()=> showToast('Copy failed'));
+      } else {
+        showToast('Clipboard not supported');
+      }
+    });
+  });
+
+  // WhatsApp send per item (opens target group link, text param)
+  document.querySelectorAll('.whatsapp-send').forEach(a => {
+    a.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      const li = this.closest('.question-item');
+      const author = decodeHtml(li.dataset.author);
+      const question = decodeHtml(li.dataset.question);
+      const msg = encodeURIComponent(`❓ Question by ${author}:\n${question}`);
+      // default group link; replace YOUR_GROUP_ID if required
+      const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID";
+      // WhatsApp web doesn't accept ?text on group invite links; this remains a helpful button for admins
+      this.href = `${groupLink}?text=${msg}`;
+    });
+  });
+
+  // Modal copy/whatsapp (bottom modal)
   window.copyAnswer = function () {
     const text = document.getElementById('answerText').value || '';
-    if (!text) return;
+    if (!text) return showToast('Nothing to copy');
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(()=> {
-        alert('✅ Answer copied to clipboard!');
-      }).catch(()=> { alert('Could not copy to clipboard.'); });
-    } else {
-      alert('Clipboard not supported.');
-    }
+      navigator.clipboard.writeText(text).then(()=> showToast('Answer copied ✅')).catch(()=> showToast('Could not copy'));
+    } else showToast('Clipboard not supported');
   };
 
   const whatsappBtn = document.getElementById('whatsappBtn');
@@ -187,6 +367,9 @@ document.addEventListener('DOMContentLoaded', function () {
       this.href = `${groupLink}?text=${text}`;
     });
   }
+
+  // initial filter/sort run
+  filterAndSort();
 });
 </script>
 {% endblock %}

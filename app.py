@@ -5,7 +5,13 @@ import json
 import random
 import logging
 import traceback
-from flask import Flask, render_template, url_for, redirect, request, flash
+import re
+import io
+from datetime import datetime
+from flask import (
+    Flask, render_template, url_for, redirect, send_file,
+    request, flash, Response
+)
 from dotenv import load_dotenv
 
 # --- Load environment ---
@@ -29,7 +35,6 @@ if SERVICE_ACCOUNT_B64:
         raise RuntimeError(f"Failed to decode service account: {ex}")
 else:
     # Do not raise here — allow the app to start even if service account is not present.
-    # Sheets/Drive endpoints will log errors but app won't crash immediately.
     if not os.path.exists(SERVICE_ACCOUNT_PATH):
         logging.getLogger(__name__).warning(
             "Service account file not found at %s — Sheets/Drive will likely fail.", SERVICE_ACCOUNT_PATH
@@ -40,7 +45,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24))
 logging.basicConfig(level=logging.INFO)
 
-FOOTER_MESSAGE = "Study hard, pray harder."
+FOOTER_MESSAGE = "Love one another as I have loved you ❤❤❤"
 STATIC_CATEGORIES = [
     "Mathematics", "Biology", "Computer Science",
     "Further Mathematics", "Chemistry", "Physics", "Other"
@@ -92,13 +97,96 @@ except Exception:
         return []
 
 # -------------------------
+# Utilities: time formatting filter
+# -------------------------
+def _try_parse_time(s):
+    """Try various time/datetime string formats and return datetime or None."""
+    if not s:
+        return None
+    if isinstance(s, datetime):
+        return s
+    text = str(s).strip()
+    fmts = [
+        "%H:%M:%S",
+        "%H:%M",
+        "%I:%M %p",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ]
+    for fmt in fmts:
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    # fallback regex for HH:MM[:SS] inside free text
+    m = re.search(r"([01]?\d|2[0-3]):([0-5]\d)(:([0-5]\d))?", text)
+    if m:
+        hh = int(m.group(1)); mm = int(m.group(2)); ss = int(m.group(4) or 0)
+        return datetime(2000, 1, 1, hh, mm, ss)
+    return None
+
+def format_time(value):
+    """Jinja filter to produce a friendly time string like '2:30 PM'."""
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if s == "":
+        return ""
+    dt = _try_parse_time(value)
+    if dt:
+        return dt.strftime("%I:%M %p").lstrip("0")
+    return s
+
+app.jinja_env.filters["format_time"] = format_time
+
+# -------------------------
+# Drive image route (robust)
+# -------------------------
+@app.route("/drive-image/<path:file_id>")
+def drive_image(file_id):
+    """
+    Lightweight handler that:
+     - accepts either raw file id or common Drive URLs,
+     - attempts a redirect to Drive's 'uc?export=download&id=ID' (works for publicly shared files),
+     - final fallback: returns local placeholder image.
+    If you later want server-side fetching using a service account, replace the redirect logic
+    with a fetch from Drive API (careful about caching & authentication).
+    """
+    try:
+        fid = file_id
+        # If a full URL was provided, try to extract an id
+        if fid.startswith("http"):
+            m = re.search(r"(?:/d/|id=)([-_0-9A-Za-z]+)", fid)
+            if m:
+                fid = m.group(1)
+            else:
+                fid = fid.rstrip("/").split("/")[-1]
+
+        # Redirect to the public download endpoint (fast, avoids server-side streaming issues)
+        drive_public = f"https://drive.google.com/uc?export=download&id={fid}"
+        return redirect(drive_public)
+    except Exception as e:
+        app.logger.exception("drive-image fallback serving local placeholder for %s: %s", file_id, e)
+        try:
+            return send_file("static/img/fallback.png", mimetype="image/png")
+        except Exception:
+            # final absolute fallback: tiny 1x1 PNG bytes
+            small_png = io.BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+                                   b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+                                   b"\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe2!"
+                                   b"\xbc\x33\x00\x00\x00\x00IEND\xaeB`\x82")
+            small_png.seek(0)
+            return send_file(small_png, mimetype="image/png")
+
+# -------------------------
 # Routes
 # -------------------------
 @app.route("/")
 @app.route("/home")
 def home_page():
     verse, reference = random.choice(MOTIVATION_VERSES)
-    return render_template("index.html", message=FOOTER_MESSAGE, verse=verse, reference=reference)
+    return render_template("index.html", message="Study Hard, Pray Harder ❤❤❤", verse=verse, reference=reference)
 
 
 @app.route("/content")
@@ -161,13 +249,13 @@ def questions_page():
             app.logger.error("get_questions failed: %s", e)
             all_questions = []
 
-        # Ensure normalized rows (at least 3 items)
+        # Ensure normalized rows (at least 4 items) — fast and defensive
         normalized_questions = []
         for row in all_questions:
             try:
                 r = list(row)
-                while len(r) < 4:
-                    r.append("")
+                if len(r) < 4:
+                    r += [""] * (4 - len(r))
                 normalized_questions.append(r)
             except Exception:
                 continue
@@ -201,7 +289,6 @@ def rules_page():
         rules = []
     return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
 
-
 @app.route("/admin", methods=["GET", "POST"])
 def admin_page():
     result = None
@@ -227,6 +314,5 @@ def handle_exception(e):
 
 # --- App entry ---
 if __name__ == "__main__":
-    # Use Render environment port & bind 0.0.0.0
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)

@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 
 {% block title %}
-Newton's Nerds - Content Page
+TimeTable • Quotes • Forms
 {% endblock %}
 
 {% block styles %}{% endblock %}
@@ -53,9 +53,9 @@ Newton's Nerds - Content Page
           <div class="card-body text-center">
             <div style="position: relative; width: 100%; padding-top: 56.25%; overflow: hidden;">
               <img class="hero-img"
-                   src="/drive-image/1tTyhT4O_LoCaU8OL0DcCjuVm3o1z9gzY"
+                   src="{{ url_for('drive_image', file_id='1tTyhT4O_LoCaU8OL0DcCjuVm3o1z9gzY') }}"
                    alt="Motivation Image"
-                   onerror="this.onerror=null;this.src='/static/img/fallback.png';"
+                   loading="lazy"
                    style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain;" />
             </div>
             <h5 class="card-title mt-3">“Stay Consistent”</h5>
@@ -66,7 +66,7 @@ Newton's Nerds - Content Page
           </div>
         </div>
       </div>
-      
+
       <!-- 2) IMAGE GALLERY -->
       <section class="section">
         <h4 class="mb-3">🖼️ Motivation / Prayers / Verses (Gallery)</h4>
@@ -76,14 +76,14 @@ Newton's Nerds - Content Page
             <div class="card shadow-sm h-100">
               <div style="position: relative; width: 100%; padding-top: 100%; overflow: hidden;">
                 <img class="thumb"
-                     src="/drive-image/{{ item[1][1]}}"
-                     alt="{{ item['title'] }}"
-                     onerror="this.onerror=null;this.src='/static/img/fallback.png';"
-                     style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain;" />
+                     src="{{ url_for('drive_image', file_id=item[1][1]) }}"
+                     alt="{{ item[0] }}"
+                     loading="lazy"
+                     style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;" />
               </div>
               <div class="card-body">
-                <div class="fw-bold small">{{ item[0] }}</div>
-                <div class="text-muted small">{{ item[1][0] }}</div>
+                <div class="fw-bold small text-truncate">{{ item[0] }}</div>
+                <div class="text-muted small text-truncate">{{ item[1][0] }}</div>
               </div>
             </div>
           </div>

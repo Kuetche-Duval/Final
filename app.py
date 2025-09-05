@@ -146,16 +146,14 @@ app.jinja_env.filters["format_time"] = format_time
 @app.route("/drive-image/<path:file_id>")
 def drive_image(file_id):
     """
-    Lightweight handler that:
-     - accepts either raw file id or common Drive URLs,
-     - attempts a redirect to Drive's 'uc?export=download&id=ID' (works for publicly shared files),
-     - final fallback: returns local placeholder image.
-    If you later want server-side fetching using a service account, replace the redirect logic
-    with a fetch from Drive API (careful about caching & authentication).
+    Accepts a plain Drive file id or a full Drive URL and redirects to Drive's
+    view endpoint so a JPG image is rendered in an <img> tag.
+    Falls back to a local static JPG if anything goes wrong.
     """
     try:
         fid = file_id
-        # If a full URL was provided, try to extract an id
+
+        # If a full URL was given, try to extract the Drive file id
         if fid.startswith("http"):
             m = re.search(r"(?:/d/|id=)([-_0-9A-Za-z]+)", fid)
             if m:
@@ -163,21 +161,18 @@ def drive_image(file_id):
             else:
                 fid = fid.rstrip("/").split("/")[-1]
 
-        # Redirect to the public download endpoint (fast, avoids server-side streaming issues)
-        drive_public = f"https://drive.google.com/uc?export=download&id={fid}"
-        return redirect(drive_public)
-    except Exception as e:
-        app.logger.exception("drive-image fallback serving local placeholder for %s: %s", file_id, e)
+        # Redirect to Drive's view endpoint (suitable for embedding in <img>)
+        drive_view = f"https://drive.google.com/uc?export=view&id={fid}"
+        return redirect(drive_view)
+
+    except Exception:
+        app.logger.exception("drive-image fallback for %s", file_id)
+        # Attempt to serve a local JPEG fallback
         try:
-            return send_file("static/img/fallback.png", mimetype="image/png")
+            return send_file("static/img/fallback.jpg", mimetype="image/jpeg")
         except Exception:
-            # final absolute fallback: tiny 1x1 PNG bytes
-            small_png = io.BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-                                   b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
-                                   b"\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe2!"
-                                   b"\xbc\x33\x00\x00\x00\x00IEND\xaeB`\x82")
-            small_png.seek(0)
-            return send_file(small_png, mimetype="image/png")
+            # Last-resort: return 404 so the browser can show its broken-image icon
+            return Response("Not Found", status=404)
 
 # -------------------------
 # Routes

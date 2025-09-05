@@ -7,6 +7,7 @@ import logging
 import traceback
 import re
 import io
+import requests
 from datetime import datetime
 from flask import (
     Flask, render_template, url_for, redirect, send_file,
@@ -146,14 +147,14 @@ app.jinja_env.filters["format_time"] = format_time
 @app.route("/drive-image/<path:file_id>")
 def drive_image(file_id):
     """
-    Accepts a Drive file id or a full Drive URL and redirects to Drive's
-    view endpoint so a JPG image is rendered in an <img> tag.
+    Accepts a Drive file id or full URL, downloads the image bytes from
+    Google Drive (uc?export=download) and streams them directly.
     Falls back to a local static JPG if anything goes wrong.
     """
     try:
         fid = file_id
 
-        # If a full URL was given, try to extract the Drive file id
+        # Extract the ID if a full URL was passed
         if fid.startswith("http"):
             m = re.search(r"(?:/d/|id=)([-_0-9A-Za-z]+)", fid)
             if m:
@@ -161,17 +162,22 @@ def drive_image(file_id):
             else:
                 fid = fid.rstrip("/").split("/")[-1]
 
-        # Redirect to Drive's view endpoint (suitable for embedding in <img>)
-        drive_view = f"https://drive.google.com/uc?export=view&id={fid}"
-        return redirect(drive_view)
+        # Direct download endpoint (works for public files)
+        drive_url = f"https://drive.google.com/uc?export=download&id={fid}"
 
-    except Exception:
-        app.logger.exception("drive-image fallback for %s", file_id)
-        # Attempt to serve a local JPEG fallback
+        r = requests.get(drive_url, stream=True, timeout=10)
+        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
+            return Response(r.content, mimetype=r.headers["content-type"])
+
+        # If Google sends HTML or error
+        app.logger.warning("Drive image fetch failed: %s", r.status_code)
+        return send_file("static/img/fallback.jpg", mimetype="image/jpeg")
+
+    except Exception as e:
+        app.logger.error("drive-image error: %s", e)
         try:
             return send_file("static/img/fallback.jpg", mimetype="image/jpeg")
         except Exception:
-            # Last-resort: return 404 so the browser can show its broken-image icon
             return Response("Not Found", status=404)
 
 # -------------------------

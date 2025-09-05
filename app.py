@@ -146,7 +146,7 @@ app.jinja_env.filters["format_time"] = format_time
 @app.route("/drive-image/<path:file_id>")
 def drive_image(file_id):
     """
-    Accepts a plain Drive file id or a full Drive URL and redirects to Drive's
+    Accepts a Drive file id or a full Drive URL and redirects to Drive's
     view endpoint so a JPG image is rendered in an <img> tag.
     Falls back to a local static JPG if anything goes wrong.
     """

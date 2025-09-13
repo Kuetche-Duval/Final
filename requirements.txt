@@ -1,9 +1,21 @@
-Flask
-python-dotenv
-gspread
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
-requests
-pydrive2  # optional if you used earlier code paths
+Flask>=2.3.0
+gunicorn>=21.2.0
+python-dotenv>=1.0.0
+
+# Google APIs & Sheets
+gspread>=5.7.0
+google-api-python-client>=2.94.0
+google-auth>=2.20.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+
+# Google Drive integration
+pydrive2>=1.15.0
+
+# Caching & requests
+requests>=2.31.0
+cachetools>=5.3.0
+
+# Optional push notifications (if you use VAPID)
+pywebpush>=1.14.0
+cryptography>=41.0.0

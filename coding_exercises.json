@@ -1,0 +1,109 @@
+[
+    {
+      "id": "fizzbuzz",
+      "title": "FizzBuzz (JS)",
+      "language": "js",
+      "difficulty": "Easy",
+      "description": "Print numbers 1..N. For multiples of 3 print 'Fizz', for 5 print 'Buzz', for both print 'FizzBuzz'.",
+      "starter_js": "for (let i=1;i<=100;i++){ /* implement */ }",
+      "solution_js": "for (let i=1;i<=100;i++){ let out=''; if(i%3===0) out+='Fizz'; if(i%5===0) out+='Buzz'; console.log(out||i);} "
+    },
+    {
+      "id": "reverse-string",
+      "title": "Reverse a String (JS)",
+      "language": "js",
+      "difficulty": "Easy",
+      "description": "Reverse the characters in a string. Example: 'hello' -> 'olleh'.",
+      "starter_js": "function reverse(s){ /* implement */ }\nconsole.log(reverse('hello'));",
+      "solution_js": "function reverse(s){ return s.split('').reverse().join(''); }"
+    },
+    {
+      "id": "two-sum",
+      "title": "Two Sum (JS)",
+      "language": "js",
+      "difficulty": "Medium",
+      "description": "Given an array and target sum, return indices of two numbers that add up to target.",
+      "starter_js": "function twoSum(nums, target){/* implement */}\nconsole.log(twoSum([2,7,11,15],9));",
+      "solution_js": "function twoSum(nums,target){ const map={}; for(let i=0;i<nums.length;i++){const n=nums[i]; const need=target-n; if(map[need]!==undefined) return [map[need], i]; map[n]=i;} return null; }"
+    },
+    {
+      "id": "c-pointers",
+      "title": "Pointers Practice (C)",
+      "language": "c",
+      "difficulty": "Intermediate",
+      "description": "Write a C function that swaps two integers using pointers.",
+      "starter_c": "#include <stdio.h>\n\nvoid swap(int *a, int *b) {\n    // implement\n}\n\nint main(){ int x=10,y=20; printf(\"Before: %d %d\\n\",x,y); swap(&x,&y); printf(\"After: %d %d\\n\",x,y); return 0; }",
+      "solution_c": "void swap(int *a, int *b){ int tmp=*a; *a=*b; *b=tmp; }"
+    },
+    {
+      "id": "c-strings",
+      "title": "Reverse String In-Place (C)",
+      "language": "c",
+      "difficulty": "Intermediate",
+      "description": "Reverse a null-terminated string in-place using pointers.",
+      "starter_c": "#include <stdio.h>\n#include <string.h>\n\nvoid reverse_inplace(char *s){ /* implement */ }\n\nint main(){ char s[]=\"hello\"; reverse_inplace(s); printf(\"%s\\n\", s); return 0; }",
+      "solution_c": "void reverse_inplace(char *s){ char *i=s,*j=s+strlen(s)-1; while(i<j){ char t=*i; *i=*j; *j=t; i++; j--; } }"
+    },
+    {
+      "id": "sql-books",
+      "title": "Books DB (SQL Schema)",
+      "language": "sql",
+      "difficulty": "Easy",
+      "description": "A small books database: view schema and sample rows.",
+      "schema_sql": "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);\nCREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, year INTEGER, FOREIGN KEY(author_id) REFERENCES authors(id));",
+      "sample_data": {
+        "authors": [
+          {"id":1,"name":"George Orwell"},
+          {"id":2,"name":"Jane Austen"}
+        ],
+        "books": [
+          {"id":1,"title":"1984","author_id":1,"year":1949},
+          {"id":2,"title":"Pride and Prejudice","author_id":2,"year":1813}
+        ]
+      },
+      "example_query": "SELECT b.title, a.name FROM books b JOIN authors a ON a.id = b.author_id;"
+    },
+    {
+      "id": "sql-employees",
+      "title": "Employees DB (SQL Queries)",
+      "language": "sql",
+      "difficulty": "Medium",
+      "description": "Given an employees table, query all employees with salary > 50000.",
+      "schema_sql": "CREATE TABLE employees (id INTEGER PRIMARY KEY, name TEXT, salary INTEGER);",
+      "sample_data": {
+        "employees": [
+          {"id":1,"name":"Alice","salary":60000},
+          {"id":2,"name":"Bob","salary":40000}
+        ]
+      },
+      "example_query": "SELECT name FROM employees WHERE salary > 50000;"
+    },
+    {
+      "id": "py-palindrome",
+      "title": "Palindrome Check (Python)",
+      "language": "python",
+      "difficulty": "Easy",
+      "description": "Check if a string is a palindrome.",
+      "starter_py": "def is_palindrome(s):\n    # implement\n    pass\n\nprint(is_palindrome('racecar'))",
+      "solution_py": "def is_palindrome(s): return s==s[::-1]"
+    },
+    {
+      "id": "py-fibonacci",
+      "title": "Fibonacci Sequence (Python)",
+      "language": "python",
+      "difficulty": "Medium",
+      "description": "Generate Fibonacci numbers up to n.",
+      "starter_py": "def fib(n):\n    # implement\n    pass\n\nprint(fib(10))",
+      "solution_py": "def fib(n):\n    a,b=0,1\n    res=[]\n    while a<n:\n        res.append(a)\n        a,b=b,a+b\n    return res"
+    },
+    {
+      "id": "py-anagrams",
+      "title": "Anagrams (Python)",
+      "language": "python",
+      "difficulty": "Medium",
+      "description": "Check if two words are anagrams.",
+      "starter_py": "def is_anagram(a,b):\n    # implement\n    pass\n\nprint(is_anagram('listen','silent'))",
+      "solution_py": "def is_anagram(a,b): return sorted(a)==sorted(b)"
+    }
+  ]
+  

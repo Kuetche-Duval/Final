@@ -35,7 +35,7 @@ body.light-mode {
 /* Slightly lighter dark-mode friendly palette (prefers-color-scheme: dark + optional) */
 @media (prefers-color-scheme: dark) {
   :root{
-    --body-bg: #1e2126;      /* a bit lighter than pure black */
+    --body-bg: #222233;      /* a bit lighter than pure black */
     --card-bg: #25282d;
     --text: #e6eef1;
     --muted: #9aa3ad;

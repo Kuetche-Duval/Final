@@ -1,86 +1,157 @@
 # drive.py
 import os
-import time
-import random
 import logging
+import io
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 try:
-    from pydrive2.auth import ServiceAccountCredentials, GoogleAuth
-    from pydrive2.drive import GoogleDrive
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+    GOOGLEAPI_AVAILABLE = True
 except Exception:
-    # pydrive2 may not be installed in dev; handle gracefully
-    ServiceAccountCredentials = None
-    GoogleAuth = None
-    GoogleDrive = None
+    GOOGLEAPI_AVAILABLE = False
 
 SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_account.json")
+SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-_cache = {"data": None, "timestamp": 0}
-CACHE_TTL = int(os.environ.get("DRIVE_CACHE_TTL", "180"))
+def _make_drive_service():
+    if not GOOGLEAPI_AVAILABLE:
+        raise RuntimeError("google-api-python-client or google-auth not installed")
+    if not os.path.exists(SERVICE_ACCOUNT_PATH):
+        raise RuntimeError("service account json not found at " + SERVICE_ACCOUNT_PATH)
+    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH, scopes=SCOPES)
+    service = build("drive", "v3", credentials=creds, cache_discovery=False)
+    return service
 
-def get_work_drive():
-    if GoogleDrive is None:
-        raise RuntimeError("pydrive2 not installed")
-    # Use ServiceAccountCredentials from pydrive2 if available
-    gauth = GoogleAuth()
-    gauth.credentials = ServiceAccountCredentials.from_json_keyfile_name(
-        SERVICE_ACCOUNT_PATH,
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    return GoogleDrive(gauth)
-
-def from_google_drive(base_folder_id, mimeType="image/jpeg"):
-    """
-    Return list of files in folder `base_folder_id` filtered by mimeType.
-    Returns list of dicts: [{'title': ..., 'id': ..., 'description': ...}, ...]
-    """
-    drive = get_work_drive()
-    # Build simple query (note: pydrive2 query syntax expects proper quoting)
-    q = f"'{base_folder_id}' in parents and trashed=false"
-    if mimeType:
-        q += f" and mimeType='{mimeType}'"
-    file_list = drive.ListFile({'q': q}).GetList()
-    out = []
-    for f in file_list:
-        out.append({
-            "title": f.get("title"),
-            "id": f.get("id"),
-            "description": f.get("description", "")
-        })
-    return out
-
-def folders_and_images():
-    """
-    Returns a small sample mapping of title -> (folderTitle, id).
-    Structure used in templates: list of tuples [(title, (folderTitle, id)), ...]
-    """
-    now = time.time()
-    if _cache["data"] and now - _cache["timestamp"] < CACHE_TTL:
-        return _cache["data"]
-
-    parent_folder_id = os.environ.get("DRIVE_PARENT_FOLDER_ID", "")
-    if not parent_folder_id or GoogleDrive is None:
-        return []
-
-    to_return = {}
-    # List child folders
+def download_file(file_id):
+    """Return bytes or b'' on error."""
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - download_file fallback")
+        return b""
     try:
-        drive = get_work_drive()
-        folders = drive.ListFile({'q': f"'{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"}).GetList()
-        for folder in folders:
-            # list images inside folder
-            items = drive.ListFile({'q': f"'{folder['id']}' in parents and trashed=false"}).GetList()
-            for item in items:
-                # use the file title as key (avoid duplicates)
-                to_return[item['title']] = (folder['title'], item['id'])
+        svc = _make_drive_service()
+        request = svc.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        fh.seek(0)
+        return fh.read()
     except Exception:
-        logger.exception("folders_and_images encountered an error")
+        logger.exception("download_file error for %s", file_id)
+        return b""
+
+def update_file(file_id, content_bytes, mime_type="application/json"):
+    """
+    Update the content of an existing Drive file (by file_id).
+    Returns True on success, False on failure.
+    """
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - update_file fallback")
+        return False
+    try:
+        svc = _make_drive_service()
+        fh = io.BytesIO(content_bytes)
+        media = MediaIoBaseUpload(fh, mimetype=mime_type, resumable=True)
+        svc.files().update(fileId=file_id, media_body=media).execute()
+        return True
+    except Exception:
+        logger.exception("update_file failed for %s", file_id)
+        return False
+
+def create_file_in_folder(folder_id, name, content_bytes, mime_type="application/json"):
+    """
+    Create a new file in a folder and return the new file id, or None on failure.
+    """
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - create_file_in_folder fallback")
+        return None
+    try:
+        svc = _make_drive_service()
+        fh = io.BytesIO(content_bytes)
+        media = MediaIoBaseUpload(fh, mimetype=mime_type, resumable=True)
+        body = {"name": name, "parents": [folder_id], "mimeType": mime_type}
+        file = svc.files().create(body=body, media_body=media, fields="id").execute()
+        return file.get("id")
+    except Exception:
+        logger.exception("create_file_in_folder failed for folder %s", folder_id)
+        return None
+
+# existing listing helpers (optional, kept from earlier version)
+# drive.py — update/replace the from_google_drive function
+def from_google_drive(base_folder_id, mimeType=None):
+    """
+    Return a list of file metadata dicts inside a Drive folder.
+    Each item will contain at least:
+      { "id": ..., "name": ..., "description": ..., "mimeType": ..., "webViewLink": ... }
+    If google-api client not available or folder id missing, returns [].
+    """
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - from_google_drive returns []")
+        return []
+    if not base_folder_id:
+        logger.debug("from_google_drive called with empty folder id")
         return []
 
-    data = random.sample(list(to_return.items()), min(10, len(to_return)))
-    _cache["data"] = data
-    _cache["timestamp"] = now
-    return data
+    try:
+        svc = _make_drive_service()
+        # Build query - immediate children of the folder and not trashed
+        q = f"'{base_folder_id}' in parents and trashed=false"
+        if mimeType:
+            q += f" and mimeType = '{mimeType}'"
+
+        files = []
+        page_token = None
+        while True:
+            resp = svc.files().list(q=q,
+                                    spaces='drive',
+                                    fields="nextPageToken, files(id, name, description, mimeType, webViewLink)",
+                                    pageSize=200,
+                                    pageToken=page_token).execute()
+            for f in resp.get("files", []):
+                files.append({
+                    "id": f.get("id"),
+                    "name": f.get("name") or "",
+                    "description": f.get("description") or "",
+                    "mimeType": f.get("mimeType") or "",
+                    "webViewLink": f.get("webViewLink") or ""
+                })
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+
+        return files
+    except Exception:
+        logger.exception("from_google_drive error")
+        return []
+
+def folders_and_images(parent_folder_id=None, sample_limit=12):
+    parent_folder_id = parent_folder_id or os.environ.get("DRIVE_PARENT_FOLDER_ID", "")
+    if not parent_folder_id or not GOOGLEAPI_AVAILABLE:
+        return []
+    try:
+        svc = _make_drive_service()
+        q_folders = f"'{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        folders_resp = svc.files().list(q=q_folders, pageSize=200, fields="files(id, name)").execute()
+        folders = folders_resp.get("files", [])
+        to_return = {}
+        for folder in folders:
+            folder_id = folder.get("id")
+            folder_name = folder.get("name")
+            q_items = f"'{folder_id}' in parents and trashed=false"
+            items_resp = svc.files().list(q=q_items, pageSize=200, fields="files(id, name, mimeType)").execute()
+            items = items_resp.get("files", [])
+            for item in items:
+                to_return[item.get("name")] = (folder_name, item.get("id"))
+        items = list(to_return.items())
+        if len(items) <= sample_limit:
+            return items
+        import random
+        return random.sample(items, sample_limit)
+    except Exception:
+        logger.exception("folders_and_images error")
+        return []

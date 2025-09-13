@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Admin — Edit Coding Exercises{% endblock %}
+
+{% block styles %}
+<style>
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Roboto Mono', monospace; font-size:0.95rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="card p-3">
+    <h4>Manage Coding Exercises</h4>
+    <p class="text-muted">Add or edit a coding exercise. Choose where to save: local file or the configured Drive file (if available).</p>
+
+    <form method="post">
+      <div class="row g-2 mb-2">
+        <div class="col-md-3">
+          <label class="form-label">Admin Key</label>
+          <input name="admin_key" class="form-control" type="password" value="{{ key|default('') }}" placeholder="Paste admin key">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">ID (short)</label>
+          <input name="id" class="form-control" placeholder="e.g. fizzbuzz" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Title</label>
+          <input name="title" class="form-control" placeholder="Display title">
+        </div>
+      </div>
+
+      <div class="row g-2 mb-2">
+        <div class="col-md-3">
+          <label class="form-label">Language</label>
+          <select name="language" id="langSelect" class="form-select">
+            <option value="js">JavaScript</option>
+            <option value="html">HTML</option>
+            <option value="c">C</option>
+            <option value="sql">SQL (schema)</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Difficulty</label>
+          <input name="difficulty" class="form-control" placeholder="Easy/Medium/Hard">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Description</label>
+          <input name="description" class="form-control" placeholder="Short description">
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Starter code / Schema</label>
+        <textarea name="starter_code" id="starterArea" rows="7" class="form-control mono" placeholder="// starter code or SQL schema"></textarea>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Solution / Example query</label>
+        <textarea name="solution_code" id="solutionArea" rows="6" class="form-control mono" placeholder="// solution or example SQL query"></textarea>
+      </div>
+
+      <div class="mb-3" id="sampleDataRow" style="display:none;">
+        <label class="form-label">Sample data (JSON)</label>
+        <textarea name="sample_data" rows="6" class="form-control mono" placeholder='{"table":[{"col":1,"col2":"a"}]}'></textarea>
+        <div class="form-text">Optional — only used for SQL exercises to show sample rows.</div>
+      </div>
+
+      <div class="mb-3 d-flex gap-2 align-items-center">
+        <label class="form-label mb-0">Save target</label>
+        <select name="target" class="form-select form-select-sm" style="width:auto;">
+          <option value="local">Local file (coding_exercises.json)</option>
+          {% if drive_file_id %}
+            <option value="drive">Drive file (configured)</option>
+          {% endif %}
+        </select>
+
+        <button class="btn btn-primary" type="submit">Save exercise</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('coding_page') }}">Back to coding</a>
+      </div>
+
+      <div class="small text-muted">
+        Tip: Use language-specific starter/solution fields. For SQL add schema in starter and an example query in solution.
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+document.getElementById('langSelect').addEventListener('change', function(e){
+  const v = e.target.value;
+  const sampleRow = document.getElementById('sampleDataRow');
+  if(v === 'sql'){
+    sampleRow.style.display = '';
+    document.getElementById('starterArea').placeholder = "CREATE TABLE ...;\\nCREATE TABLE ...;";
+    document.getElementById('solutionArea').placeholder = "SELECT ... JOIN ...;";
+  } else if(v === 'c'){
+    sampleRow.style.display = 'none';
+    document.getElementById('starterArea').placeholder = "// C starter code here";
+    document.getElementById('solutionArea').placeholder = "// C solution code here";
+  } else if(v === 'html'){
+    sampleRow.style.display = 'none';
+    document.getElementById('starterArea').placeholder = "<!doctype html>\\n<html>...</html>";
+    document.getElementById('solutionArea').placeholder = "<!-- solution html -->";
+  } else {
+    sampleRow.style.display = 'none';
+    document.getElementById('starterArea').placeholder = "// JS starter code";
+    document.getElementById('solutionArea').placeholder = "// JS solution code";
+  }
+});
+</script>
+{% endblock %}

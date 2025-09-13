@@ -1,0 +1,23 @@
+[
+    {
+      "slug": "aloe-vera",
+      "name": "Aloe vera",
+      "virtues": ["skin-soothing", "wound-healing", "anti-inflammatory"],
+      "uses": "Topically used to treat minor burns, cuts, and moisturize skin. May ease skin irritation.",
+      "notes": "Avoid ingesting large amounts; for topical use only."
+    },
+    {
+      "slug": "ginger",
+      "name": "Ginger (Zingiber officinale)",
+      "virtues": ["antiemetic", "anti-inflammatory"],
+      "uses": "Helps with nausea and motion sickness and can reduce mild inflammation. Often used as tea.",
+      "notes": "May interact with blood-thinning medication in large amounts."
+    },
+    {
+      "slug": "neem",
+      "name": "Neem (Azadirachta indica)",
+      "virtues": ["antibacterial", "antifungal"],
+      "uses": "Used in topical preparations for skin conditions and as a traditional antiseptic.",
+      "notes": "Not recommended for internal use without professional guidance."
+    }
+  ]

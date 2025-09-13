@@ -1,375 +1,335 @@
 {% extends 'base.html' %}
 
 {% block title %}
-  Ask a Questions
+  Ask a Question
 {% endblock %}
 
 {% block styles %}
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
 <style>
-  /* Small, self-contained styles to give a chat-like feel and great dark-mode readability */
-  :root {
-    --accent-green: #25d366; /* WhatsApp-like green accent */
-    --muted-2: #98a0b3;
-    --bubble-radius: 14px;
+  :root{
+    --bg: #f6f8fb;
+    --card-bg: #ffffff;
+    --text: #0b1220;
+    --muted: #6b7280;
+    --accent-green: #25d366;
+    --card-radius: 12px;
   }
-
-  .page-header {
-    display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px;
+  [data-theme="dark"]{
+    --bg: #08101a;
+    --card-bg: #071019;
+    --text: #e6eef8;
+    --muted: #98a0b3;
   }
-
+  body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+  .card { background: var(--card-bg); border-radius: var(--card-radius); box-shadow: 0 6px 20px rgba(3,3,3,0.06); padding: 14px; }
+  .page-header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
   .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-
-  /* Question list like chat bubbles */
-  .question-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
-  .question-item {
-    display:flex; gap:12px; align-items:flex-start; justify-content:space-between;
-    padding:12px 14px; background: var(--card-bg); color: var(--text);
-    border-radius: var(--card-radius); box-shadow: 0 6px 18px rgba(0,0,0,0.04);
-    transition: transform .15s ease, box-shadow .2s ease, background .12s ease;
-    cursor: pointer;
-  }
-  .question-item:hover { transform: translateY(-3px); box-shadow: 0 12px 34px rgba(0,0,0,0.06); }
-
-  .left {
-    display:flex; flex-direction:column; gap:6px; min-width:0; max-width:calc(100% - 90px);
-  }
-  .meta {
-    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
-  }
-  .category-badge {
-    background: rgba(37,211,102,0.12);
-    color: var(--accent-green);
-    padding:4px 8px; border-radius:10px; font-weight:700; font-size:.86rem;
-  }
-  .author {
-    color: var(--muted);
-    font-weight:700;
-    font-size:.88rem;
-    max-width:220px;
-    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  }
+  .question-list { list-style:none; padding:0; margin:0; display:grid; gap:10px; }
+  .question-item { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; padding:12px 14px; border-radius:12px; background: rgba(0,0,0,0.02); cursor: pointer; }
+  .category-badge { background: rgba(37,211,102,0.12); color: var(--accent-green); padding:4px 8px; border-radius:10px; font-weight:700; font-size:.86rem; }
+  .author { color: var(--muted); font-weight:700; font-size:.88rem; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .message-text { color: var(--text); font-size: .97rem; white-space:pre-wrap; word-break:break-word; }
-
-  .right {
-    display:flex; flex-direction:column; align-items:flex-end; gap:6px; min-width:72px;
-  }
-  .message-time { font-size:.78rem; color: var(--muted); }
-
-  /* Focus / keyboard navigation */
-  .question-item:focus {
-    outline: none;
-    box-shadow: 0 16px 46px rgba(0,0,0,0.12);
-    transform: translateY(-4px);
-    background: linear-gradient(180deg, rgba(37,211,102,0.06), var(--card-bg));
-  }
-  .question-item:focus .author { color: #0b6628; } /* deeper green for author on focus */
-
-  /* Form focus: always light for writing clarity */
-  .form-control:focus, .form-select:focus, textarea:focus {
-    background: #fff !important;
-    color: #111 !important;
-    border-color: var(--accent-green) !important;
-    box-shadow: 0 6px 20px rgba(37,211,102,0.12) !important;
-  }
-
-  /* Responsive tweaks */
-  @media (max-width: 576px) {
-    .right { min-width:56px; }
-    .author { max-width: 120px; }
-  }
-
-  /* Toast positioning */
-  .toast-container-fixed {
-    position: fixed;
-    right: 16px;
-    bottom: 16px;
-    z-index: 11000;
-  }
+  .op-attempt { margin-top:8px; padding:8px; background:rgba(0,0,0,0.02); border-radius:8px; color:var(--muted); font-size:.92rem; }
+  .op-attempt small { color:var(--muted); display:block; margin-bottom:6px; font-weight:700; }
+  .btn-sub { font-size: .85rem; padding:6px 8px; border-radius:8px; }
+  .answer-panel { display:none; margin-top:8px; }
+  .tiny-link { font-size:.85rem; color:var(--accent-green); text-decoration:underline; cursor:pointer; background:none;border:0;padding:0; }
+  @media (max-width:576px) { .question-item{flex-direction:column} .author { max-width:140px; } }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="container py-4">
-  <div class="row g-4">
-    <div class="col-12">
-      <div class="card shadow">
-        <div class="card-header bg-primary text-white fw-bold d-flex justify-content-between align-items-center">
-          <div>💬 Ask & Answer Questions</div>
-          <div class="small text-white-50">Newton's Nerds</div>
-        </div>
-        <div class="card-body">
+  <div class="card">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div><strong>💬 Ask & Answer Questions</strong></div>
+      <div class="d-flex gap-2 align-items-center">
+        <button id="theme-toggle" class="btn btn-sm btn-outline-secondary">Toggle theme</button>
+        <div class="small text-muted">Newton's Nerds</div>
+      </div>
+    </div>
 
-          <div class="page-header mb-3">
-            <h5 class="mb-0">🙋 Ask a Question</h5>
-            <div class="controls">
-              <input id="searchBox" class="form-control form-control-sm" placeholder="Search questions..." style="min-width:220px;">
-              <select id="sortSelect" class="form-select form-select-sm" style="width:170px">
-                <option value="none">Sort: Default</option>
-                <option value="new">Sort: Newest first</option>
-                <option value="old">Sort: Oldest first</option>
-              </select>
+    <!-- New Question Form -->
+    <form id="new-question-form" method="POST" action="{{ url_for('questions_page') }}" class="mb-4" novalidate>
+      <div class="row g-2">
+        <div class="col-md-5">
+          <label for="category" class="form-label small">Category</label>
+          <select class="form-select" id="category" name="category" required>
+            <option value="">-- Select Category --</option>
+            {% for c in categories %}
+              <option value="{{ c }}">{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-7 d-flex align-items-end">
+          <button type="submit" class="btn btn-success w-100">➕ Submit Question (attempt required)</button>
+        </div>
+      </div>
+
+      <div class="mb-3 mt-2">
+        <label for="question" class="form-label small">Your Question</label>
+        <textarea class="form-control" id="question" name="question" rows="3" required></textarea>
+      </div>
+
+      <div class="mb-3">
+        <label for="attempt" class="form-label small">Your Attempt (required)</label>
+        <textarea class="form-control" id="attempt" name="attempt" rows="3" required></textarea>
+        <div class="form-text small text-muted">You must provide your attempt before submitting the question.</div>
+      </div>
+
+      <!-- optional name (kept but hidden by default) -->
+      <div style="display:none">
+        <input type="text" name="name" placeholder="Optional name">
+      </div>
+    </form>
+
+    <hr>
+
+    <!-- Filter + sort -->
+    <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+      <div class="d-flex align-items-center gap-2">
+        <label class="small mb-0">📂 Filter:</label>
+        <form id="filter-form" method="GET" action="{{ url_for('questions_page') }}">
+          <select class="form-select form-select-sm" id="categoryFilter" name="categoryFilter" onchange="this.form.submit()" style="max-width:220px;">
+            <option value="">All</option>
+            {% for c in categories %}
+              <option value="{{ c }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </form>
+      </div>
+
+      <div class="ms-auto d-flex gap-2 align-items-center">
+        <input id="searchBox" class="form-control form-control-sm" placeholder="Search questions..." style="min-width:200px;">
+        <select id="sortSelect" class="form-select form-select-sm" style="width:170px">
+          <option value="none">Sort: Default</option>
+          <option value="new">Sort: Newest first</option>
+          <option value="old">Sort: Oldest first</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Questions list -->
+    <ul class="question-list" id="questionsList" aria-live="polite">
+      {% for q in questions %}
+        {% set cat = q[0] if q|length > 0 else "Other" %}
+        {% set author = q[1] if q|length > 1 and q[1] else "Anonymous" %}
+        {% set text = q[2] if q|length > 2 else "" %}
+        {% set attempt = q[3] if q|length > 3 else "" %}
+        {% set timestr = q[4] if q|length > 4 else "" %}
+        <li tabindex="0" class="question-item" role="button"
+            data-author="{{ author|e }}"
+            data-category="{{ cat|e }}"
+            data-question="{{ text|e }}"
+            data-attempt="{{ attempt|e }}"
+            data-time="{{ timestr|e }}">
+          <div style="min-width:0; max-width:75%">
+            <div class="d-flex gap-2 align-items-center mb-1">
+              <div class="category-badge">{{ cat }}</div>
+              <div class="author">{{ author }}</div>
+              <div class="small text-muted ms-auto">{{ timestr }}</div>
+            </div>
+
+            <div class="message-text">{{ text }}</div>
+
+            <!-- OP's attempt (visible to answerers) -->
+            <div class="op-attempt" aria-hidden="false">
+              <small>OP's attempt</small>
+              <div class="op-attempt-short">{{ attempt[:180] }}{% if attempt|length > 180 %}…{% endif %}</div>
+              {% if attempt|length > 180 %}
+                <button class="tiny-link show-full-attempt">Show full attempt</button>
+              {% endif %}
+              <div class="op-attempt-full" style="display:none; margin-top:8px;">{{ attempt }}</div>
+            </div>
+
+            <!-- Answer / send panel -->
+            <div class="answer-panel mt-2" aria-hidden="true">
+              <div class="mb-2">
+                <label class="form-label small">Your answer (you'll send it to the community)</label>
+                <textarea class="form-control answer-text" rows="3" placeholder="Write your short answer here..."></textarea>
+              </div>
+
+              <div class="d-flex gap-2">
+                {% if community_links.get(cat) %}
+                  <a class="btn btn-outline-success btn-sub open-group" href="{{ community_links.get(cat) }}" target="_blank" rel="noopener">Open {{ cat }} Community</a>
+                {% else %}
+                  <button class="btn btn-outline-secondary btn-sub" disabled>Community not set</button>
+                {% endif %}
+
+                <button class="btn btn-primary btn-sub copy-answer">Copy answer</button>
+                <button class="btn btn-info btn-sub share-whatsapp">Share to WhatsApp</button>
+              </div>
+
+              <div class="form-text small text-muted mt-2">Tip: open the community link, paste your answer and send it in the group. The app cannot securely post into WhatsApp groups for you.</div>
             </div>
           </div>
 
-          <!-- New Question Form (functionality unchanged) -->
-          <form method="POST" action="{{ url_for('questions_page') }}" class="mb-4" novalidate>
-            <div class="row g-2">
-              <div class="col-md-4">
-                <label for="name" class="form-label small">Your Name (optional)</label>
-                <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous">
-              </div>
-              <div class="col-md-4">
-                <label for="category" class="form-label small">Category</label>
-                <select class="form-select" id="category" name="category" required>
-                  <option value="">-- Select Category --</option>
-                  {% for c in categories %}
-                    <option value="{{ c }}">{{ c }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <div class="col-md-4 d-flex align-items-end">
-                <button type="submit" class="btn btn-success w-100">➕ Submit Question</button>
-              </div>
-            </div>
-
-            <div class="mb-3 mt-2">
-              <label for="question" class="form-label small">Your Question</label>
-              <textarea class="form-control" id="question" name="question" rows="3" required></textarea>
-            </div>
-          </form>
-          <hr>
-
-          <!-- Category Filter (GET) -->
-          <form method="GET" action="{{ url_for('questions_page') }}" class="mb-3 d-flex gap-2 align-items-center">
-            <label for="categoryFilter" class="form-label mb-0 small">📂 Filter by category:</label>
-            <select class="form-select form-select-sm" id="categoryFilter" name="categoryFilter" onchange="this.form.submit()" style="max-width:300px;">
-              <option value="">All</option>
-              {% for c in categories %}
-                <option value="{{ c }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
-              {% endfor %}
-            </select>
-          </form>
-
-          <!-- Questions List -->
-          <h6 class="mb-2">📑 Questions</h6>
-          <ul class="question-list" id="questionsList" aria-live="polite">
-            {% for q in questions %}
-              {% set cat = q[0] if q|length > 0 else "Other" %}
-              {% set author = q[1] if q|length > 1 and q[1] else "Anonymous" %}
-              {% set text = q[2] if q|length > 2 else "" %}
-              {% set timestr = q[3] if q|length > 3 else "" %}
-              <li tabindex="0"
-                  class="question-item"
-                  role="button"
-                  aria-pressed="false"
-                  data-author="{{ author|e }}"
-                  data-category="{{ cat|e }}"
-                  data-question="{{ text|e }}"
-                  data-time="{{ timestr|e }}">
-                <div class="left">
-                  <div class="meta">
-                    <div class="category-badge">{{ cat }}</div>
-                    <div class="author" title="{{ author }}">{{ author }}</div>
-                  </div>
-                  <div class="message-text">{{ text }}</div>
-                </div>
-
-                <div class="right">
-                  <div class="message-time">{{ timestr | format_time }}</div>
-                  <div>
-                    <button class="btn btn-link btn-sm copy-btn" title="Copy answer template" aria-label="Copy answer">📋</button>
-                    <a class="btn btn-success btn-sm whatsapp-send" title="Send to WhatsApp" target="_blank">📲</a>
-                  </div>
-                </div>
-              </li>
-            {% else %}
-              <li class="text-muted">No questions yet. Be the first to ask!</li>
-            {% endfor %}
-          </ul>
-
-        </div>
-      </div>
-    </div>
+          <div style="min-width:80px; text-align:right">
+            <div class="small text-muted">Asked by {{ author }}</div>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
   </div>
 </div>
 
-<!-- Toast container for feedback -->
-<div class="toast-container-fixed">
-  <div id="globalToast" class="toast align-items-center" role="alert" aria-live="assertive" aria-atomic="true">
-    <div class="d-flex">
-      <div class="toast-body" id="globalToastBody"></div>
-      <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
-    </div>
-  </div>
-</div>
+<!-- Put community_links JSON here (not inside JS) to avoid editor linter errors -->
+<script type="application/json" id="communityLinksData">{{ community_links|tojson }}</script>
 
-<!-- Answer Modal (kept unchanged in functionality) -->
-<div class="modal fade" id="answerModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg modal-dialog-centered">
-    <div class="modal-content rounded-3 shadow-lg">
-      <div class="modal-header bg-primary text-white">
-        <h5 class="modal-title">✍️ Answer Question</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <label class="form-label">Preview & Write:</label>
-        <textarea id="answerText" class="form-control" rows="8"></textarea>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-outline-secondary" onclick="copyAnswer()">📋 Copy</button>
-        <a id="whatsappBtn" class="btn btn-success" target="_blank">📲 Send to WhatsApp</a>
-      </div>
-    </div>
-  </div>
-</div>
-{% endblock %}
-
-{% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-  // small helper: decode HTML-encoded attributes safely
-  function decodeHtml(html) {
-    const t = document.createElement('textarea');
-    t.innerHTML = html || '';
-    return t.value;
-  }
+document.addEventListener('DOMContentLoaded', () => {
+  // parse community links JSON safely from the dedicated script tag
+  const communityLinksEl = document.getElementById('communityLinksData');
+  let communityLinks = {};
+  try { communityLinks = communityLinksEl ? JSON.parse(communityLinksEl.textContent || '{}') : {}; } catch(e) { communityLinks = {}; }
 
-  // --- toast utility
-  const toastEl = document.getElementById('globalToast');
-  const toastBody = document.getElementById('globalToastBody');
-  const toast = new bootstrap.Toast(toastEl);
-
-  function showToast(msg, ms = 2000) {
-    toastBody.textContent = msg;
-    toast.show();
-    setTimeout(() => { try { toast.hide(); } catch(e){} }, ms);
-  }
-
-  // --- search with debounce
-  const searchBox = document.getElementById('searchBox');
-  const sortSelect = document.getElementById('sortSelect');
-  const list = document.getElementById('questionsList');
-
-  function getItemsArray() {
-    return Array.from(list.querySelectorAll('.question-item'));
-  }
-
-  function filterAndSort() {
-    const q = (searchBox.value || '').trim().toLowerCase();
-    const sort = sortSelect.value;
-    let items = getItemsArray();
-
-    items.forEach(item => {
-      const author = decodeHtml(item.dataset.author).toLowerCase();
-      const category = decodeHtml(item.dataset.category).toLowerCase();
-      const text = decodeHtml(item.dataset.question).toLowerCase();
-      const match = !q || author.includes(q) || category.includes(q) || text.includes(q);
-      item.style.display = match ? '' : 'none';
+  /* --- Accessibility & interaction --- */
+  document.querySelectorAll('.question-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (['BUTTON','A','TEXTAREA','INPUT','SELECT','LABEL'].includes(e.target.tagName)) return;
+      const panel = item.querySelector('.answer-panel');
+      if (!panel) return;
+      const isVisible = panel.style.display === 'block';
+      panel.style.display = isVisible ? 'none' : 'block';
+      panel.setAttribute('aria-hidden', String(isVisible ? 'true' : 'false'));
     });
 
-    // simple stable sort by time attribute (if present) when requested
-    if (sort === 'new' || sort === 'old') {
-      const container = list;
-      const visible = getItemsArray().filter(i => i.style.display !== 'none');
-      visible.sort((a, b) => {
-        const ta = a.dataset.time || '';
-        const tb = b.dataset.time || '';
-        // best effort: compare ISO-like or HH:MM strings, fallback to string compare
-        return (ta > tb ? 1 : (ta < tb ? -1 : 0));
-      });
-      if (sort === 'new') visible.reverse();
-      // append in new order (only visible ones)
-      visible.forEach(i => container.appendChild(i));
-    }
-  }
-
-  let debounceTimer = null;
-  searchBox && searchBox.addEventListener('input', function () {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(filterAndSort, 180);
-  });
-  sortSelect && sortSelect.addEventListener('change', filterAndSort);
-
-  // keyboard and click handlers to open answer modal
-  list && list.addEventListener('click', function (ev) {
-    const li = ev.target.closest('.question-item');
-    if (!li) return;
-    handleOpenModal(li);
-  });
-
-  list && list.addEventListener('keydown', function (ev) {
-    if (ev.key === 'Enter' || ev.key === ' ') {
-      const li = ev.target.closest('.question-item');
-      if (!li) return;
-      ev.preventDefault();
-      handleOpenModal(li);
-    }
-  });
-
-  function handleOpenModal(li) {
-    const author = decodeHtml(li.dataset.author);
-    const question = decodeHtml(li.dataset.question);
-    const t = document.getElementById('answerText');
-    if (t) t.value = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
-    try {
-      const modalEl = document.getElementById('answerModal');
-      new bootstrap.Modal(modalEl).show();
-    } catch (e) {
-      console.warn('Bootstrap modal failed to open:', e);
-    }
-  }
-
-  // copy buttons on each item — fill modal content & copy template to clipboard
-  document.querySelectorAll('.copy-btn').forEach(btn => {
-    btn.addEventListener('click', function (ev) {
-      ev.stopPropagation();
-      const li = this.closest('.question-item');
-      const author = decodeHtml(li.dataset.author);
-      const question = decodeHtml(li.dataset.question);
-      const text = `❓ Question by ${author}:\n${question}\n\n💡 My Answer:\n`;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(()=> showToast('Copied answer template ✅')).catch(()=> showToast('Copy failed'));
-      } else {
-        showToast('Clipboard not supported');
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        item.click();
       }
     });
   });
 
-  // WhatsApp send per item (opens target group link, text param)
-  document.querySelectorAll('.whatsapp-send').forEach(a => {
-    a.addEventListener('click', function (ev) {
-      ev.stopPropagation();
-      const li = this.closest('.question-item');
-      const author = decodeHtml(li.dataset.author);
-      const question = decodeHtml(li.dataset.question);
-      const msg = encodeURIComponent(`❓ Question by ${author}:\n${question}`);
-      // default group link; replace YOUR_GROUP_ID if required
-      const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID";
-      // WhatsApp web doesn't accept ?text on group invite links; this remains a helpful button for admins
-      this.href = `${groupLink}?text=${msg}`;
+  // Show full OP attempt button
+  document.querySelectorAll('.show-full-attempt').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const item = btn.closest('.question-item');
+      const full = item.querySelector('.op-attempt-full');
+      const short = item.querySelector('.op-attempt-short');
+      if (!full || !short) return;
+      if (full.style.display === 'none' || !full.style.display) {
+        full.style.display = 'block';
+        short.style.display = 'none';
+        btn.textContent = 'Hide full attempt';
+      } else {
+        full.style.display = 'none';
+        short.style.display = '';
+        btn.textContent = 'Show full attempt';
+      }
     });
   });
 
-  // Modal copy/whatsapp (bottom modal)
-  window.copyAnswer = function () {
-    const text = document.getElementById('answerText').value || '';
-    if (!text) return showToast('Nothing to copy');
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(()=> showToast('Answer copied ✅')).catch(()=> showToast('Could not copy'));
-    } else showToast('Clipboard not supported');
-  };
+  /* --- Copy / Share behavior --- */
+  document.querySelectorAll('.copy-answer').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const item = btn.closest('.question-item');
+      const answerEl = item.querySelector('.answer-text');
+      const answer = (answerEl && (answerEl.value ?? answerEl.textContent ?? '')) || '';
+      navigator.clipboard.writeText(answer).then(() => {
+        const old = btn.textContent;
+        btn.textContent = 'Copied ✓';
+        setTimeout(() => btn.textContent = old, 1500);
+      }).catch(() => alert('Copy failed — please select and copy manually.'));
+    });
+  });
 
-  const whatsappBtn = document.getElementById('whatsappBtn');
-  if (whatsappBtn) {
-    whatsappBtn.addEventListener('click', function () {
-      const text = encodeURIComponent(document.getElementById('answerText').value || '');
-      const groupLink = "https://chat.whatsapp.com/YOUR_GROUP_ID"; // update
-      this.href = `${groupLink}?text=${text}`;
+  document.querySelectorAll('.share-whatsapp').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const item = btn.closest('.question-item');
+      if(!item) return;
+      const answerEl = item.querySelector('.answer-text');
+      const answer = (answerEl && (answerEl.value ?? answerEl.textContent ?? '') ) || '';
+      const subject = item.dataset?.category ?? '';
+      const group = communityLinks[subject] || '';
+      let text = answer.trim();
+      if (group) {
+        if(text) text += "\n\n";
+        text += "Group: " + group;
+      }
+      const url = 'https://api.whatsapp.com/send?text=' + encodeURIComponent(text || '(no text)');
+      window.open(url, '_blank');
+    });
+  });
+
+  /* --- Theme toggle --- */
+  function applyTheme(theme) {
+    if (theme) document.documentElement.setAttribute('data-theme', theme);
+    else document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('site-theme', theme || '');
+  }
+  const themeToggle = document.getElementById('theme-toggle');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      const cur = localStorage.getItem('site-theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      applyTheme(cur === 'dark' ? 'light' : 'dark');
     });
   }
+  const saved = localStorage.getItem('site-theme');
+  if (saved) applyTheme(saved);
 
-  // initial filter/sort run
-  filterAndSort();
+  /* --- Search & Sort --- */
+  const searchBox = document.getElementById('searchBox');
+  const sortSelect = document.getElementById('sortSelect');
+  const list = document.getElementById('questionsList');
+
+  function filterList() {
+    if (!searchBox || !list) return;
+    const q = (searchBox.value || '').toLowerCase();
+    Array.from(list.children).forEach(li => {
+      const txt = (li.dataset.question || '').toLowerCase() + ' ' + (li.dataset.author || '').toLowerCase() + ' ' + (li.dataset.category || '').toLowerCase() + ' ' + (li.dataset.attempt || '').toLowerCase();
+      li.style.display = txt.includes(q) ? '' : 'none';
+    });
+  }
+  if (searchBox) searchBox.addEventListener('input', filterList);
+
+  function sortListBy(option) {
+    if (!list) return;
+    const nodes = Array.from(list.children).filter(n => n.style.display !== 'none');
+    if (option === 'new') {
+      nodes.sort((a,b) => {
+        const ta = a.dataset.time || '';
+        const tb = b.dataset.time || '';
+        const da = ta ? Date.parse(ta) : 0;
+        const db = tb ? Date.parse(tb) : 0;
+        return db - da;
+      });
+    } else if (option === 'old') {
+      nodes.sort((a,b) => {
+        const ta = a.dataset.time || '';
+        const tb = b.dataset.time || '';
+        const da = ta ? Date.parse(ta) : 0;
+        const db = tb ? Date.parse(tb) : 0;
+        return da - db;
+      });
+    } else {
+      return;
+    }
+    nodes.forEach(n => list.appendChild(n));
+  }
+
+  if (sortSelect) {
+    sortSelect.addEventListener('change', () => sortListBy(sortSelect.value));
+    if (sortSelect.value && sortSelect.value !== 'none') sortListBy(sortSelect.value);
+  }
+
+  /* --- Client-side validation for main form: require question + attempt --- */
+  const newQForm = document.getElementById('new-question-form');
+  if (newQForm) {
+    newQForm.addEventListener('submit', (ev) => {
+      const q = document.getElementById('question');
+      const a = document.getElementById('attempt');
+      if (!q.value.trim() || !a.value.trim()) {
+        ev.preventDefault();
+        alert('Please fill both question and your attempt before submitting.');
+      }
+    });
+  }
 });
 </script>
+
 {% endblock %}

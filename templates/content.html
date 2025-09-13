@@ -138,20 +138,32 @@ TimeTable • Quotes • Forms
         <div class="card shadow">
           <div class="card-header bg-secondary text-white fw-bold">📝 Google Forms (Quizzes)</div>
           <div class="card-body">
-            <ul class="list-group">
-              {% for form in form_list %}
-              <li class="list-group-item d-flex justify-content-between align-items-center">
-                <div>
-                  <div class="fw-bold">{{ form['title'] }}</div>
-                  <div class="small text-muted">{{ form.get('description', '') }}</div>
-                </div>
-                <a class="btn btn-outline-secondary" target="_blank" href="https://drive.google.com/forms/d/{{ form['id'] }}/edit?usp=drivesdk">Open</a>
-              </li>
-              {% endfor %}
-            </ul>
+            {% if form_list %}
+              <ul class="list-group">
+                {% for f in form_list %}
+                  {# normalize name/title - prefer name, then title key if somehow present, then fallback #}
+                  {% set fname = (f.get('name') or f.get('title') or 'Untitled Form') %}
+                  {% set link = (f.get('webViewLink') or ('https://docs.google.com/forms/d/' ~ f.get('id') ~ '/viewform')) %}
+                  <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                      <div class="fw-bold">{{ fname }}</div>
+                      {% if f.get('description') %}
+                        <div class="small text-muted">{{ f.get('description') }}</div>
+                      {% endif %}
+                    </div>
+                    <a class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer" href="{{ link }}">Open</a>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <div class="small text-muted">
+                No forms found. Ensure <code>FORMS_FOLDER_ID</code> is set and the service account has Viewer access to the folder.
+              </div>
+            {% endif %}
           </div>
         </div>
       </div>
+      
     </div>
   </section>
 

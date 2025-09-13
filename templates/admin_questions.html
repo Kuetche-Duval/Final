@@ -1,0 +1,108 @@
+{% extends 'base.html' %}
+{% block title %}Admin — Manage Questions{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="card p-3">
+    <h4>Manage Questions</h4>
+    <p class="text-muted">Delete selected rows or delete all questions for a subject. This page requires the ADMIN_KEY (pass via ?key=... or enter it below).</p>
+
+    <form id="manageForm" method="post">
+      <div class="row g-2 align-items-center mb-3">
+        <div class="col-auto">
+          <label class="form-label mb-0">Admin Key</label>
+        </div>
+        <div class="col">
+          <input type="password" name="admin_key" class="form-control" placeholder="Paste admin key here to authorize actions" value="{{ key|default('') }}">
+        </div>
+        <div class="col-auto">
+          <button type="submit" class="btn btn-sm btn-primary" formaction="{{ url_for('admin_questions') }}?key={{ key|default('') }}">Use key</button>
+        </div>
+      </div>
+
+      <div class="mb-2 d-flex flex-wrap gap-2 align-items-center">
+        <button id="deleteSelectedBtn" type="button" class="btn btn-danger">Delete selected</button>
+
+        <div class="d-flex align-items-center">
+          <select name="subject_to_delete" class="form-select form-select-sm" style="width:auto;">
+            <option value="">-- Delete by subject --</option>
+            {% for s in subjects %}
+              <option value="{{ s }}">{{ s }}</option>
+            {% endfor %}
+          </select>
+          <button name="action" value="delete_subject" class="btn btn-warning ms-2">Delete Subject</button>
+        </div>
+      </div>
+
+      <table class="table table-sm">
+        <thead>
+          <tr><th style="width:36px"><input id="select_all" type="checkbox" onchange="toggleAll(this)"/></th><th>Index</th><th>Subject</th><th>User</th><th>Question</th><th>Attempt</th></tr>
+        </thead>
+        <tbody>
+          {% for q in questions %}
+            <tr>
+              <td><input type="checkbox" name="selected" value="{{ q.index }}"></td>
+              <td>{{ q.index }}</td>
+              <td>{{ q.subject }}</td>
+              <td>{{ q.user }}</td>
+              <td style="max-width:400px; word-break:break-word;">{{ q.text }}</td>
+              <td style="max-width:300px; word-break:break-word;">{{ q.attempt }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </form>
+
+    <div class="mt-3">
+      <a href="{{ url_for('home_page') }}" class="btn btn-outline-secondary">Back to site</a>
+    </div>
+  </div>
+</div>
+
+<!-- Confirmation Modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="confirmModalLabel">Confirm deletion</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to delete the selected rows? This action cannot be undone.
+      </div>
+      <div class="modal-footer">
+        <button id="confirmCancel" type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button id="confirmDelete" type="button" class="btn btn-danger">Yes, delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleAll(cb){
+  document.querySelectorAll('input[name="selected"]').forEach(function(i){ i.checked = cb.checked; });
+}
+
+// Delete selected flow
+document.getElementById('deleteSelectedBtn').addEventListener('click', function(){
+  // check if any selected
+  const any = Array.from(document.querySelectorAll('input[name="selected"]')).some(i => i.checked);
+  if(!any){
+    alert('No rows selected.');
+    return;
+  }
+  const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
+  modal.show();
+});
+
+document.getElementById('confirmDelete').addEventListener('click', function(){
+  // programmatically set action & submit
+  const form = document.getElementById('manageForm');
+  // create a hidden input for action
+  let a = form.querySelector('input[name="action"]');
+  if(!a){ a = document.createElement('input'); a.type='hidden'; a.name='action'; form.appendChild(a); }
+  a.value = 'delete_selected';
+  form.submit();
+});
+</script>
+{% endblock %}

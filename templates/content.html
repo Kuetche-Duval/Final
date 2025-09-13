@@ -136,33 +136,46 @@ TimeTable • Quotes • Forms
 
       <div class="col-md-6" id="google_forms_quizzes">
         <div class="card shadow">
-          <div class="card-header bg-secondary text-white fw-bold">📝 Google Forms (Quizzes)</div>
-          <div class="card-body">
-            {% if form_list %}
-              <ul class="list-group">
-                {% for f in form_list %}
-                  {# normalize name/title - prefer name, then title key if somehow present, then fallback #}
-                  {% set fname = (f.get('name') or f.get('title') or 'Untitled Form') %}
-                  {% set link = (f.get('webViewLink') or ('https://docs.google.com/forms/d/' ~ f.get('id') ~ '/viewform')) %}
-                  <li class="list-group-item d-flex justify-content-between align-items-center">
-                    <div>
-                      <div class="fw-bold">{{ fname }}</div>
-                      {% if f.get('description') %}
-                        <div class="small text-muted">{{ f.get('description') }}</div>
-                      {% endif %}
+            <div class="card-header bg-secondary text-white fw-bold">📝 Google Forms (Quizzes)</div>
+            <div class="card-body">
+                {% if form_list %}
+                    <ul class="list-group">
+                        {% for f in form_list %}
+                            {% set fname = f.get('name') or f.get('title') or 'Untitled Form' %}
+                            {% set link = f.get('webViewLink') or ('https://docs.google.com/forms/d/' ~ f.get('id') ~ '/viewform') %}
+    
+                            {# ensure the link is always the answerer format #}
+                            {% if '/viewform' not in link %}
+                                {% set link = 'https://docs.google.com/forms/d/' ~ f.get('id') ~ '/viewform' %}
+                            {% endif %}
+    
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <div>
+                                    <div class="fw-bold">{{ fname }}</div>
+                                    {% if f.get('description') %}
+                                        <div class="small text-muted">{{ f.get('description') }}</div>
+                                    {% endif %}
+                                </div>
+                                <a class="btn btn-outline-secondary" 
+                                   target="_blank" 
+                                   rel="noopener noreferrer" 
+                                   href="{{ link }}">
+                                   Open
+                                </a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <div class="small text-muted">
+                        No forms found. Ensure <code>FORMS_FOLDER_ID</code> is set and the service account has Viewer access to the folder.
                     </div>
-                    <a class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer" href="{{ link }}">Open</a>
-                  </li>
-                {% endfor %}
-              </ul>
-            {% else %}
-              <div class="small text-muted">
-                No forms found. Ensure <code>FORMS_FOLDER_ID</code> is set and the service account has Viewer access to the folder.
-              </div>
-            {% endif %}
-          </div>
+                {% endif %}
+            </div>
         </div>
-      </div>
+    </div>
+    
+    
+    
       
     </div>
   </section>

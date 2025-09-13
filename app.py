@@ -199,10 +199,6 @@ def load_coding_exercises(drive_id: str = None, local_path: str = None):
 # -------------------------
 @app.route("/drive-image/<path:file_id>")
 def drive_image(file_id):
-<<<<<<< HEAD
-    try:
-        fid = file_id
-=======
     """
     Accepts a Drive file id or full URL, downloads the image bytes from
     Google Drive (uc?export=download) and streams them directly.
@@ -212,59 +208,45 @@ def drive_image(file_id):
         fid = file_id
 
         # Extract the ID if a full URL was passed
->>>>>>> bde168c884006045a173045cda154c2f4ebc5925
         if fid.startswith("http"):
             m = re.search(r"(?:/d/|id=)([-_0-9A-Za-z]+)", fid)
             if m:
                 fid = m.group(1)
             else:
                 fid = fid.rstrip("/").split("/")[-1]
-<<<<<<< HEAD
-        drive_public = f"https://drive.google.com/uc?export=download&id={fid}"
-
-        # If requests is available, attempt to fetch the bytes and return them to the client
-        if requests:
-            try:
-                r = requests.get(drive_public, stream=True, timeout=8)
-                if r.status_code == 200:
-                    content_type = r.headers.get("Content-Type", "application/octet-stream")
-                    return Response(r.content, content_type=content_type)
-                else:
-                    app.logger.warning("Drive image fetch returned status %s for %s", r.status_code, fid)
-            except Exception:
-                app.logger.exception("requests failed when fetching drive image %s - falling back to redirect", fid)
-
-        # fallback: redirect to public Drive url (works in most browsers)
-        return redirect(drive_public)
-=======
 
         # Direct download endpoint (works for public files)
         drive_url = f"https://drive.google.com/uc?export=download&id={fid}"
 
-        r = requests.get(drive_url, stream=True, timeout=10)
-        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
-            return Response(r.content, mimetype=r.headers["content-type"])
+        # If requests is available, attempt to fetch the bytes and return them to the client
+        if requests:
+            try:
+                r = requests.get(drive_url, stream=True, timeout=10)
+                content_type = r.headers.get("content-type", "")
+                if r.status_code == 200 and content_type and content_type.startswith("image/"):
+                    return Response(r.content, mimetype=content_type)
+                # If it's HTML or an error code, warn and fall back
+                app.logger.warning("Drive image fetch failed (status %s, content-type %s) for %s", r.status_code, content_type, fid)
+            except Exception:
+                app.logger.exception("requests failed when fetching drive image %s - falling back", fid)
 
-        # If Google sends HTML or error
-        app.logger.warning("Drive image fetch failed: %s", r.status_code)
-        return send_file("static/img/fallback.jpg", mimetype="image/jpeg")
->>>>>>> bde168c884006045a173045cda154c2f4ebc5925
+        # If no requests or fetch failed, redirect to the public Drive url (browser will handle usual Drive UI/download)
+        return redirect(drive_url)
 
     except Exception as e:
         app.logger.error("drive-image error: %s", e)
         try:
             return send_file("static/img/fallback.jpg", mimetype="image/jpeg")
         except Exception:
-<<<<<<< HEAD
-            small_png = io.BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-                                   b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
-                                   b"\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe2!"
-                                   b"\xbc\x33\x00\x00\x00\x00IEND\xaeB`\x82")
+            # tiny 1x1 PNG fallback if even the static file isn't available
+            small_png = io.BytesIO(
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+                b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+                b"\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe2!"
+                b"\xbc\x33\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
             small_png.seek(0)
             return send_file(small_png, mimetype="image/png")
-=======
-            return Response("Not Found", status=404)
->>>>>>> bde168c884006045a173045cda154c2f4ebc5925
 
 
 # -------------------------

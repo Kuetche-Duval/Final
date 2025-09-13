@@ -7,6 +7,7 @@ import logging
 import traceback
 import re
 import io
+import requests
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -198,14 +199,27 @@ def load_coding_exercises(drive_id: str = None, local_path: str = None):
 # -------------------------
 @app.route("/drive-image/<path:file_id>")
 def drive_image(file_id):
+<<<<<<< HEAD
     try:
         fid = file_id
+=======
+    """
+    Accepts a Drive file id or full URL, downloads the image bytes from
+    Google Drive (uc?export=download) and streams them directly.
+    Falls back to a local static JPG if anything goes wrong.
+    """
+    try:
+        fid = file_id
+
+        # Extract the ID if a full URL was passed
+>>>>>>> bde168c884006045a173045cda154c2f4ebc5925
         if fid.startswith("http"):
             m = re.search(r"(?:/d/|id=)([-_0-9A-Za-z]+)", fid)
             if m:
                 fid = m.group(1)
             else:
                 fid = fid.rstrip("/").split("/")[-1]
+<<<<<<< HEAD
         drive_public = f"https://drive.google.com/uc?export=download&id={fid}"
 
         # If requests is available, attempt to fetch the bytes and return them to the client
@@ -222,18 +236,35 @@ def drive_image(file_id):
 
         # fallback: redirect to public Drive url (works in most browsers)
         return redirect(drive_public)
+=======
+
+        # Direct download endpoint (works for public files)
+        drive_url = f"https://drive.google.com/uc?export=download&id={fid}"
+
+        r = requests.get(drive_url, stream=True, timeout=10)
+        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
+            return Response(r.content, mimetype=r.headers["content-type"])
+
+        # If Google sends HTML or error
+        app.logger.warning("Drive image fetch failed: %s", r.status_code)
+        return send_file("static/img/fallback.jpg", mimetype="image/jpeg")
+>>>>>>> bde168c884006045a173045cda154c2f4ebc5925
 
     except Exception as e:
-        app.logger.exception("drive-image fallback serving local placeholder for %s: %s", file_id, e)
+        app.logger.error("drive-image error: %s", e)
         try:
-            return send_file("static/img/fallback.png", mimetype="image/png")
+            return send_file("static/img/fallback.jpg", mimetype="image/jpeg")
         except Exception:
+<<<<<<< HEAD
             small_png = io.BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
                                    b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
                                    b"\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe2!"
                                    b"\xbc\x33\x00\x00\x00\x00IEND\xaeB`\x82")
             small_png.seek(0)
             return send_file(small_png, mimetype="image/png")
+=======
+            return Response("Not Found", status=404)
+>>>>>>> bde168c884006045a173045cda154c2f4ebc5925
 
 
 # -------------------------

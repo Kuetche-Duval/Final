@@ -272,7 +272,7 @@ def save_subscription(subject, client_id, subscription_obj):
                 if subscription_obj.get("endpoint") in endpoints:
                     logger.info("Subscription endpoint already exists in subscription sheet; skipping append")
                     return
-                _retry(lambda: ws.append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp], value_input_option="USER_ENTERED"), attempts=3)
+                _retry(lambda: ws.append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp], value_input_option="USER_ENTERED", key=subscription_key), attempts=3)
                 # invalidate questions cache? not necessary (we use subscription sheet), but keep generic invalidation
                 with _cache_lock:
                     _cache["questions"] = None
@@ -297,7 +297,7 @@ def save_subscription(subject, client_id, subscription_obj):
         except Exception:
             logger.exception("Could not scan questions sheet for dedupe; proceeding to append")
 
-        append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp], key=questions_key)
+        append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp], key=subscription_key)
     except Exception:
         logger.exception("save_subscription failed")
         raise

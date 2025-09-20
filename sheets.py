@@ -19,7 +19,7 @@ timetable_key = os.environ.get("TIMETABLE_SHEET_KEY")
 questions_key = os.environ.get("QUESTIONS_SHEET_KEY")
 group_rules_key = os.environ.get("GROUP_RULES_SHEET_KEY")
 # subscription sheet key (optional). If not set we store subscription rows in QUESTIONS_SHEET_KEY
-subscription_key = os.environ.get("QUESTIONS_SUBSCRIPTION_KEY")
+subscription_key = os.environ.get("QUESTIONS_SUBSCIRPTION_KEY")
 
 CACHE_TTL_TIMETABLE = int(os.environ.get("SHEETS_TIMETABLE_TTL", "300"))
 CACHE_TTL_QUESTIONS = int(os.environ.get("SHEETS_QUESTIONS_TTL", "30"))

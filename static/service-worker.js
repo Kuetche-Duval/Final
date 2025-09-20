@@ -102,8 +102,8 @@ self.addEventListener('push', event => {
     const tag = payload.tag || undefined;
     const renotify = !!payload.renotify;
 
-    const icon = payload.icon || '/static/img/icon-192.png';
-    const badge = payload.badge || '/static/img/icon-192.png';
+    const icon = payload.icon || '/static/img/logo.png';
+    const badge = payload.badge || '/static/img/logo.png';
 
     const options = {
       body,

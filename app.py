@@ -1,4 +1,4 @@
-# app.py  -- final revised
+# app.py  -- full application (drop-in)
 import os
 import base64
 import json
@@ -7,6 +7,7 @@ import logging
 import traceback
 import re
 import io
+import binascii
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -89,16 +90,41 @@ CODING_LOCAL_PATH = os.environ.get("CODING_EXERCISES_PATH", "coding_exercises.js
 CODING_DRIVE_FILE_ID = os.environ.get("CODING_EXERCISES_DRIVE_FILE_ID", "").strip()
 
 # VAPID keys for web push
-VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
-VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "").strip()
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com")
+
+# --- simple VAPID public key validator (warn early) ---
+def _is_likely_valid_vapid_public_key(s):
+    if not s:
+        return False
+    key = s.strip()
+    # normalize urlsafe base64 into normal base64
+    key = key.replace('-', '+').replace('_', '/')
+    padding = '=' * ((4 - (len(key) % 4)) % 4)
+    try:
+        b = base64.b64decode(key + padding)
+    except (binascii.Error, Exception) as e:
+        app.logger.warning("VAPID_PUBLIC_KEY appears not to be valid base64: %s", e)
+        return False
+    # typical uncompressed EC public key is 65 bytes (0x04 + 32 + 32)
+    if len(b) in (65, 64):
+        return True
+    # still accept but warn
+    app.logger.warning("VAPID_PUBLIC_KEY decoded length is %d bytes (expected ~65). It might still work but double-check.", len(b))
+    return True
+
+if VAPID_PUBLIC_KEY:
+    ok = _is_likely_valid_vapid_public_key(VAPID_PUBLIC_KEY)
+    if not ok:
+        app.logger.warning("VAPID_PUBLIC_KEY looks invalid; push subscriptions will likely fail. Generate a proper VAPID keypair (e.g. `npx web-push generate-vapid-keys`) and set VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY.")
 
 # --- Sheets/Drive helpers (import if available) ---
 try:
     from sheets import (
         from_google_sheets, check_date, append_row, read_rules, get_questions,
         clear_sheet, delete_rows_by_indices, delete_rows_by_subject,
-        save_subscription, list_subscriptions
+        save_subscription, list_subscriptions, delete_subscriptions_by_endpoint
     )
     SHEETS_AVAILABLE = True
 except Exception as e:
@@ -108,7 +134,7 @@ except Exception as e:
     # minimal fallbacks to keep the app running (no sheets)
     def from_google_sheets(*a, **k): return []
     def check_date(*a, **k): return ""
-    def append_row(row):
+    def append_row(row, key=None):
         app.logger.warning("append_row fallback - row: %s", row)
     def read_rules(*a, **k): return []
     def get_questions(*a, **k): return []
@@ -117,6 +143,7 @@ except Exception as e:
     def delete_rows_by_subject(*a, **k): app.logger.warning("delete_rows_by_subject fallback")
     def save_subscription(subject, client_id, subscription): raise NotImplementedError
     def list_subscriptions(subject): raise NotImplementedError
+    def delete_subscriptions_by_endpoint(endpoint): app.logger.warning("delete_subscriptions_by_endpoint fallback")
 
 try:
     from drive import from_google_drive, folders_and_images, download_file, update_file, create_file_in_folder
@@ -132,6 +159,15 @@ except Exception:
 
 # lock for writing exercises locally
 _coding_lock = Lock()
+
+# Inject common context into templates
+@app.context_processor
+def inject_globals():
+    return {
+        "community_links": COMMUNITY_LINKS,
+        "message": FOOTER_MESSAGE,
+        "vapid_public_key": VAPID_PUBLIC_KEY or ""
+    }
 
 # -------------------------
 # Jinja filter: format_time
@@ -163,6 +199,35 @@ def format_time(value):
     return str(value)
 
 app.jinja_env.filters["format_time"] = format_time
+
+# -------------------------
+# Helper: timetable for today
+# -------------------------
+def get_timetable_today():
+    """
+    Return rows (list-of-lists) from the timetable sheet matching today's weekday.
+    Accepts day names like Mon, MONDAY, Mon., etc. (case-insensitive).
+    """
+    try:
+        rows = from_google_sheets() or []
+        if not rows:
+            return []
+        today_short = datetime.now().strftime("%a").upper()  # e.g. 'Mon' -> 'MON'
+        today_full = datetime.now().strftime("%A").upper()  # 'MONDAY'
+        matches = []
+        for r in rows:
+            if not r or len(r) == 0:
+                continue
+            first = str(r[0]).strip().upper()
+            if not first:
+                continue
+            # match prefix or full
+            if first.startswith(today_short) or first.startswith(today_full[:3]) or today_full in first:
+                matches.append(r)
+        return matches
+    except Exception:
+        app.logger.exception("get_timetable_today failed")
+        return []
 
 # -------------------------
 # Coding exercises loader
@@ -259,9 +324,31 @@ def _save_subscription_to_sheet(subject, client_id, subscription_obj):
                 return True
             except Exception as e:
                 app.logger.debug("sheets.save_subscription failed: %s", e)
-        # fallback append
+        # fallback append (append_row already exists; we dedupe in sheets.save_subscription, but in fallback we'll mimic dedupe)
         timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
-        append_row(["__subscription__", subject, client_id or "", json.dumps(subscription_obj), timestamp])
+        # Ensure we don't duplicate the same endpoint+subject in fallback
+        try:
+            # inspect existing rows to dedupe
+            rows = get_questions() or []
+            endpoint = subscription_obj.get("endpoint")
+            found = False
+            for r in rows:
+                try:
+                    if len(r) >= 4 and str(r[0]) == "__subscription__":
+                        try:
+                            sub = json.loads(r[3])
+                        except Exception:
+                            sub = None
+                        if sub and sub.get("endpoint") == endpoint and str(r[1]).strip() == (subject or "Other"):
+                            found = True
+                            break
+                except Exception:
+                    continue
+            if not found:
+                append_row(["__subscription__", subject, client_id or "", json.dumps(subscription_obj), timestamp])
+        except Exception:
+            # last resort: append anyway
+            append_row(["__subscription__", subject, client_id or "", json.dumps(subscription_obj), timestamp])
         return True
     except Exception:
         app.logger.exception("Failed saving subscription via fallback")
@@ -345,6 +432,22 @@ def send_push_to_subject(subject, question_text, attempt_text):
         except WebPushException as ex:
             app.logger.warning("WebPushException for subject %s: %s", subject, ex)
             errors.append(str(ex))
+            # attempt cleanup if stale
+            try:
+                resp = getattr(ex, 'response', None)
+                status = None
+                if resp and hasattr(resp, 'status_code'):
+                    status = resp.status_code
+                if status in (404, 410):
+                    endpoint = sub.get('endpoint') if isinstance(sub, dict) else None
+                    if endpoint:
+                        app.logger.info("Subscription endpoint %s returned %s: deleting subscription", endpoint, status)
+                        try:
+                            delete_subscriptions_by_endpoint(endpoint)
+                        except Exception:
+                            app.logger.exception("Failed deleting stale subscription for endpoint %s", endpoint)
+            except Exception:
+                app.logger.exception("Exception while handling WebPushException cleanup")
         except Exception as ex:
             app.logger.exception("webpush failed: %s", ex)
             errors.append(str(ex))
@@ -367,6 +470,7 @@ def content_page():
         ws_content = ws_values[1:] if len(ws_values) > 1 else []
         dr_values = folders_and_images()
         form_list = from_google_drive(os.environ.get("FORMS_FOLDER_ID", ""), "application/vnd.google-apps.form")
+        timetable_today = get_timetable_today()
         return render_template(
             "content.html",
             message=FOOTER_MESSAGE,
@@ -374,11 +478,12 @@ def content_page():
             sheet_title=ws_title,
             today_date=check_date(),
             form_list=form_list,
-            dr_values=dr_values
+            dr_values=dr_values,
+            timetable_today=timetable_today
         )
     except Exception as e:
         app.logger.exception("Content page error: %s", e)
-        return render_template("content.html", message=FOOTER_MESSAGE, sheet_content=[], sheet_title=[], today_date="", form_list=[], dr_values=[], error=str(e))
+        return render_template("content.html", message=FOOTER_MESSAGE, sheet_content=[], sheet_title=[], today_date="", form_list=[], dr_values=[], timetable_today=[], error=str(e))
 
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
@@ -469,6 +574,86 @@ def save_subscription_route():
             return jsonify({"ok": False, "error": "could not save subscription"}), 500
     except Exception as e:
         app.logger.exception("save-subscription failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/subscriptions/check", methods=["GET"])
+def subscriptions_check():
+    """
+    GET /subscriptions/check?endpoint=<endpoint>
+    Returns list of subjects that the server has saved for that subscription endpoint.
+    Response: { ok: True, subjects: ["Mathematics", ...] }
+    """
+    try:
+        endpoint = request.args.get("endpoint", "").strip()
+        if not endpoint:
+            return jsonify({"ok": False, "error": "endpoint required"}), 400
+        out_subjects = []
+        try:
+            raw = list_subscriptions() or []
+        except Exception:
+            raw = []
+        for r in raw:
+            try:
+                subj = None
+                sub = None
+                if isinstance(r, dict):
+                    subj = r.get("subject")
+                    sub = r.get("subscription")
+                elif isinstance(r, (list, tuple)) and len(r) >= 4 and r[0] == "__subscription__":
+                    subj = r[1]
+                    try:
+                        sub = json.loads(r[3])
+                    except Exception:
+                        sub = None
+                if not sub:
+                    continue
+                ep = sub.get("endpoint")
+                if ep == endpoint:
+                    if subj and subj not in out_subjects:
+                        out_subjects.append(subj)
+            except Exception:
+                continue
+        return jsonify({"ok": True, "subjects": out_subjects})
+    except Exception as e:
+        app.logger.exception("subscriptions_check failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/subscriptions/delete", methods=["POST"])
+def subscriptions_delete():
+    """
+    POST { endpoint: "..." } -> deletes subscription rows matching endpoint (either in dedicated sheet or fallback questions sheet)
+    """
+    try:
+        data = request.get_json(force=True)
+        endpoint = (data.get("endpoint") or "").strip()
+        if not endpoint:
+            return jsonify({"ok": False, "error": "endpoint required"}), 400
+        try:
+            delete_subscriptions_by_endpoint(endpoint)
+        except Exception as e:
+            app.logger.exception("delete_subscriptions_by_endpoint failed: %s", e)
+            # fall back to best-effort: try scanning get_questions and delete rows with matching endpoint
+            try:
+                rows = get_questions() or []
+                indices = []
+                for i, row in enumerate(rows, start=1):
+                    try:
+                        if len(row) >= 4 and str(row[0]) == "__subscription__":
+                            try:
+                                sub = json.loads(row[3])
+                            except Exception:
+                                sub = None
+                            if sub and sub.get("endpoint") == endpoint:
+                                indices.append(i)
+                    except Exception:
+                        continue
+                if indices:
+                    delete_rows_by_indices(indices)
+            except Exception:
+                app.logger.exception("Fallback deletion also failed")
+        return jsonify({"ok": True})
+    except Exception as e:
+        app.logger.exception("subscriptions_delete top-level failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/rules")
@@ -569,6 +754,7 @@ def admin_test_push():
 
 # -------------------------
 # Coding routes / admin
+# (unchanged from your previous file)
 # -------------------------
 @app.route("/coding")
 def coding_page():

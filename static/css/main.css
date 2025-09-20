@@ -1,18 +1,15 @@
-/* ============================
-   style.css
-   - Uses your first design/layout as the base
-   - Only colors & accessibility/focus behaviors updated
-   - Toggle light mode by adding `class="light-mode"` to <body>
-   ============================ */
+/* static/css/main.css
+   Upgraded responsive + horizontal scroll behavior for small screens
+*/
 
-/* ---------- Root variables (base = your original design, updated palette) ---------- */
+/* ---------- Root variables ---------- */
 :root{
-  --body-bg: #f5f7fa;         /* original light base (used when light-mode) */
+  --body-bg: #f5f7fa;
   --card-bg: #ffffff;
   --text: #1c1c1e;
   --muted: #6c757d;
-  --primary: #25d366;         /* modern green accent (changeable) */
-  --accent: #4da6ff;          /* secondary accent */
+  --primary: #25d366;
+  --accent: #4da6ff;
   --card-radius: 14px;
   --shadow-1: 0 4px 12px rgba(0,0,0,0.08);
   --shadow-hover: 0 8px 24px rgba(0,0,0,0.12);
@@ -20,7 +17,7 @@
   --btn-color: #fff;
   --btn-hover-bg: #1fa84b;
   --font-base: 1rem;
-  --nav-bg: linear-gradient(135deg, #005c97, #363795); /* keep your nav look */
+  --nav-bg: linear-gradient(135deg, #005c97, #363795);
 }
 
 /* Light-mode explicit theme (apply .light-mode on body to force) */
@@ -32,14 +29,14 @@ body.light-mode {
   --btn-bg: var(--accent);
 }
 
-/* Slightly lighter dark-mode friendly palette (prefers-color-scheme: dark + optional) */
+/* Dark-friendly palette */
 @media (prefers-color-scheme: dark) {
   :root{
-    --body-bg: #222233;      /* a bit lighter than pure black */
+    --body-bg: #222233;
     --card-bg: #25282d;
     --text: #e6eef1;
     --muted: #9aa3ad;
-    --primary: #38c172;      /* green tuned for dark */
+    --primary: #38c172;
     --accent: #4da6ff;
     --shadow-1: 0 6px 18px rgba(0,0,0,0.55);
     --shadow-hover: 0 14px 36px rgba(0,0,0,0.55);
@@ -50,7 +47,7 @@ body.light-mode {
   }
 }
 
-/* ---------- Base layout & typography (original kept) ---------- */
+/* ---------- Base layout & typography ---------- */
 * { box-sizing: border-box; margin:0; padding:0; }
 body {
   background: var(--body-bg);
@@ -62,14 +59,16 @@ body {
   font-size: var(--font-base);
 }
 
-/* keep your container sizing */
+/* container: allow horizontal panning for very wide content */
 main.container, .container {
   max-width: 1100px;
   margin: 0 auto;
   padding: 20px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
-/* ---------- Navbar (keeps original look but uses variables) ---------- */
+/* ---------- Navbar ---------- */
 .navbar {
   background: var(--nav-bg);
   padding: 12px 20px;
@@ -87,9 +86,9 @@ main.container, .container {
   text-overflow: ellipsis;
 }
 
-/* ---------- Hero / Banner (fade-in preserved) ---------- */
+/* ---------- Hero / Banner ---------- */
 .hero {
-  background: var(--nav-bg); /* keep your hero gradient */
+  background: var(--nav-bg);
   color: #fff;
   padding: 50px 20px;
   text-align: center;
@@ -105,7 +104,7 @@ main.container, .container {
 .hero h1 { font-weight: 700; font-size: 2.5rem; margin-bottom: 12px; line-height: 1.2; }
 .hero p { font-size: 1.1rem; margin-bottom: 20px; color: rgba(226,230,239,0.9); }
 
-/* ---------- Cards (original, with subtle color tweaks) ---------- */
+/* ---------- Cards ---------- */
 .card {
   background: var(--card-bg);
   color: var(--text);
@@ -120,21 +119,18 @@ main.container, .container {
   box-shadow: var(--shadow-hover);
 }
 
-/* ---------- Thumbnails & images ---------- */
+/* ---------- Thumbnails ---------- */
 .thumb {
   width: 100%;
   height: 180px;
   object-fit: cover;
   border-radius: 12px;
   transition: transform .2s ease;
-  background: linear-gradient(180deg, rgba(0,0,0,0.04), rgba(0,0,0,0.01)); /* helps transparent PNGs */
+  background: linear-gradient(180deg, rgba(0,0,0,0.04), rgba(0,0,0,0.01));
 }
 .thumb:hover { transform: scale(1.03); }
 
-/* hero image container */
-.hero-img { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; }
-
-/* ---------- Question list (chat-like feel, improved focus & readability) ---------- */
+/* ---------- Question list ---------- */
 .question-list { list-style: none; padding: 0; margin: 0; }
 .question-list li {
   background: var(--card-bg);
@@ -149,12 +145,11 @@ main.container, .container {
   align-items: flex-start;
 }
 .question-list li:hover {
-  background: rgba(77,166,255,0.02); /* subtle hover tint tuned to accent */
+  background: rgba(77,166,255,0.02);
   transform: translateY(-3px);
   box-shadow: 0 8px 22px rgba(16,24,40,0.06);
 }
 
-/* left area with author/category/text */
 .q-left { flex: 1 1 auto; min-width: 0; }
 .meta-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .category-badge {
@@ -166,14 +161,10 @@ main.container, .container {
   font-size: .85rem;
 }
 .author { color: var(--muted); font-weight:600; max-width: 240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-/* message text */
 .message-text { margin-top:6px; white-space: pre-wrap; color: var(--text); }
-
-/* time on the right */
 .message-time { font-size: .78rem; color: var(--muted); min-width:70px; text-align:right; }
 
-/* Focus / keyboard state: keep readable */
+/* Focus / keyboard state */
 .question-list li:focus,
 .question-list li:focus-within {
   outline: none;
@@ -182,7 +173,6 @@ main.container, .container {
   box-shadow: 0 10px 30px rgba(0,0,0,0.12);
   transform: translateY(-4px);
 }
-/* ensure inner text inherits visible color on focus */
 .question-list li:focus .author,
 .question-list li:focus .message-text { color: inherit; }
 
@@ -196,7 +186,6 @@ main.container, .container {
   transition: border-color .25s ease, box-shadow .25s ease, background .25s ease;
   width: 100%;
 }
-/* when typing we prefer a light background for clarity even in dark mode */
 .form-control:focus, .form-select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
@@ -221,14 +210,15 @@ main.container, .container {
 .btn-outline { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
 .btn-outline:hover { background: var(--accent); color: #fff; }
 
-/* ---------- Tables (kept) ---------- */
+/* ---------- Tables ---------- */
+.table-responsive { display:block; width:100%; overflow-x:auto; -webkit-overflow-scrolling: touch; }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: .75rem; border: 1px solid rgba(0,0,0,0.06); text-align: left; }
 th { background: rgba(0,0,0,0.02); }
 
 /* ---------- Footer ---------- */
 footer {
-  background: linear-gradient(135deg, #363795, #005c97); /* reversed order of navbar */
+  background: linear-gradient(135deg, #363795, #005c97);
   color: #fff;
   padding: 20px 10px;
   text-align: center;
@@ -237,7 +227,7 @@ footer {
   letter-spacing: 0.3px;
 }
 
-/* ---------- Rules page: muted text until focus ---------- */
+/* ---------- Rules page ---------- */
 .rules-list li {
   position: relative;
   background: var(--card-bg);
@@ -248,14 +238,12 @@ footer {
   transition: background .2s ease, transform .18s ease, color .18s ease;
 }
 .rules-list li .rule-main {
-  color: var(--muted); /* subdued by default */
+  color: var(--muted);
 }
 .rules-list li:focus-within .rule-main,
 .rules-list li:hover .rule-main {
-  color: var(--text); /* become readable on focus/hover */
+  color: var(--text);
 }
-
-/* checkmark */
 .rules-list li::before {
   content: "✔";
   position: absolute;
@@ -283,7 +271,7 @@ footer {
     margin-top: 4px;
   }
   .author {
-    max-width: 100%; /* allow wrapping instead of cutting names */
+    max-width: 100%;
     white-space: normal;
   }
 }
@@ -296,15 +284,14 @@ footer {
   .navbar { flex-direction: column; gap: 8px; }
   .question-list li { padding: 10px; }
   .message-text { font-size: 0.9rem; }
+  .navbar .container { overflow-x:auto; }
 }
 
-/* ---------- Extra accessibility focus (keyboard) ---------- */
+/* ---------- Accessibility / motion ---------- */
 .question-list li:focus {
   outline: 3px solid rgba(77,166,255,0.12);
   outline-offset: 2px;
 }
-
-/* ---------- prefers-reduced-motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }

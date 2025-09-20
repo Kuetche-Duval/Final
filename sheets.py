@@ -6,6 +6,7 @@ import threading
 import json
 from datetime import datetime
 from pathlib import Path
+import base64
 
 import gspread
 
@@ -17,6 +18,8 @@ SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_acco
 timetable_key = os.environ.get("TIMETABLE_SHEET_KEY")
 questions_key = os.environ.get("QUESTIONS_SHEET_KEY")
 group_rules_key = os.environ.get("GROUP_RULES_SHEET_KEY")
+# subscription sheet key (optional). If not set we store subscription rows in QUESTIONS_SHEET_KEY
+subscription_key = os.environ.get("QUESTIONS_SUBSCRIPTION_KEY")
 
 CACHE_TTL_TIMETABLE = int(os.environ.get("SHEETS_TIMETABLE_TTL", "300"))
 CACHE_TTL_QUESTIONS = int(os.environ.get("SHEETS_QUESTIONS_TTL", "30"))
@@ -89,13 +92,13 @@ def from_google_sheets():
 def check_date():
     try:
         week = datetime.now().strftime("%a").upper()
-        col = get_work_sheet(timetable_key).col_values(1)
+        col = get_work_sheet(timetable_key).col_values(2)
         return [(i, val) for i, val in enumerate(col, start=1) if val == week]
     except Exception:
         logger.exception("check_date failed")
         return []
 
-def append_row(row):
+def append_row(row, key=questions_key):
     if not isinstance(row, (list, tuple)):
         raise ValueError("append_row expects a list/tuple: [category, username, question, attempt, timestamp]")
     row = list(row)
@@ -107,19 +110,20 @@ def append_row(row):
     username = str(row[1]).strip() if row[1] else "Anonymous"
     question_text = row[2] or ""
     attempt_text = row[3] or ""
-    timestamp = row[4] or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    timestamp = row[4] or datetime.utcnow().replace(microsecond=0).isoformat()
 
     full_row = [category, username, question_text, attempt_text, timestamp]
 
-    if not questions_key:
-        logger.warning("QUESTIONS_SHEET_KEY not set; append_row will skip writing")
+    if not key:
+        logger.warning("Sheet key not set; append_row will skip writing")
         return
 
-    ws = get_work_sheet(questions_key)
+    ws = get_work_sheet(key)
     try:
         _retry(lambda: ws.append_row(full_row, value_input_option="USER_ENTERED"), attempts=3)
     except Exception:
         logger.exception("append_row failed after retries, trying one last time")
+        # last attempt (let it raise if it fails)
         ws.append_row(full_row, value_input_option="USER_ENTERED")
 
     with _cache_lock:
@@ -223,15 +227,77 @@ def read_rules():
         _cache["rules_ts"] = time.time()
     return data
 
-# --- Subscription helpers (store subscriptions as special rows by default) ---
+# --- Subscription helpers (store subscriptions in a dedicated sheet if configured; fallback to questions sheet) ---
+def _parse_subscription_row(row):
+    """
+    Expecting rows of form:
+    [ "__subscription__", "<subject>", "<client_id>", "<json_subscription>", "<timestamp>" ]
+    Returns tuple (subject, client_id, subscription_dict) or None on parse failure.
+    """
+    try:
+        if not row or len(row) < 4:
+            return None
+        if str(row[0]).strip() != "__subscription__":
+            return None
+        subj = str(row[1]).strip() if len(row) > 1 else "Other"
+        client_id = row[2] if len(row) > 2 else ""
+        try:
+            sub = json.loads(row[3]) if row[3] else None
+        except Exception:
+            sub = None
+        if not sub:
+            return None
+        return (subj, client_id, sub)
+    except Exception:
+        return None
+
 def save_subscription(subject, client_id, subscription_obj):
     """
-    Save a push subscription. By default this appends a special row marked with __subscription__.
-    You can change schema to store subscriptions in a dedicated sheet.
+    Save a push subscription. Prefer storing in a dedicated subscription sheet if configured.
+    Deduplicate by endpoint to avoid repeated entries for same client.
     """
     try:
         timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
-        append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp])
+        # prefer subscription_key sheet
+        if subscription_key:
+            # read existing subscriptions to dedupe
+            try:
+                ws = get_work_sheet(subscription_key)
+                rows = _retry(ws.get_all_values)
+                endpoints = set()
+                for r in rows:
+                    parsed = _parse_subscription_row(r)
+                    if parsed and parsed[2].get("endpoint"):
+                        endpoints.add(parsed[2]["endpoint"])
+                if subscription_obj.get("endpoint") in endpoints:
+                    logger.info("Subscription endpoint already exists in subscription sheet; skipping append")
+                    return
+                _retry(lambda: ws.append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp], value_input_option="USER_ENTERED"), attempts=3)
+                # invalidate questions cache? not necessary (we use subscription sheet), but keep generic invalidation
+                with _cache_lock:
+                    _cache["questions"] = None
+                    _cache["questions_ts"] = 0
+                return
+            except Exception:
+                logger.exception("Failed to write to subscription sheet; falling back to questions sheet")
+                # fall through to fallback
+        # fallback: append into questions sheet using append_row helper (keeps same schema)
+        # but dedupe by endpoint+subject to avoid duplicates
+        try:
+            rows = get_questions() or []
+            endpoint = subscription_obj.get("endpoint")
+            for r in rows:
+                parsed = _parse_subscription_row(r)
+                if not parsed:
+                    continue
+                subj, client, sub = parsed
+                if sub and sub.get("endpoint") == endpoint and subj == (subject or "Other"):
+                    logger.info("Subscription endpoint already exists in questions sheet for this subject; skipping append")
+                    return
+        except Exception:
+            logger.exception("Could not scan questions sheet for dedupe; proceeding to append")
+
+        append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp], key=questions_key)
     except Exception:
         logger.exception("save_subscription failed")
         raise
@@ -240,24 +306,99 @@ def list_subscriptions(subject=None):
     """
     Return list of subscription dicts (each element is {'subject':..., 'client_id':..., 'subscription': {...}}).
     If subject is provided, filter by subject.
+    This function prefers reading from the dedicated subscription sheet (if configured).
     """
     out = []
+    # first try dedicated subscription sheet
+    try:
+        if subscription_key:
+            try:
+                ws = get_work_sheet(subscription_key)
+                rows = _retry(ws.get_all_values)
+                for r in rows:
+                    parsed = _parse_subscription_row(r)
+                    if not parsed:
+                        continue
+                    subj, client_id, sub = parsed
+                    if subject:
+                        if subj == subject:
+                            out.append({"subject": subj, "client_id": client_id, "subscription": sub})
+                    else:
+                        out.append({"subject": subj, "client_id": client_id, "subscription": sub})
+                return out
+            except Exception:
+                logger.exception("Failed reading subscription sheet; falling back to scanning questions sheet")
+    except Exception:
+        logger.exception("list_subscriptions top-level error")
+
+    # fallback: scan questions sheet for __subscription__ rows
     rows = get_questions() or []
     for row in rows:
         try:
-            if len(row) >= 4 and str(row[0]) == "__subscription__":
-                subj = str(row[1])
-                client_id = row[2]
-                try:
-                    sub = json.loads(row[3])
-                except Exception:
-                    sub = None
-                if subject:
-                    if subj == subject and sub:
-                        out.append({"subject": subj, "client_id": client_id, "subscription": sub})
-                else:
-                    if sub:
-                        out.append({"subject": subj, "client_id": client_id, "subscription": sub})
+            parsed = _parse_subscription_row(row)
+            if not parsed:
+                continue
+            subj, client_id, sub = parsed
+            if subject:
+                if subj == subject:
+                    out.append({"subject": subj, "client_id": client_id, "subscription": sub})
+            else:
+                out.append({"subject": subj, "client_id": client_id, "subscription": sub})
         except Exception:
             continue
     return out
+
+def delete_subscriptions_by_endpoint(endpoint):
+    """
+    Delete all subscription rows that match the endpoint.
+    If subscription_key is set, try deleting from the dedicated subscription sheet.
+    Otherwise, delete matching rows from the questions sheet (fallback).
+    Uses delete_rows_by_indices which removes rows in descending order.
+    """
+    if not endpoint:
+        return
+    # attempt dedicated subscription sheet first
+    try:
+        if subscription_key:
+            ws = get_work_sheet(subscription_key)
+            rows = _retry(ws.get_all_values)
+            indices = []
+            for i, r in enumerate(rows, start=1):
+                parsed = _parse_subscription_row(r)
+                if not parsed:
+                    continue
+                _, _, sub = parsed
+                if sub and sub.get("endpoint") == endpoint:
+                    indices.append(i)
+            if indices:
+                # delete using the normal helper (this helper currently deletes rows from QUESTIONS_SHEET_KEY)
+                # We need to delete rows in the subscription sheet itself:
+                idxs = sorted(set(indices), reverse=True)
+                for rownum in idxs:
+                    try:
+                        _retry(lambda rn=rownum: ws.delete_rows(rn), attempts=3)
+                        logger.info("Deleted subscription row %s from subscription sheet", rownum)
+                    except Exception:
+                        logger.exception("Failed to delete subscription row %s from subscription sheet", rownum)
+                with _cache_lock:
+                    _cache["questions"] = None
+                    _cache["questions_ts"] = 0
+                return
+    except Exception:
+        logger.exception("Failed deleting from dedicated subscription sheet (will try fallback)")
+
+    # fallback: scan questions sheet for subscription rows and delete
+    try:
+        rows = get_questions() or []
+        indices = []
+        for i, r in enumerate(rows, start=1):
+            parsed = _parse_subscription_row(r)
+            if not parsed:
+                continue
+            _, _, sub = parsed
+            if sub and sub.get("endpoint") == endpoint:
+                indices.append(i)
+        if indices:
+            delete_rows_by_indices(indices)
+    except Exception:
+        logger.exception("Failed deleting subscription rows from fallback questions sheet")

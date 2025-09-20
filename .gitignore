@@ -6,3 +6,4 @@ venv/
 .envrc
 *.log
 trial.py
+trial.py

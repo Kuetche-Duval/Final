@@ -1,4 +1,4 @@
-# app.py  -- corrected & validated
+# app.py  -- final revised
 import os
 import base64
 import json
@@ -12,7 +12,7 @@ from pathlib import Path
 from threading import Lock
 from flask import (
     Flask, render_template, url_for, redirect, send_file,
-    request, flash, Response, jsonify
+    request, flash, Response, jsonify, send_from_directory
 )
 from dotenv import load_dotenv
 
@@ -28,7 +28,7 @@ try:
     PYWEBPUSH_AVAILABLE = True
 except Exception:
     webpush = None
-    WebPushException = Exception  # safe fallback name so except/handling doesn't NameError
+    WebPushException = Exception
     PYWEBPUSH_AVAILABLE = False
 
 # --- Load environment ---
@@ -548,6 +548,24 @@ def admin_questions():
 
     subjects = sorted({q["subject"] for q in questions if q["subject"]})
     return render_template("admin_questions.html", questions=questions, subjects=subjects, key=provided_key, message=FOOTER_MESSAGE)
+
+@app.route('/service-worker.js')
+def service_worker():
+    # serve static/service-worker.js at root so scope covers the whole site
+    return send_from_directory(app.static_folder, 'service-worker.js')
+
+# --- Admin test push endpoint (protected by ADMIN_KEY) ---
+@app.route('/admin/test-push', methods=['POST'])
+def admin_test_push():
+    key = (request.args.get('key') or request.form.get('key') or request.headers.get('X-ADMIN-KEY') or '').strip()
+    if key != ADMIN_KEY:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    content = request.get_json(silent=True) or request.form
+    subject = (content.get('subject') or 'Mathematics')
+    q = (content.get('question') or 'Test question')
+    attempt = (content.get('attempt') or 'Sample answer')
+    result = send_push_to_subject(subject, q, attempt)
+    return jsonify({"ok": True, "result": result})
 
 # -------------------------
 # Coding routes / admin

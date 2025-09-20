@@ -244,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const subject = item.dataset?.category || '';
       const group = communityLinks[subject] || '';
       let text = answer || '';
-      if (group) text += (text ? "\\n\\n" : "") + "Group: " + group;
+      if (group) text += (text ? "\n\n" : "") + "Group: " + group;
       const url = 'https://api.whatsapp.com/send?text=' + encodeURIComponent(text || '(no text)');
       window.open(url, '_blank');
     });
@@ -331,11 +331,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
+      // register the worker at root so it controls the whole site
       console.log("[subscribe] registering service worker...");
-      const reg = await navigator.serviceWorker.register('{{ url_for("static", filename="service-worker.js") }}');
+      const reg = await navigator.serviceWorker.register('/service-worker.js');
       await navigator.serviceWorker.ready;
       console.log("[subscribe] service worker ready:", reg);
 
+      // request permission to show notifications
       const permission = await Notification.requestPermission();
       console.log("[subscribe] notification permission:", permission);
       if (permission !== 'granted') {
@@ -359,11 +361,15 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       console.log("[subscribe] obtained subscription object:", sub);
-      // send to server
+
+      // serialize before sending
+      const subObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
+
+      // send to server (the save_subscription endpoint)
       const res = await fetch('{{ url_for("save_subscription_route") }}', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscription: sub, subject: subject, client_id: 'web' })
+        body: JSON.stringify({ subscription: subObj, subject: subject, client_id: 'web' })
       });
 
       let jsonRes;
@@ -376,10 +382,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (jsonRes && jsonRes.ok) {
-        if (btn) { 
-          btn.textContent = 'Subscribed ✓'; 
+        if (btn) {
+          btn.textContent = 'Subscribed ✓';
           btn.classList.add('subscribed');
-          btn.disabled = true; 
+          btn.disabled = true;
         }
         alert('Subscribed successfully ✓');
         console.log("[subscribe] subscription saved on server");
@@ -396,7 +402,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // wire subscribe buttons
   document.querySelectorAll('.subscribe-btn').forEach(btn => {
-    // visually mark buttons if we can detect existing subscription for this subject
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       const subj = btn.dataset.subject || '';
@@ -406,4 +411,3 @@ document.addEventListener('DOMContentLoaded', () => {
 
 });
 </script>
-{% endblock %}

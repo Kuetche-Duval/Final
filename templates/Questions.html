@@ -35,6 +35,9 @@
   .btn-sub { font-size: .85rem; padding:6px 8px; border-radius:8px; }
   .answer-panel { display:none; margin-top:8px; }
   .tiny-link { font-size:.85rem; color:var(--accent-green); text-decoration:underline; cursor:pointer; background:none;border:0;padding:0; }
+  .subscribe-btn { background:#fff3cd; border:1px solid #ffeeba; color:#856404; }
+  .subscribe-btn.subscribed { background:#d4edda; border-color:#c3e6cb; color:#155724; }
+  .status-inline { margin-left:8px; font-size:0.85rem; color:var(--muted); }
   @media (max-width:576px) { .question-item{flex-direction:column} .author { max-width:140px; } }
 </style>
 {% endblock %}
@@ -157,6 +160,8 @@
                   <button class="btn btn-outline-secondary btn-sub" disabled>Community not set</button>
                 {% endif %}
 
+                <button class="btn btn-outline-warning btn-sub subscribe-btn" data-subject="{{ cat }}">🔔 Subscribe</button>
+
                 <button class="btn btn-primary btn-sub copy-answer">Copy answer</button>
                 <button class="btn btn-info btn-sub share-whatsapp">Share to WhatsApp</button>
               </div>
@@ -174,17 +179,20 @@
   </div>
 </div>
 
-<!-- Put community_links JSON here (not inside JS) to avoid editor linter errors -->
+<!-- Community JSON & vapid key -->
 <script type="application/json" id="communityLinksData">{{ community_links|tojson }}</script>
+<script type="application/json" id="vapidKeyData">{{ vapid_public_key|tojson }}</script>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-  // parse community links JSON safely from the dedicated script tag
   const communityLinksEl = document.getElementById('communityLinksData');
+  const vapidEl = document.getElementById('vapidKeyData');
   let communityLinks = {};
-  try { communityLinks = communityLinksEl ? JSON.parse(communityLinksEl.textContent || '{}') : {}; } catch(e) { communityLinks = {}; }
+  let vapidPublicKey = "";
+  try { communityLinks = communityLinksEl ? JSON.parse(communityLinksEl.textContent || '{}') : {}; } catch(e){ communityLinks = {}; console.error(e); }
+  try { vapidPublicKey = vapidEl ? JSON.parse(vapidEl.textContent || '""') : ""; } catch(e){ vapidPublicKey = ""; console.error(e); }
 
-  /* --- Accessibility & interaction --- */
+  /* --- Interaction handlers (existing features) --- */
   document.querySelectorAll('.question-item').forEach(item => {
     item.addEventListener('click', (e) => {
       if (['BUTTON','A','TEXTAREA','INPUT','SELECT','LABEL'].includes(e.target.tagName)) return;
@@ -194,16 +202,11 @@ document.addEventListener('DOMContentLoaded', () => {
       panel.style.display = isVisible ? 'none' : 'block';
       panel.setAttribute('aria-hidden', String(isVisible ? 'true' : 'false'));
     });
-
     item.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        item.click();
-      }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); item.click(); }
     });
   });
 
-  // Show full OP attempt button
   document.querySelectorAll('.show-full-attempt').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -212,18 +215,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const short = item.querySelector('.op-attempt-short');
       if (!full || !short) return;
       if (full.style.display === 'none' || !full.style.display) {
-        full.style.display = 'block';
-        short.style.display = 'none';
-        btn.textContent = 'Hide full attempt';
+        full.style.display = 'block'; short.style.display = 'none'; btn.textContent = 'Hide full attempt';
       } else {
-        full.style.display = 'none';
-        short.style.display = '';
-        btn.textContent = 'Show full attempt';
+        full.style.display = 'none'; short.style.display = ''; btn.textContent = 'Show full attempt';
       }
     });
   });
 
-  /* --- Copy / Share behavior --- */
   document.querySelectorAll('.copy-answer').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const item = btn.closest('.question-item');
@@ -242,21 +240,17 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       const item = btn.closest('.question-item');
       if(!item) return;
-      const answerEl = item.querySelector('.answer-text');
-      const answer = (answerEl && (answerEl.value ?? answerEl.textContent ?? '') ) || '';
-      const subject = item.dataset?.category ?? '';
+      const answer = (item.querySelector('.answer-text')?.value || '').trim();
+      const subject = item.dataset?.category || '';
       const group = communityLinks[subject] || '';
-      let text = answer.trim();
-      if (group) {
-        if(text) text += "\n\n";
-        text += "Group: " + group;
-      }
+      let text = answer || '';
+      if (group) text += (text ? "\\n\\n" : "") + "Group: " + group;
       const url = 'https://api.whatsapp.com/send?text=' + encodeURIComponent(text || '(no text)');
       window.open(url, '_blank');
     });
   });
 
-  /* --- Theme toggle --- */
+  /* --- Theme --- */
   function applyTheme(theme) {
     if (theme) document.documentElement.setAttribute('data-theme', theme);
     else document.documentElement.removeAttribute('data-theme');
@@ -269,14 +263,12 @@ document.addEventListener('DOMContentLoaded', () => {
       applyTheme(cur === 'dark' ? 'light' : 'dark');
     });
   }
-  const saved = localStorage.getItem('site-theme');
-  if (saved) applyTheme(saved);
+  const saved = localStorage.getItem('site-theme'); if (saved) applyTheme(saved);
 
   /* --- Search & Sort --- */
   const searchBox = document.getElementById('searchBox');
   const sortSelect = document.getElementById('sortSelect');
   const list = document.getElementById('questionsList');
-
   function filterList() {
     if (!searchBox || !list) return;
     const q = (searchBox.value || '').toLowerCase();
@@ -286,38 +278,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   if (searchBox) searchBox.addEventListener('input', filterList);
-
   function sortListBy(option) {
     if (!list) return;
     const nodes = Array.from(list.children).filter(n => n.style.display !== 'none');
     if (option === 'new') {
-      nodes.sort((a,b) => {
-        const ta = a.dataset.time || '';
-        const tb = b.dataset.time || '';
-        const da = ta ? Date.parse(ta) : 0;
-        const db = tb ? Date.parse(tb) : 0;
-        return db - da;
-      });
+      nodes.sort((a,b) => (Date.parse(b.dataset.time || 0) - Date.parse(a.dataset.time || 0)));
     } else if (option === 'old') {
-      nodes.sort((a,b) => {
-        const ta = a.dataset.time || '';
-        const tb = b.dataset.time || '';
-        const da = ta ? Date.parse(ta) : 0;
-        const db = tb ? Date.parse(tb) : 0;
-        return da - db;
-      });
-    } else {
-      return;
-    }
+      nodes.sort((a,b) => (Date.parse(a.dataset.time || 0) - Date.parse(b.dataset.time || 0)));
+    } else return;
     nodes.forEach(n => list.appendChild(n));
   }
-
   if (sortSelect) {
     sortSelect.addEventListener('change', () => sortListBy(sortSelect.value));
     if (sortSelect.value && sortSelect.value !== 'none') sortListBy(sortSelect.value);
   }
 
-  /* --- Client-side validation for main form: require question + attempt --- */
+  /* --- Form validation --- */
   const newQForm = document.getElementById('new-question-form');
   if (newQForm) {
     newQForm.addEventListener('submit', (ev) => {
@@ -329,7 +305,105 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  /* --- Service worker registration & subscription logic (debug-friendly) --- */
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
+  async function registerAndSubscribe(subject, btn) {
+    console.log("[subscribe] start", { subject, vapidPublicKey });
+    if (!('serviceWorker' in navigator)) {
+      alert('Service workers are not supported in this browser.');
+      return;
+    }
+    if (!vapidPublicKey) {
+      alert('Push not configured on the server (no VAPID key).');
+      console.error("Missing VAPID public key. Server value:", vapidPublicKey);
+      return;
+    }
+
+    try {
+      console.log("[subscribe] registering service worker...");
+      const reg = await navigator.serviceWorker.register('{{ url_for("static", filename="service-worker.js") }}');
+      await navigator.serviceWorker.ready;
+      console.log("[subscribe] service worker ready:", reg);
+
+      const permission = await Notification.requestPermission();
+      console.log("[subscribe] notification permission:", permission);
+      if (permission !== 'granted') {
+        alert('Please allow notifications to subscribe.');
+        return;
+      }
+
+      let sub = await reg.pushManager.getSubscription();
+      console.log("[subscribe] existing subscription:", sub);
+      if (!sub) {
+        try {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+          });
+        } catch (err) {
+          console.error("pushManager.subscribe failed:", err);
+          alert("Subscription failed: " + (err && err.message ? err.message : String(err)));
+          return;
+        }
+      }
+
+      console.log("[subscribe] obtained subscription object:", sub);
+      // send to server
+      const res = await fetch('{{ url_for("save_subscription_route") }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: sub, subject: subject, client_id: 'web' })
+      });
+
+      let jsonRes;
+      try { jsonRes = await res.json(); } catch (e) { jsonRes = null; }
+
+      if (!res.ok) {
+        console.error("[subscribe] server returned error", res.status, jsonRes);
+        alert('Failed to save subscription on server: ' + (jsonRes && jsonRes.error ? jsonRes.error : res.statusText));
+        return;
+      }
+
+      if (jsonRes && jsonRes.ok) {
+        if (btn) { 
+          btn.textContent = 'Subscribed ✓'; 
+          btn.classList.add('subscribed');
+          btn.disabled = true; 
+        }
+        alert('Subscribed successfully ✓');
+        console.log("[subscribe] subscription saved on server");
+      } else {
+        console.error("[subscribe] unexpected server response", jsonRes);
+        alert('Subscription saved? server response: ' + JSON.stringify(jsonRes));
+      }
+
+    } catch (err) {
+      console.error("[subscribe] unexpected error:", err);
+      alert('Subscription failed (see console).');
+    }
+  }
+
+  // wire subscribe buttons
+  document.querySelectorAll('.subscribe-btn').forEach(btn => {
+    // visually mark buttons if we can detect existing subscription for this subject
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const subj = btn.dataset.subject || '';
+      registerAndSubscribe(subj, btn);
+    });
+  });
+
 });
 </script>
-
 {% endblock %}

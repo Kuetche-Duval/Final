@@ -1,4 +1,4 @@
-# drive.py
+# drive.py (corrected)
 import os
 import logging
 import io
@@ -81,8 +81,7 @@ def create_file_in_folder(folder_id, name, content_bytes, mime_type="application
         logger.exception("create_file_in_folder failed for folder %s", folder_id)
         return None
 
-# existing listing helpers (optional, kept from earlier version)
-# drive.py — update/replace the from_google_drive function
+# existing listing helpers
 def from_google_drive(base_folder_id, mimeType=None):
     """
     Return a list of file metadata dicts inside a Drive folder.

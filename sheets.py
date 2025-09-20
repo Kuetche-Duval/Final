@@ -1,8 +1,9 @@
-# sheets.py (improved)
+# sheets.py (improved + subscription helpers)
 import os
 import time
 import logging
 import threading
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -221,3 +222,42 @@ def read_rules():
         _cache["rules"] = data
         _cache["rules_ts"] = time.time()
     return data
+
+# --- Subscription helpers (store subscriptions as special rows by default) ---
+def save_subscription(subject, client_id, subscription_obj):
+    """
+    Save a push subscription. By default this appends a special row marked with __subscription__.
+    You can change schema to store subscriptions in a dedicated sheet.
+    """
+    try:
+        timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
+        append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp])
+    except Exception:
+        logger.exception("save_subscription failed")
+        raise
+
+def list_subscriptions(subject=None):
+    """
+    Return list of subscription dicts (each element is {'subject':..., 'client_id':..., 'subscription': {...}}).
+    If subject is provided, filter by subject.
+    """
+    out = []
+    rows = get_questions() or []
+    for row in rows:
+        try:
+            if len(row) >= 4 and str(row[0]) == "__subscription__":
+                subj = str(row[1])
+                client_id = row[2]
+                try:
+                    sub = json.loads(row[3])
+                except Exception:
+                    sub = None
+                if subject:
+                    if subj == subject and sub:
+                        out.append({"subject": subj, "client_id": client_id, "subscription": sub})
+                else:
+                    if sub:
+                        out.append({"subject": subj, "client_id": client_id, "subscription": sub})
+        except Exception:
+            continue
+    return out

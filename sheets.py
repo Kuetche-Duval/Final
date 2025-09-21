@@ -88,10 +88,38 @@ def from_google_sheets():
     return data
 
 def check_date():
+    """
+    Return list of tuples (sheet_row_index, row_values) for rows whose Day column
+    matches today's weekday. The returned sheet_row_index is 1-based (as in Google Sheets).
+    This makes templates simpler and avoids index arithmetic errors.
+    """
     try:
-        week = datetime.now().strftime("%a").upper()
-        col = get_work_sheet(timetable_key).col_values(2)
-        return [(i, val) for i, val in enumerate(col, start=1) if val == week]
+        # read full sheet so we can return row contents
+        ws = get_work_sheet(timetable_key)
+        all_rows = _retry(ws.get_all_values)
+
+        if not all_rows:
+            return []
+
+        # normalize today's weekday (e.g. 'Mon', 'MONDAY', etc.)
+        today_short = datetime.now().strftime("%a").upper()   # 'MON'
+        today_full = datetime.now().strftime("%A").upper()    # 'MONDAY'
+
+        matches = []
+        # iterate rows with 1-based index
+        for idx, row in enumerate(all_rows, start=1):
+            if not row or len(row) == 0:
+                continue
+            # look at first column (Day)
+            first = str(row[0]).strip().upper()
+            if not first:
+                continue
+            # match common variations
+            if (first.startswith(today_short) or
+                first.startswith(today_full[:3]) or
+                today_full in first):
+                matches.append((idx, row))
+        return matches
     except Exception:
         logger.exception("check_date failed")
         return []

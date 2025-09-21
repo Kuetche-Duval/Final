@@ -99,7 +99,6 @@ def _is_likely_valid_vapid_public_key(s):
     if not s:
         return False
     key = s.strip()
-    # normalize urlsafe base64 into normal base64
     key = key.replace('-', '+').replace('_', '/')
     padding = '=' * ((4 - (len(key) % 4)) % 4)
     try:
@@ -107,10 +106,8 @@ def _is_likely_valid_vapid_public_key(s):
     except (binascii.Error, Exception) as e:
         app.logger.warning("VAPID_PUBLIC_KEY appears not to be valid base64: %s", e)
         return False
-    # typical uncompressed EC public key is 65 bytes (0x04 + 32 + 32)
     if len(b) in (65, 64):
         return True
-    # still accept but warn
     app.logger.warning("VAPID_PUBLIC_KEY decoded length is %d bytes (expected ~65). It might still work but double-check.", len(b))
     return True
 
@@ -142,7 +139,7 @@ except Exception as e:
     def delete_rows_by_indices(*a, **k): app.logger.warning("delete_rows_by_indices fallback")
     def delete_rows_by_subject(*a, **k): app.logger.warning("delete_rows_by_subject fallback")
     def save_subscription(subject, client_id, subscription): raise NotImplementedError
-    def list_subscriptions(subject): raise NotImplementedError
+    def list_subscriptions(subject=None): return []
     def delete_subscriptions_by_endpoint(endpoint): app.logger.warning("delete_subscriptions_by_endpoint fallback")
 
 try:
@@ -310,77 +307,137 @@ def drive_image(file_id):
             return send_file(small_png, mimetype="image/png")
 
 # -------------------------
-# Subscriptions helpers
+# Subscriptions helpers (improved)
 # -------------------------
+def _is_valid_subscription_obj(sub):
+    """Return True if `sub` looks like a PushSubscription dict with an endpoint."""
+    if not sub or not isinstance(sub, dict):
+        return False
+    endpoint = sub.get("endpoint") or sub.get("url")
+    if not endpoint or not isinstance(endpoint, str):
+        return False
+    # optional structure check: many browsers include 'keys' dict
+    if sub.get("keys") and isinstance(sub.get("keys"), dict):
+        return True
+    # allow looser objects that still have endpoint
+    return True
+
+def _normalize_subject(s):
+    return (s or "Other").strip()
+
 def _save_subscription_to_sheet(subject, client_id, subscription_obj):
     """
-    Try to save via sheets.save_subscription(subject, client_id, subscription)
-    Fallback: append_row(['__subscription__', subject, client_id, json.dumps(subscription), timestamp])
+    Persist subscription. Prefer `save_subscription` (sheets helper) but fall back to
+    appending a sentinel row to the questions sheet. Ensures we don't duplicate the
+    same endpoint+subject.
+    Returns True on success, False on failure.
     """
     try:
+        if not _is_valid_subscription_obj(subscription_obj):
+            app.logger.warning("Attempted to save invalid subscription object: %r", subscription_obj)
+            return False
+
+        subject = _normalize_subject(subject)
+        endpoint = subscription_obj.get("endpoint")
+
+        # prefer dedicated sheets helper
         if SHEETS_AVAILABLE:
             try:
                 save_subscription(subject, client_id or "", subscription_obj)
                 return True
             except Exception as e:
-                app.logger.debug("sheets.save_subscription failed: %s", e)
-        # fallback append (append_row already exists; we dedupe in sheets.save_subscription, but in fallback we'll mimic dedupe)
+                app.logger.debug("sheets.save_subscription failed (will fallback): %s", e)
+
+        # fallback: scan existing rows to avoid dupes
         timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
-        # Ensure we don't duplicate the same endpoint+subject in fallback
         try:
-            # inspect existing rows to dedupe
-            rows = get_questions() or []
-            endpoint = subscription_obj.get("endpoint")
+            rows = []
+            try:
+                rows = get_questions() or []
+            except Exception:
+                app.logger.debug("get_questions not available for dedupe fallback")
+
             found = False
             for r in rows:
                 try:
-                    if len(r) >= 4 and str(r[0]) == "__subscription__":
+                    if len(r) >= 1 and str(r[0]) == "__subscription__":
+                        subj = str(r[1]) if len(r) > 1 else "Other"
+                        sub_json = r[3] if len(r) > 3 else None
+                        if not sub_json:
+                            continue
                         try:
-                            sub = json.loads(r[3])
+                            parsed = json.loads(sub_json)
                         except Exception:
-                            sub = None
-                        if sub and sub.get("endpoint") == endpoint and str(r[1]).strip() == (subject or "Other"):
+                            parsed = None
+                        if parsed and parsed.get("endpoint") == endpoint and _normalize_subject(subj) == subject:
                             found = True
                             break
                 except Exception:
                     continue
+
             if not found:
-                append_row(["__subscription__", subject, client_id or "", json.dumps(subscription_obj), timestamp])
+                # store a minimal sanitized copy
+                safe_sub = {"endpoint": endpoint, "keys": subscription_obj.get("keys", {})}
+                append_row(["__subscription__", subject, client_id or "", json.dumps(safe_sub), timestamp])
+            return True
         except Exception:
-            # last resort: append anyway
-            append_row(["__subscription__", subject, client_id or "", json.dumps(subscription_obj), timestamp])
-        return True
+            app.logger.exception("Fallback append for subscription failed")
+            return False
     except Exception:
-        app.logger.exception("Failed saving subscription via fallback")
+        app.logger.exception("Unexpected error in _save_subscription_to_sheet")
         return False
 
 def _load_subscriptions_for_subject(subject):
     """
-    Try sheets.list_subscriptions(subject) -> return list of subscription dicts
-    Fallback: scan get_questions rows for "__subscription__" entries and parse json
+    Return list of subscription dicts for a subject. Uses `list_subscriptions` when available
+    otherwise scans the questions sheet sentinel rows. Subject comparison is case-insensitive.
     """
     subs = []
     try:
+        subject_norm = _normalize_subject(subject)
         if SHEETS_AVAILABLE:
             try:
-                raw = list_subscriptions(subject)
-                # expected list of dicts with key 'subscription' or equivalent
+                raw = list_subscriptions(subject_norm) or []
+                # allow list_subscriptions to return either list of dicts or rows
                 for r in raw:
-                    if isinstance(r, dict) and r.get("subscription"):
-                        subs.append(r.get("subscription"))
-                # allow if list_subscriptions returned raw push subscription dicts
+                    if isinstance(r, dict):
+                        sub = r.get("subscription") or r.get("sub") or r.get("push") or r
+                        if isinstance(sub, dict) and _is_valid_subscription_obj(sub):
+                            # if subject filter was used by helper, include
+                            if not subject or _normalize_subject(r.get("subject") or "") == subject_norm:
+                                subs.append(sub)
+                    elif isinstance(r, (list, tuple)) and len(r) > 0:
+                        try:
+                            if r[0] == "__subscription__":
+                                sub_json = r[3] if len(r) > 3 else None
+                                if sub_json:
+                                    parsed = json.loads(sub_json)
+                                    if _is_valid_subscription_obj(parsed):
+                                        if _normalize_subject(r[1]) == subject_norm:
+                                            subs.append(parsed)
+                        except Exception:
+                            continue
                 if subs:
                     return subs
             except Exception as e:
                 app.logger.debug("sheets.list_subscriptions failed: %s", e)
-        # fallback: scan get_questions rows
-        raw = get_questions() or []
-        for row in raw:
+
+        # fallback scan
+        rows = get_questions() or []
+        for row in rows:
             try:
-                if len(row) >= 4 and str(row[0]) == "__subscription__" and str(row[1]) == subject:
-                    sub_json = row[3]
-                    sub = json.loads(sub_json)
-                    subs.append(sub)
+                if len(row) >= 1 and str(row[0]) == "__subscription__":
+                    subj = _normalize_subject(row[1] if len(row) > 1 else "Other")
+                    sub_json = row[3] if len(row) > 3 else None
+                    if not sub_json:
+                        continue
+                    parsed = None
+                    try:
+                        parsed = json.loads(sub_json)
+                    except Exception:
+                        continue
+                    if subj == subject_norm and _is_valid_subscription_obj(parsed):
+                        subs.append(parsed)
             except Exception:
                 continue
     except Exception:
@@ -398,8 +455,8 @@ def send_push_to_subject(subject, question_text, attempt_text):
         return {"sent": 0, "errors": ["no subscribers"]}
 
     title = f"New question in {subject}"
-    q_preview = question_text.strip()
-    a_preview = attempt_text.strip()
+    q_preview = (question_text or "").strip()
+    a_preview = (attempt_text or "").strip()
     if len(q_preview) > 140: q_preview = q_preview[:137] + "…"
     if len(a_preview) > 180: a_preview = a_preview[:177] + "…"
     body = f"Q: {q_preview}\nA: {a_preview}"
@@ -422,35 +479,50 @@ def send_push_to_subject(subject, question_text, attempt_text):
     errors = []
     for sub in subs:
         try:
-            webpush(
-                subscription_info=sub,
-                data=json.dumps(payload),
-                vapid_private_key=VAPID_PRIVATE_KEY,
-                vapid_claims={"sub": VAPID_SUBJECT}
-            )
-            sent += 1
-        except WebPushException as ex:
-            app.logger.warning("WebPushException for subject %s: %s", subject, ex)
-            errors.append(str(ex))
-            # attempt cleanup if stale
+            if isinstance(sub, str):
+                try:
+                    sub = json.loads(sub)
+                except Exception:
+                    app.logger.debug("Skipping invalid subscription string: %s", sub)
+                    errors.append("invalid subscription format")
+                    continue
+            if not _is_valid_subscription_obj(sub):
+                errors.append("invalid subscription object")
+                continue
+
             try:
-                resp = getattr(ex, 'response', None)
-                status = None
-                if resp and hasattr(resp, 'status_code'):
-                    status = resp.status_code
-                if status in (404, 410):
-                    endpoint = sub.get('endpoint') if isinstance(sub, dict) else None
-                    if endpoint:
-                        app.logger.info("Subscription endpoint %s returned %s: deleting subscription", endpoint, status)
-                        try:
-                            delete_subscriptions_by_endpoint(endpoint)
-                        except Exception:
-                            app.logger.exception("Failed deleting stale subscription for endpoint %s", endpoint)
-            except Exception:
-                app.logger.exception("Exception while handling WebPushException cleanup")
-        except Exception as ex:
-            app.logger.exception("webpush failed: %s", ex)
-            errors.append(str(ex))
+                webpush(
+                    subscription_info=sub,
+                    data=json.dumps(payload),
+                    vapid_private_key=VAPID_PRIVATE_KEY,
+                    vapid_claims={"sub": VAPID_SUBJECT}
+                )
+                sent += 1
+            except WebPushException as ex:
+                app.logger.warning("WebPushException for subject %s: %s", subject, ex)
+                errors.append(str(ex))
+                # attempt cleanup if stale
+                try:
+                    resp = getattr(ex, 'response', None)
+                    status = None
+                    if resp and hasattr(resp, 'status_code'):
+                        status = resp.status_code
+                    if status in (404, 410):
+                        endpoint = sub.get('endpoint') if isinstance(sub, dict) else None
+                        if endpoint:
+                            app.logger.info("Subscription endpoint %s returned %s: deleting subscription", endpoint, status)
+                            try:
+                                delete_subscriptions_by_endpoint(endpoint)
+                            except Exception:
+                                app.logger.exception("Failed deleting stale subscription for endpoint %s", endpoint)
+                except Exception:
+                    app.logger.exception("Exception while handling WebPushException cleanup")
+            except Exception as ex:
+                app.logger.exception("webpush failed: %s", ex)
+                errors.append(str(ex))
+        except Exception:
+            app.logger.exception("Error while processing subscription record")
+            errors.append("processing error")
     return {"sent": sent, "errors": errors}
 
 # -------------------------
@@ -561,12 +633,22 @@ def save_subscription_route():
     Saves via sheets.save_subscription if available else fallback to append row.
     """
     try:
-        payload = request.get_json(force=True)
-        subscription = payload.get("subscription")
-        subject = (payload.get("subject") or "").strip() or "Other"
-        client_id = payload.get("client_id", "")
-        if not subscription:
-            return jsonify({"ok": False, "error": "subscription required"}), 400
+        payload = request.get_json(force=True, silent=True) or {}
+        # Some clients POST the subscription directly without wrapper
+        subscription = payload.get("subscription") if isinstance(payload, dict) and payload.get("subscription") else payload.get("push") if isinstance(payload, dict) and payload.get("push") else payload
+        # normalize if browser sent as string
+        if isinstance(subscription, str):
+            try:
+                subscription = json.loads(subscription)
+            except Exception:
+                pass
+
+        subject = _normalize_subject((payload.get("subject") if isinstance(payload, dict) else None) or request.args.get("subject") or "Other")
+        client_id = payload.get("client_id") if isinstance(payload, dict) else None
+
+        if not subscription or not _is_valid_subscription_obj(subscription):
+            return jsonify({"ok": False, "error": "subscription required and must include endpoint"}), 400
+
         ok = _save_subscription_to_sheet(subject, client_id, subscription)
         if ok:
             return jsonify({"ok": True}), 200
@@ -624,15 +706,18 @@ def subscriptions_delete():
     POST { endpoint: "..." } -> deletes subscription rows matching endpoint (either in dedicated sheet or fallback questions sheet)
     """
     try:
-        data = request.get_json(force=True)
-        endpoint = (data.get("endpoint") or "").strip()
+        data = request.get_json(force=True, silent=True) or {}
+        endpoint = (data.get("endpoint") or "").strip() if isinstance(data, dict) else ""
         if not endpoint:
             return jsonify({"ok": False, "error": "endpoint required"}), 400
+        deleted = False
         try:
-            delete_subscriptions_by_endpoint(endpoint)
-        except Exception as e:
-            app.logger.exception("delete_subscriptions_by_endpoint failed: %s", e)
-            # fall back to best-effort: try scanning get_questions and delete rows with matching endpoint
+            try:
+                delete_subscriptions_by_endpoint(endpoint)
+                deleted = True
+            except Exception as e:
+                app.logger.debug("delete_subscriptions_by_endpoint failed (will try fallback): %s", e)
+            # fallback: scan questions sheet and remove matching rows
             try:
                 rows = get_questions() or []
                 indices = []
@@ -649,9 +734,12 @@ def subscriptions_delete():
                         continue
                 if indices:
                     delete_rows_by_indices(indices)
+                    deleted = True
             except Exception:
                 app.logger.exception("Fallback deletion also failed")
-        return jsonify({"ok": True})
+        except Exception as e:
+            app.logger.exception("subscriptions_delete inner failed: %s", e)
+        return jsonify({"ok": True, "deleted": deleted})
     except Exception as e:
         app.logger.exception("subscriptions_delete top-level failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -754,7 +842,6 @@ def admin_test_push():
 
 # -------------------------
 # Coding routes / admin
-# (unchanged from your previous file)
 # -------------------------
 @app.route("/coding")
 def coding_page():

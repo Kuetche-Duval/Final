@@ -1,14 +1,8 @@
 // static/service-worker.js
-// Minimal, practical service worker for caching + push notifications.
-//
-// Notes:
-// - This worker expects push event data to be JSON (title, body, url, tag, renotify, icon).
-// - If your push sender sends plain text, the code will try to parse it as JSON and fall back to text.
-//
-// Keep this file under your project's static folder so templates can register it with:
-// navigator.serviceWorker.register('{{ url_for("static", filename="service-worker.js") }}')
+// Robust service worker for caching + push notifications.
+// Ensure this file is served at /service-worker.js (registered with scope '/')
 
-const CACHE_NAME = 'newtons-nerds-cache-v1';
+const CACHE_NAME = 'newtons-nerds-cache-v2';
 const URLS_TO_CACHE = [
   '/',
   '/questions',
@@ -25,7 +19,9 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll(URLS_TO_CACHE).catch(() => {/* ignore failures */}))
+      .catch(e => console.error('[sw] cache install failed', e))
   );
+  console.log('[sw] install');
 });
 
 // activate: remove old caches
@@ -36,34 +32,32 @@ self.addEventListener('activate', event => {
     ))
   );
   self.clients.claim();
+  console.log('[sw] activate');
 });
 
-// fetch: cache-first for navigation & same-origin requests, network fallback otherwise
+// fetch: network-first for navigation to get updates quickly, cache-first for same-origin assets
 self.addEventListener('fetch', event => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // only handle GET requests (avoid interfering with POSTs)
   if (req.method !== 'GET') return;
 
-  // For navigation requests, prefer network but fallback to cache (so page updates when online)
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req).then(resp => {
-        // put a copy in cache for offline fallback
-        const copy = resp.clone();
-        caches.open(CACHE_NAME).then(c => c.put(req, copy)).catch(()=>{});
+        try {
+          const copy = resp.clone();
+          caches.open(CACHE_NAME).then(c => c.put(req, copy)).catch(()=>{});
+        } catch (e) {}
         return resp;
       }).catch(() => caches.match(req).then(r => r || caches.match('/')))
     );
     return;
   }
 
-  // For same-origin assets, try cache first, then network
   if (url.origin === location.origin) {
     event.respondWith(
       caches.match(req).then(cached => cached || fetch(req).then(resp => {
-        // store in cache for next time
         try {
           const respClone = resp.clone();
           caches.open(CACHE_NAME).then(c => c.put(req, respClone)).catch(()=>{});
@@ -72,20 +66,17 @@ self.addEventListener('fetch', event => {
       }).catch(() => caches.match('/')))
     );
   }
-  // else: let the browser handle cross-origin requests (e.g., cdn)
 });
 
 // Helper: parse push payload
 async function _parsePushData(event) {
   if (!event.data) return null;
   try {
-    // try JSON first
     return event.data.json();
   } catch (e) {
     try {
-      // fallback to text -> treat as body
-      const text = event.data.text();
-      return { title: 'New message', body: await text };
+      const text = await event.data.text();
+      return { title: 'New message', body: text };
     } catch (e2) {
       return null;
     }
@@ -96,9 +87,9 @@ async function _parsePushData(event) {
 self.addEventListener('push', event => {
   event.waitUntil((async () => {
     const payload = await _parsePushData(event) || {};
-    const title = payload.title || payload.heading || 'Notification';
+    const title = payload.title || payload.heading || 'Newton\'s Nerds';
     const body = payload.body || payload.message || '';
-    const url = (payload.url || '/');
+    const url = (payload.url || '/questions');
     const tag = payload.tag || undefined;
     const renotify = !!payload.renotify;
 
@@ -111,19 +102,14 @@ self.addEventListener('push', event => {
       badge,
       tag,
       renotify,
-      data: {
-        url,
-        payload
-      },
-      // you can add actions here if you want (example commented)
-      // actions: [{action: 'open', title: 'Open'}]
+      data: { url, payload },
     };
 
     try {
       await self.registration.showNotification(title, options);
+      console.log('[sw] showNotification', title, options);
     } catch (err) {
-      // fall back to postMessage (some browsers)
-      console.error('showNotification failed', err);
+      console.error('[sw] showNotification failed', err);
     }
   })());
 });
@@ -134,23 +120,42 @@ self.addEventListener('notificationclick', event => {
   const url = (event.notification && event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
-      // Try to focus an existing open window/tab with same origin
-      for (let i = 0; i < windowClients.length; i++) {
-        const client = windowClients[i];
+      for (const client of windowClients) {
         try {
-          const u = new URL(client.url);
-          if (u.pathname === new URL(url, location.origin).pathname) {
+          const clientUrl = new URL(client.url, location.origin);
+          const targetUrl = new URL(url, location.origin);
+          if (clientUrl.pathname === targetUrl.pathname) {
             return client.focus();
           }
-        } catch (e) {}
+        } catch (e) { /* ignore */ }
       }
-      // Otherwise open a new window/tab
-      return clients.openWindow(url);
+      if (clients.openWindow) return clients.openWindow(url);
     })
   );
 });
 
-// notificationclose: currently no-op, but could be used for analytics
+// optional notificationclose
 self.addEventListener('notificationclose', event => {
-  // event.notification.data may contain useful info
+  // could post analytics
+});
+
+// handle subscriptionchange - notify clients so they can re-subscribe if needed
+self.addEventListener('pushsubscriptionchange', function(event) {
+  console.log('[sw] pushsubscriptionchange', event);
+  event.waitUntil(
+    self.clients.matchAll({ includeUncontrolled: true }).then(clientsArr => {
+      for (const c of clientsArr) {
+        try {
+          c.postMessage({ type: 'SUBSCRIPTION_LOST' });
+        } catch (e) {
+          console.debug('[sw] could not message client', e);
+        }
+      }
+    })
+  );
+});
+
+// message handler for debugging
+self.addEventListener('message', function(evt) {
+  console.log('[sw] msg from page:', evt.data);
 });

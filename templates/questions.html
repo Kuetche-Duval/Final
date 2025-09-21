@@ -26,10 +26,11 @@
   .page-header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
   .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .question-list { list-style:none; padding:0; margin:0; display:grid; gap:10px; }
-  .question-item { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; padding:12px 14px; border-radius:12px; background: rgba(0,0,0,0.02); cursor: pointer; }
-  .category-badge { background: rgba(37,211,102,0.12); color: var(--accent-green); padding:4px 8px; border-radius:10px; font-weight:700; font-size:.86rem; }
+  .question-item { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; padding:12px 14px; border-radius:12px; background: rgba(0,0,0,0.02); cursor: pointer; min-width:0; }
+  .question-item .left { min-width:0; flex:1 1 auto; }
+  .category-badge { background: rgba(37,211,102,0.12); color: var(--accent-green); padding:4px 8px; border-radius:10px; font-weight:700; font-size:.86rem; white-space:nowrap; }
   .author { color: var(--muted); font-weight:700; font-size:.88rem; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .message-text { color: var(--text); font-size: .97rem; white-space:pre-wrap; word-break:break-word; }
+  .message-text { color: var(--text); font-size: .97rem; white-space:pre-wrap; word-break:break-word; overflow-wrap:break-word; hyphens:auto; }
   .op-attempt { margin-top:8px; padding:8px; background:rgba(0,0,0,0.02); border-radius:8px; color:var(--muted); font-size:.92rem; }
   .op-attempt small { color:var(--muted); display:block; margin-bottom:6px; font-weight:700; }
   .btn-sub { font-size: .85rem; padding:6px 8px; border-radius:8px; }
@@ -38,7 +39,11 @@
   .subscribe-btn { background:#fff3cd; border:1px solid #ffeeba; color:#856404; }
   .subscribe-btn.subscribed { background:#d4edda; border-color:#c3e6cb; color:#155724; }
   .status-inline { margin-left:8px; font-size:0.85rem; color:var(--muted); }
-  @media (max-width:576px) { .question-item{flex-direction:column} .author { max-width:140px; } }
+  /* ensure children don't overflow and wrap nicely */
+  .meta-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0; }
+  .meta-right { min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
+  @media (max-width:992px) { .question-item{flex-direction:column; align-items:stretch} .author { max-width:100%; white-space:normal; } .meta-right { text-align:left; } }
+  @media (max-width:576px) { .question-item{padding:10px} .author { max-width:140px; } .message-text { font-size:0.95rem } }
 </style>
 {% endblock %}
 
@@ -127,11 +132,13 @@
             data-question="{{ text|e }}"
             data-attempt="{{ attempt|e }}"
             data-time="{{ timestr|e }}">
-          <div style="min-width:0; max-width:75%">
-            <div class="d-flex gap-2 align-items-center mb-1">
-              <div class="category-badge">{{ cat }}</div>
-              <div class="author">{{ author }}</div>
-              <div class="small text-muted ms-auto">{{ timestr }}</div>
+          <div class="left">
+            <div class="d-flex justify-content-between align-items-start mb-1 meta-row">
+              <div style="display:flex;gap:8px;align-items:center;min-width:0">
+                <div class="category-badge">{{ cat }}</div>
+                <div class="author" title="{{ author }}">{{ author }}</div>
+              </div>
+              <div class="meta-right small text-muted">{{ timestr }}</div>
             </div>
 
             <div class="message-text">{{ text }}</div>
@@ -170,7 +177,7 @@
             </div>
           </div>
 
-          <div style="min-width:80px; text-align:right">
+          <div style="min-width:80px; text-align:right" class="meta-right-small">
             <div class="small text-muted">Asked by {{ author }}</div>
           </div>
         </li>
@@ -332,7 +339,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.textContent = 'Subscribed ✓';
         btn.classList.add('subscribed');
         btn.dataset.state = 'subscribed';
-        btn.disabled = false; // keep clickable to allow unsubscribe (global)
+        btn.disabled = false;
       } else {
         btn.textContent = '🔔 Subscribe';
         btn.classList.remove('subscribed');
@@ -348,11 +355,28 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     try {
-      registrationForPush = await navigator.serviceWorker.register('/service-worker.js');
+      // register at root for broadest scope (important for mobile)
+      registrationForPush = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+      try { await registrationForPush.update(); } catch(e){ /* ignore */ }
       await navigator.serviceWorker.ready;
-      currentSubscription = await registrationForPush.pushManager.getSubscription();
+
+      // listen for messages from SW (pushsubscriptionchange notifications)
+      navigator.serviceWorker.addEventListener('message', (ev) => {
+        console.log('[page] SW message', ev.data);
+        if (ev.data && ev.data.type === 'SUBSCRIPTION_LOST') {
+          // user-friendly hint (could show toast)
+          console.warn('Push subscription possibly lost. Consider re-subscribing.');
+        }
+      });
+
+      try {
+        currentSubscription = await registrationForPush.pushManager.getSubscription();
+      } catch (e) {
+        console.error('getSubscription failed', e);
+        currentSubscription = null;
+      }
+
       if (currentSubscription && currentSubscription.endpoint) {
-        // ask server which subjects it has for this endpoint
         try {
           const resp = await fetch('/subscriptions/check?endpoint=' + encodeURIComponent(currentSubscription.endpoint));
           if (resp.ok) {
@@ -368,6 +392,7 @@ document.addEventListener('DOMContentLoaded', () => {
         serverSubjectsForEndpoint = [];
       }
       updateSubscribeButtonsUI();
+      console.log("[subscribe] SW ready. subscription:", !!currentSubscription);
     } catch (err) {
       console.error("[subscribe] SW register/getSubscription failed:", err);
     }
@@ -379,10 +404,10 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // request permission
+    // request permission on user gesture
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
-      alert('Please allow notifications to subscribe.');
+      alert('Please allow notifications to subscribe (check browser settings).');
       return;
     }
 
@@ -399,6 +424,7 @@ document.addEventListener('DOMContentLoaded', () => {
           applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
         });
       }
+
       currentSubscription = sub;
       const subObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
 
@@ -416,15 +442,11 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       if (jsonRes && jsonRes.ok) {
-        // update local serverSubjectsForEndpoint (avoid duplicates)
         if (!serverSubjectsForEndpoint.includes(subject)) serverSubjectsForEndpoint.push(subject);
         updateSubscribeButtonsUI();
-        if (btn) {
-          btn.textContent = 'Subscribed ✓';
-          btn.classList.add('subscribed');
-        }
-        // small feedback
+        if (btn) { btn.textContent = 'Subscribed ✓'; btn.classList.add('subscribed'); }
         try { await navigator.serviceWorker.ready; } catch(e){}
+        console.log('[subscribe] subscribed on endpoint', currentSubscription && currentSubscription.endpoint);
         alert('Subscribed successfully ✓');
       } else {
         console.error("[subscribe] unexpected server response", jsonRes);
@@ -432,7 +454,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (err) {
       console.error("pushManager.subscribe failed:", err);
-      alert("Subscription failed: " + (err && err.message ? err.message : String(err)));
+      if (err && err.name === 'NotAllowedError') {
+        alert('Notifications are blocked for this site. Check your phone settings (Site settings → Notifications).');
+      } else if (err && err.name === 'SecurityError') {
+        alert('Push subscription failed due to security restrictions (must be HTTPS).');
+      } else {
+        alert("Subscription failed: " + (err && err.message ? err.message : String(err)));
+      }
     }
   }
 
@@ -447,15 +475,11 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('No active subscription to unsubscribe.');
         return;
       }
-      // confirm global endpoint unsubscribe (it removes server mappings for this endpoint)
       if (!confirm('Unsubscribe this browser from all subjects? This will remove saved subscriptions stored on the server for this browser.')) {
         return;
       }
       const ok = await sub.unsubscribe();
-      if (!ok) {
-        console.warn("sub.unsubscribe returned false");
-      }
-      // tell server to delete records for this endpoint
+      if (!ok) console.warn("sub.unsubscribe returned false");
       try {
         await fetch('/subscriptions/delete', {
           method: 'POST',
@@ -483,7 +507,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const subj = btn.dataset.subject || 'Other';
     const state = btn.dataset.state || 'none';
     if (state === 'subscribed') {
-      // user requested unsubscribe (global for endpoint)
+      // unsubscribe globally for endpoint
       unsubscribeEndpoint(btn);
     } else {
       subscribeForSubject(subj, btn);

@@ -76,6 +76,7 @@ main.container, .container {
   justify-content: space-between;
   align-items: center;
   box-shadow: var(--shadow-1);
+  gap: 12px;
 }
 .navbar-brand {
   font-weight: 700;
@@ -143,6 +144,7 @@ main.container, .container {
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
+  min-width: 0;
 }
 .question-list li:hover {
   background: rgba(77,166,255,0.02);
@@ -150,8 +152,8 @@ main.container, .container {
   box-shadow: 0 8px 22px rgba(16,24,40,0.06);
 }
 
-.q-left { flex: 1 1 auto; min-width: 0; }
-.meta-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.q-left { flex: 1 1 auto; min-width:0; }
+.meta-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0; }
 .category-badge {
   font-weight:700;
   color: var(--btn-color);
@@ -159,9 +161,10 @@ main.container, .container {
   padding: 4px 8px;
   border-radius: 8px;
   font-size: .85rem;
+  white-space:nowrap;
 }
 .author { color: var(--muted); font-weight:600; max-width: 240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.message-text { margin-top:6px; white-space: pre-wrap; color: var(--text); }
+.message-text { margin-top:6px; white-space: pre-wrap; color: var(--text); word-break: break-word; overflow-wrap: break-word; hyphens: auto; }
 .message-time { font-size: .78rem; color: var(--muted); min-width:70px; text-align:right; }
 
 /* Focus / keyboard state */
@@ -283,7 +286,7 @@ footer {
   .thumb { height: 120px; }
   .navbar { flex-direction: column; gap: 8px; }
   .question-list li { padding: 10px; }
-  .message-text { font-size: 0.9rem; }
+  .message-text { font-size: 0.95rem; }
   .navbar .container { overflow-x:auto; }
 }
 

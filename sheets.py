@@ -1,4 +1,4 @@
-# sheets.py (improved + subscription helpers)
+# sheets.py (corrected + subscription helpers)
 import os
 import time
 import logging
@@ -18,7 +18,7 @@ SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_acco
 timetable_key = os.environ.get("TIMETABLE_SHEET_KEY")
 questions_key = os.environ.get("QUESTIONS_SHEET_KEY")
 group_rules_key = os.environ.get("GROUP_RULES_SHEET_KEY")
-# subscription sheet key (optional). If not set we store subscription rows in QUESTIONS_SHEET_KEY
+# Fix typo: use QUESTIONS_SUBSCRIPTION_KEY (not QUESTIONS_SUBSCIRPTION_KEY)
 subscription_key = os.environ.get("QUESTIONS_SUBSCIRPTION_KEY")
 
 CACHE_TTL_TIMETABLE = int(os.environ.get("SHEETS_TIMETABLE_TTL", "300"))
@@ -272,7 +272,8 @@ def save_subscription(subject, client_id, subscription_obj):
                 if subscription_obj.get("endpoint") in endpoints:
                     logger.info("Subscription endpoint already exists in subscription sheet; skipping append")
                     return
-                _retry(lambda: ws.append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp], value_input_option="USER_ENTERED", key=subscription_key), attempts=3)
+                # correct call to ws.append_row (do not pass unknown kwargs)
+                _retry(lambda: ws.append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp], value_input_option="USER_ENTERED"), attempts=3)
                 # invalidate questions cache? not necessary (we use subscription sheet), but keep generic invalidation
                 with _cache_lock:
                     _cache["questions"] = None
@@ -297,7 +298,8 @@ def save_subscription(subject, client_id, subscription_obj):
         except Exception:
             logger.exception("Could not scan questions sheet for dedupe; proceeding to append")
 
-        append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp], key=subscription_key)
+        # call append_row with default key (questions_key)
+        append_row(["__subscription__", subject or "Other", client_id or "", json.dumps(subscription_obj), timestamp])
     except Exception:
         logger.exception("save_subscription failed")
         raise
@@ -371,8 +373,7 @@ def delete_subscriptions_by_endpoint(endpoint):
                 if sub and sub.get("endpoint") == endpoint:
                     indices.append(i)
             if indices:
-                # delete using the normal helper (this helper currently deletes rows from QUESTIONS_SHEET_KEY)
-                # We need to delete rows in the subscription sheet itself:
+                # delete directly from subscription sheet
                 idxs = sorted(set(indices), reverse=True)
                 for rownum in idxs:
                     try:

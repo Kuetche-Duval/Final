@@ -99,6 +99,7 @@ def _is_likely_valid_vapid_public_key(s):
     if not s:
         return False
     key = s.strip()
+    # normalize urlsafe base64 into normal base64
     key = key.replace('-', '+').replace('_', '/')
     padding = '=' * ((4 - (len(key) % 4)) % 4)
     try:
@@ -106,8 +107,10 @@ def _is_likely_valid_vapid_public_key(s):
     except (binascii.Error, Exception) as e:
         app.logger.warning("VAPID_PUBLIC_KEY appears not to be valid base64: %s", e)
         return False
+    # typical uncompressed EC public key is 65 bytes (0x04 + 32 + 32)
     if len(b) in (65, 64):
         return True
+    # still accept but warn
     app.logger.warning("VAPID_PUBLIC_KEY decoded length is %d bytes (expected ~65). It might still work but double-check.", len(b))
     return True
 
@@ -198,9 +201,246 @@ def format_time(value):
 app.jinja_env.filters["format_time"] = format_time
 
 # -------------------------
-# Helper: timetable for today
+# Helper: timetable for today (improved, deterministic column detection)
 # -------------------------
 def get_timetable_today():
+    """
+    Return a list of dicts representing today's timetable rows.
+
+    Each dict contains:
+      - row_index: sheet row index (1-based, including header)
+      - day, time, subject, facilitator, link, notes (strings)
+
+    Detection strategy:
+      1) exact header equality (case-insensitive)
+      2) alias matching (contains / substring) with priority list
+      3) fallback to conventional positions if header row length suggests it
+    """
+    try:
+        rows = from_google_sheets() or []
+        if not rows or len(rows) < 2:
+            return []
+
+        header = [str(h).strip() for h in rows[0]]
+        header_lower = [h.lower() for h in header]
+
+        # prioritized alias lists for each logical column
+        aliases = {
+            "day": ["day", "weekday"],
+            "time": ["time", "hour", "period"],
+            "subject": ["subject", "course", "topic"],
+            "facilitator": ["facilitator", "teacher", "instructor", "staff"],
+            "link": ["link", "location", "link/location", "meeting", "url", "meet"],
+            "notes": ["notes", "note", "remarks", "comments"]
+        }
+
+        def find_col_for_alias_list(alias_list):
+            # 1) exact equality (highest priority)
+            for a in alias_list:
+                a_norm = a.lower().strip()
+                for i, h in enumerate(header_lower):
+                    if h == a_norm:
+                        return i
+            # 2) substring contains (header contains alias)
+            for a in alias_list:
+                a_norm = a.lower().strip()
+                for i, h in enumerate(header_lower):
+                    if a_norm in h:
+                        return i
+            # 3) header contains alias tokens (looser)
+            for a in alias_list:
+                toks = [t for t in a.lower().split() if t]
+                if not toks:
+                    continue
+                for i, h in enumerate(header_lower):
+                    if all(tok in h for tok in toks):
+                        return i
+            return None
+
+        # Detect columns
+        col_day = find_col_for_alias_list(aliases["day"])
+        col_time = find_col_for_alias_list(aliases["time"])
+        col_subject = find_col_for_alias_list(aliases["subject"])
+        col_facilitator = find_col_for_alias_list(aliases["facilitator"])
+        col_link = find_col_for_alias_list(aliases["link"])
+        col_notes = find_col_for_alias_list(aliases["notes"])
+
+        # If some columns still None, and header length is at least 6, use conventional positions:
+        # Day(0), Time(1), Subject(2), Facilitator(3), Link/Location(4), Notes(5)
+        hl = len(header)
+        if hl >= 6:
+            if col_day is None: col_day = 0
+            if col_time is None: col_time = 1
+            if col_subject is None: col_subject = 2
+            if col_facilitator is None: col_facilitator = 3
+            if col_link is None: col_link = 4
+            if col_notes is None: col_notes = 5
+        else:
+            # If header length < 6, try to reasonably assign by available columns
+            # Prefer preserving earlier detected indices; otherwise attempt nearby indices
+            def fallback_assign(c_idx, preferred_idx):
+                if c_idx is None and preferred_idx < hl:
+                    return preferred_idx
+                return c_idx
+
+            col_day = fallback_assign(col_day, 0)
+            col_time = fallback_assign(col_time, 1 if hl > 1 else 0)
+            col_subject = fallback_assign(col_subject, 2 if hl > 2 else (hl-1))
+            col_facilitator = fallback_assign(col_facilitator, 3 if hl > 3 else (hl-1))
+            col_link = fallback_assign(col_link, 4 if hl > 4 else (hl-1))
+            col_notes = fallback_assign(col_notes, 5 if hl > 5 else (hl-1))
+
+        # log mapping so you can inspect what's been detected (helps debug)
+        try:
+            app.logger.info("Timetable columns detected: day=%s time=%s subject=%s facilitator=%s link=%s notes=%s (header=%s)",
+                            col_day, col_time, col_subject, col_facilitator, col_link, col_notes, header)
+        except Exception:
+            pass
+
+        # compute today's string variants
+        today_short = datetime.now().strftime("%a").upper()    # e.g. 'Mon'
+        today_full = datetime.now().strftime("%A").upper()     # 'MONDAY'
+
+        matches = []
+        for idx, r in enumerate(rows[1:], start=2):
+            try:
+                rlist = list(r)
+                # read day cell (use detected column if present, else fallback to first column)
+                day_cell = ""
+                if col_day is not None and col_day < len(rlist):
+                    day_cell = str(rlist[col_day]).strip()
+                elif len(rlist) > 0:
+                    day_cell = str(rlist[0]).strip()
+
+                if not day_cell:
+                    continue
+
+                first = day_cell.upper()
+                if first.startswith(today_short) or first.startswith(today_full[:3]) or today_full in first:
+                    def get_cell(ci):
+                        if ci is None or ci >= len(rlist):
+                            return ""
+                        return rlist[ci] or ""
+
+                    entry = {
+                        "row_index": idx,
+                        "day": str(get_cell(col_day)).strip(),
+                        "time": str(get_cell(col_time)).strip(),
+                        "subject": str(get_cell(col_subject)).strip(),
+                        "facilitator": str(get_cell(col_facilitator)).strip(),
+                        "link": str(get_cell(col_link)).strip(),
+                        "notes": str(get_cell(col_notes)).strip()
+                    }
+                    matches.append(entry)
+            except Exception:
+                continue
+
+        return matches
+    except Exception:
+        app.logger.exception("get_timetable_today failed")
+        return []
+
+    """
+    Return a list of dicts representing today's timetable rows.
+
+    Each dict contains:
+      - row_index: sheet row index (1-based, including header)
+      - day, time, subject, facilitator, link, notes (strings)
+
+    Tolerant to header naming variations (case-insensitive, substrings).
+    """
+    try:
+        rows = from_google_sheets() or []
+        if not rows or len(rows) < 2:
+            return []
+
+        # normalize header row
+        header = [str(h).strip() for h in rows[0]]
+        header_lower = [h.lower() for h in header]
+
+        # helper to find a column by trying several possible names
+        def find_col(*names):
+            for n in names:
+                if not n:
+                    continue
+                n = n.lower()
+                # exact substring match first
+                for i, h in enumerate(header_lower):
+                    if n == h or n in h or h in n:
+                        return i
+                # fallback: token match
+                for i, h in enumerate(header_lower):
+                    if any(tok in h for tok in n.split()):
+                        return i
+            return None
+
+        # prefer typical names, but be tolerant
+        col_day = find_col("day", "weekday")
+        col_time = find_col("time", "hour")
+        col_subject = find_col("subject", "course")
+        col_facilitator = find_col("facilitator", "teacher", "instructor", "staff")
+        col_link = find_col("link", "location", "link/location", "meeting", "url")
+        col_notes = find_col("notes", "note", "remarks")
+
+        # default indices - if a column isn't found we'll set to None and handle gracefully
+        cols = {
+            "day": col_day,
+            "time": col_time,
+            "subject": col_subject,
+            "facilitator": col_facilitator,
+            "link": col_link,
+            "notes": col_notes
+        }
+
+        # compute today's string variants
+        today_short = datetime.now().strftime("%a").upper()    # e.g. 'Mon'
+        today_full = datetime.now().strftime("%A").upper()     # 'MONDAY'
+
+        matches = []
+        # iterate over body rows (rows[1:] are data rows). Use 1-based sheet row index: header is row 1.
+        for idx, r in enumerate(rows[1:], start=2):
+            try:
+                # ensure r is list-like
+                rlist = list(r)
+                # read day cell (fall back to first column if day column not found)
+                day_cell = ""
+                if cols["day"] is not None and cols["day"] < len(rlist):
+                    day_cell = str(rlist[cols["day"]]).strip()
+                elif len(rlist) > 0:
+                    day_cell = str(rlist[0]).strip()
+
+                if not day_cell:
+                    continue
+
+                first = day_cell.upper()
+                # match prefix or full form
+                if first.startswith(today_short) or first.startswith(today_full[:3]) or today_full in first:
+                    # produce structured dict
+                    def get_cell(key):
+                        ci = cols.get(key)
+                        if ci is None or ci >= len(rlist):
+                            return ""
+                        return rlist[ci] or ""
+
+                    entry = {
+                        "row_index": idx,
+                        "day": str(get_cell("day")).strip(),
+                        "time": str(get_cell("time")).strip(),
+                        "subject": str(get_cell("subject")).strip(),
+                        "facilitator": str(get_cell("facilitator")).strip(),
+                        "link": str(get_cell("link")).strip(),
+                        "notes": str(get_cell("notes")).strip()
+                    }
+                    matches.append(entry)
+            except Exception:
+                # ignore this row and continue
+                continue
+
+        return matches
+    except Exception:
+        app.logger.exception("get_timetable_today failed")
+        return []
+
     """
     Return rows (list-of-lists) from the timetable sheet matching today's weekday.
     Accepts day names like Mon, MONDAY, Mon., etc. (case-insensitive).
@@ -403,7 +643,6 @@ def _load_subscriptions_for_subject(subject):
                     if isinstance(r, dict):
                         sub = r.get("subscription") or r.get("sub") or r.get("push") or r
                         if isinstance(sub, dict) and _is_valid_subscription_obj(sub):
-                            # if subject filter was used by helper, include
                             if not subject or _normalize_subject(r.get("subject") or "") == subject_norm:
                                 subs.append(sub)
                     elif isinstance(r, (list, tuple)) and len(r) > 0:
@@ -602,6 +841,9 @@ def questions_page():
                 normalized_questions.append(r)
             except Exception:
                 continue
+
+        # Exclude sentinel subscription rows from questions listing
+        normalized_questions = [r for r in normalized_questions if not (len(r) >= 1 and str(r[0]) == "__subscription__")]
 
         derived_set = {str(q[0]).strip() for q in normalized_questions if q and len(q) > 0 and q[0]}
         categories_for_ui = STATIC_CATEGORIES + [c for c in sorted(derived_set) if c not in STATIC_CATEGORIES]

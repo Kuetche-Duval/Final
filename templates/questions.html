@@ -364,7 +364,6 @@ document.addEventListener('DOMContentLoaded', () => {
       navigator.serviceWorker.addEventListener('message', (ev) => {
         console.log('[page] SW message', ev.data);
         if (ev.data && ev.data.type === 'SUBSCRIPTION_LOST') {
-          // user-friendly hint (could show toast)
           console.warn('Push subscription possibly lost. Consider re-subscribing.');
         }
       });
@@ -374,6 +373,15 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (e) {
         console.error('getSubscription failed', e);
         currentSubscription = null;
+      }
+
+      // if we already have an endpoint stored in localStorage, prefer verifying that at server
+      const savedEndpoint = localStorage.getItem('subscriptionEndpoint');
+      if (currentSubscription && currentSubscription.endpoint) {
+        // keep currentSubscription
+      } else if (savedEndpoint) {
+        // If the browser lost subscription object (some mobiles do), we still query server to show subscribe status
+        currentSubscription = { endpoint: savedEndpoint };
       }
 
       if (currentSubscription && currentSubscription.endpoint) {
@@ -428,26 +436,43 @@ document.addEventListener('DOMContentLoaded', () => {
       currentSubscription = sub;
       const subObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
 
-      // send to server
-      const res = await fetch('{{ url_for("save_subscription_route") }}', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscription: subObj, subject: subject, client_id: 'web' })
-      });
-      let jsonRes = null;
+      // send to server and wait for successful sheet append BEFORE informing user
+      let res, jsonRes;
+      try {
+        res = await fetch('{{ url_for("save_subscription_route") }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription: subObj, subject: subject, client_id: 'web' })
+        });
+      } catch (e) {
+        console.error("[subscribe] network error while saving subscription:", e);
+        alert('Network error while saving subscription. Please try again.');
+        return;
+      }
+
       try { jsonRes = await res.json(); } catch(e){ jsonRes = null; }
+
       if (!res.ok) {
         console.error("[subscribe] server returned error", res.status, jsonRes);
         alert('Failed to save subscription on server: ' + (jsonRes && jsonRes.error ? jsonRes.error : res.statusText));
         return;
       }
+
       if (jsonRes && jsonRes.ok) {
+        // only now consider subscription saved
+        // persist endpoint locally so page can remember even if browser gives different sub object later
+        try {
+          localStorage.setItem('subscriptionEndpoint', subObj.endpoint || '');
+        } catch (e) { /* ignore storage errors */ }
+
+        // update local serverSubjectsForEndpoint (avoid duplicates)
         if (!serverSubjectsForEndpoint.includes(subject)) serverSubjectsForEndpoint.push(subject);
         updateSubscribeButtonsUI();
         if (btn) { btn.textContent = 'Subscribed ✓'; btn.classList.add('subscribed'); }
-        try { await navigator.serviceWorker.ready; } catch(e){}
-        console.log('[subscribe] subscribed on endpoint', currentSubscription && currentSubscription.endpoint);
-        alert('Subscribed successfully ✓');
+
+        // small feedback AFTER server confirms
+        console.log('[subscribe] subscribed on endpoint', subObj.endpoint);
+        alert('Subscribed successfully ✓ (server saved)');
       } else {
         console.error("[subscribe] unexpected server response", jsonRes);
         alert('Subscription saved? server response: ' + JSON.stringify(jsonRes));
@@ -472,14 +497,36 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const sub = await registrationForPush.pushManager.getSubscription();
       if (!sub) {
-        alert('No active subscription to unsubscribe.');
+        // still attempt server-side cleanup if we have a saved endpoint locally
+        const savedEndpoint = localStorage.getItem('subscriptionEndpoint');
+        if (!savedEndpoint) {
+          alert('No active subscription to unsubscribe.');
+          return;
+        }
+        if (!confirm('Unsubscribe this browser from all subjects? This will remove saved subscriptions stored on the server for this browser.')) {
+          return;
+        }
+        try {
+          await fetch('/subscriptions/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ endpoint: savedEndpoint })
+          });
+        } catch(e) { console.error("server-side delete failed", e); }
+        localStorage.removeItem('subscriptionEndpoint');
+        currentSubscription = null;
+        serverSubjectsForEndpoint = [];
+        updateSubscribeButtonsUI();
+        alert('Requested server cleanup for stored endpoint.');
         return;
       }
+
       if (!confirm('Unsubscribe this browser from all subjects? This will remove saved subscriptions stored on the server for this browser.')) {
         return;
       }
       const ok = await sub.unsubscribe();
       if (!ok) console.warn("sub.unsubscribe returned false");
+
       try {
         await fetch('/subscriptions/delete', {
           method: 'POST',
@@ -489,6 +536,8 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (e) {
         console.error("Failed to request server-side deletion:", e);
       }
+      try { localStorage.removeItem('subscriptionEndpoint'); } catch(e){}
+
       currentSubscription = null;
       serverSubjectsForEndpoint = [];
       updateSubscribeButtonsUI();

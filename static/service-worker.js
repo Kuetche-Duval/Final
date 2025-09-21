@@ -1,8 +1,10 @@
 // static/service-worker.js
-// Robust service worker for caching + push notifications.
-// Ensure this file is served at /service-worker.js (registered with scope '/')
+// Minimal, practical service worker for caching + push notifications.
+// - sends message to clients on pushsubscriptionchange so page can react / re-subscribe
+// - expects push event data to be JSON (title, body, url, tag, renotify, icon)
+// - caches a small set of assets for offline fallback
 
-const CACHE_NAME = 'newtons-nerds-cache-v2';
+const CACHE_NAME = 'newtons-nerds-cache-v1';
 const URLS_TO_CACHE = [
   '/',
   '/questions',
@@ -10,7 +12,8 @@ const URLS_TO_CACHE = [
   '/health',
   '/static/manifest.json',
   '/static/img/icon-192.png',
-  '/static/img/icon-512.png'
+  '/static/img/icon-512.png',
+  '/static/img/logo.png'
 ];
 
 // install: cache core assets
@@ -18,10 +21,8 @@ self.addEventListener('install', event => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(URLS_TO_CACHE).catch(() => {/* ignore failures */}))
-      .catch(e => console.error('[sw] cache install failed', e))
+      .then(cache => cache.addAll(URLS_TO_CACHE).catch(() => {/* ignore individual failures */}))
   );
-  console.log('[sw] install');
 });
 
 // activate: remove old caches
@@ -32,10 +33,9 @@ self.addEventListener('activate', event => {
     ))
   );
   self.clients.claim();
-  console.log('[sw] activate');
 });
 
-// fetch: network-first for navigation to get updates quickly, cache-first for same-origin assets
+// fetch: network-first for navigation, cache-first for same-origin assets
 self.addEventListener('fetch', event => {
   const req = event.request;
   const url = new URL(req.url);
@@ -45,10 +45,9 @@ self.addEventListener('fetch', event => {
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req).then(resp => {
-        try {
-          const copy = resp.clone();
-          caches.open(CACHE_NAME).then(c => c.put(req, copy)).catch(()=>{});
-        } catch (e) {}
+        // keep a copy
+        const copy = resp.clone();
+        caches.open(CACHE_NAME).then(c => c.put(req, copy)).catch(()=>{});
         return resp;
       }).catch(() => caches.match(req).then(r => r || caches.match('/')))
     );
@@ -68,7 +67,7 @@ self.addEventListener('fetch', event => {
   }
 });
 
-// Helper: parse push payload
+// helper: try parse push event data as JSON, fallback to text
 async function _parsePushData(event) {
   if (!event.data) return null;
   try {
@@ -76,7 +75,7 @@ async function _parsePushData(event) {
   } catch (e) {
     try {
       const text = await event.data.text();
-      return { title: 'New message', body: text };
+      return { title: 'Notification', body: text };
     } catch (e2) {
       return null;
     }
@@ -87,9 +86,9 @@ async function _parsePushData(event) {
 self.addEventListener('push', event => {
   event.waitUntil((async () => {
     const payload = await _parsePushData(event) || {};
-    const title = payload.title || payload.heading || 'Newton\'s Nerds';
+    const title = payload.title || payload.heading || 'Notification';
     const body = payload.body || payload.message || '';
-    const url = (payload.url || '/questions');
+    const url = (payload.url || '/');
     const tag = payload.tag || undefined;
     const renotify = !!payload.renotify;
 
@@ -102,14 +101,22 @@ self.addEventListener('push', event => {
       badge,
       tag,
       renotify,
-      data: { url, payload },
+      data: {
+        url,
+        payload
+      }
     };
 
     try {
       await self.registration.showNotification(title, options);
-      console.log('[sw] showNotification', title, options);
     } catch (err) {
-      console.error('[sw] showNotification failed', err);
+      // some browsers may restrict showNotification; still attempt to inform clients
+      try {
+        const all = await clients.matchAll({ includeUncontrolled: true });
+        for (const c of all) {
+          c.postMessage({ type: 'PUSH_RECEIVED', payload });
+        }
+      } catch (e) {}
     }
   })());
 });
@@ -120,42 +127,36 @@ self.addEventListener('notificationclick', event => {
   const url = (event.notification && event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
-      for (const client of windowClients) {
+      for (let i = 0; i < windowClients.length; i++) {
+        const client = windowClients[i];
         try {
-          const clientUrl = new URL(client.url, location.origin);
-          const targetUrl = new URL(url, location.origin);
-          if (clientUrl.pathname === targetUrl.pathname) {
+          const u = new URL(client.url);
+          if (u.pathname === new URL(url, location.origin).pathname) {
             return client.focus();
           }
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
       }
-      if (clients.openWindow) return clients.openWindow(url);
+      return clients.openWindow(url);
     })
   );
 });
 
-// optional notificationclose
+// notificationclose: post message (optional analytics hook)
 self.addEventListener('notificationclose', event => {
-  // could post analytics
+  // placeholder: could postMessage to clients that user dismissed notification
 });
 
-// handle subscriptionchange - notify clients so they can re-subscribe if needed
-self.addEventListener('pushsubscriptionchange', function(event) {
-  console.log('[sw] pushsubscriptionchange', event);
-  event.waitUntil(
-    self.clients.matchAll({ includeUncontrolled: true }).then(clientsArr => {
-      for (const c of clientsArr) {
-        try {
-          c.postMessage({ type: 'SUBSCRIPTION_LOST' });
-        } catch (e) {
-          console.debug('[sw] could not message client', e);
-        }
+// pushsubscriptionchange: notify clients so page can re-subscribe or show a hint
+self.addEventListener('pushsubscriptionchange', event => {
+  // Don't attempt to subscribe here (we lack applicationServerKey). Instead notify page(s).
+  event.waitUntil((async () => {
+    try {
+      const all = await clients.matchAll({ includeUncontrolled: true });
+      for (const c of all) {
+        c.postMessage({ type: 'SUBSCRIPTION_LOST', reason: 'pushsubscriptionchange' });
       }
-    })
-  );
-});
-
-// message handler for debugging
-self.addEventListener('message', function(evt) {
-  console.log('[sw] msg from page:', evt.data);
+    } catch (e) {
+      // ignore
+    }
+  })());
 });

@@ -6,7 +6,7 @@
     "difficulty": "Easy",
     "description": "Print numbers 1..N. For multiples of 3 print 'Fizz', for 5 print 'Buzz', for both print 'FizzBuzz'.",
     "starter_js": "for (let i=1;i<=100;i++){ /* implement */ }",
-    "solution_js": "for (let i=1;i<=100;i++){ let out=''; if(i%3===0) out+='Fizz'; if(i%5===0) out+='Buzz'; console.log(out||i);} "
+    "solution_js": "for (let i=1;i<=100;i++){ let out=''; if(i%3===0) out+='Fizz'; if(i%5===0) out+='Buzz'; console.log(out||i); }"
   },
   {
     "id": "reverse-string",
@@ -27,8 +27,8 @@
     "solution_js": "function twoSum(nums,target){ const map={}; for(let i=0;i<nums.length;i++){const n=nums[i]; const need=target-n; if(map[need]!==undefined) return [map[need], i]; map[n]=i;} return null; }"
   },
   {
-    "id": "c-pointers",
-    "title": "Pointers Practice (C)",
+    "id": "c-pointers-swap",
+    "title": "Pointers Practice (C) — swap",
     "language": "c",
     "difficulty": "Intermediate",
     "description": "Write a C function that swaps two integers using pointers.",
@@ -36,7 +36,7 @@
     "solution_c": "void swap(int *a, int *b){ int tmp=*a; *a=*b; *b=tmp; }"
   },
   {
-    "id": "c-strings",
+    "id": "c-reverse-inplace",
     "title": "Reverse String In-Place (C)",
     "language": "c",
     "difficulty": "Intermediate",
@@ -49,34 +49,8 @@
     "title": "Books DB (SQL Schema)",
     "language": "sql",
     "difficulty": "Easy",
-    "description": "A small books database: view schema and sample rows.",
+    "description": "A small books database: view schema and example query.",
     "schema_sql": "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);\nCREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, year INTEGER, FOREIGN KEY(author_id) REFERENCES authors(id));",
-    "sample_data": {
-      "authors": [
-        {
-          "id": 1,
-          "name": "George Orwell"
-        },
-        {
-          "id": 2,
-          "name": "Jane Austen"
-        }
-      ],
-      "books": [
-        {
-          "id": 1,
-          "title": "1984",
-          "author_id": 1,
-          "year": 1949
-        },
-        {
-          "id": 2,
-          "title": "Pride and Prejudice",
-          "author_id": 2,
-          "year": 1813
-        }
-      ]
-    },
     "example_query": "SELECT b.title, a.name FROM books b JOIN authors a ON a.id = b.author_id;"
   },
   {
@@ -86,20 +60,6 @@
     "difficulty": "Medium",
     "description": "Given an employees table, query all employees with salary > 50000.",
     "schema_sql": "CREATE TABLE employees (id INTEGER PRIMARY KEY, name TEXT, salary INTEGER);",
-    "sample_data": {
-      "employees": [
-        {
-          "id": 1,
-          "name": "Alice",
-          "salary": 60000
-        },
-        {
-          "id": 2,
-          "name": "Bob",
-          "salary": 40000
-        }
-      ]
-    },
     "example_query": "SELECT name FROM employees WHERE salary > 50000;"
   },
   {
@@ -109,42 +69,34 @@
     "difficulty": "Easy",
     "description": "Check if a string is a palindrome.",
     "starter_py": "def is_palindrome(s):\n    # implement\n    pass\n\nprint(is_palindrome('racecar'))",
-    "solution_py": "def is_palindrome(s): return s==s[::-1]"
+    "solution_py": "def is_palindrome(s):\n    return s == s[::-1]"
   },
   {
     "id": "py-fibonacci",
     "title": "Fibonacci Sequence (Python)",
     "language": "python",
     "difficulty": "Medium",
-    "description": "Generate Fibonacci numbers up to n.",
+    "description": "Generate Fibonacci numbers less than n.",
     "starter_py": "def fib(n):\n    # implement\n    pass\n\nprint(fib(10))",
     "solution_py": "def fib(n):\n    a,b=0,1\n    res=[]\n    while a<n:\n        res.append(a)\n        a,b=b,a+b\n    return res"
   },
   {
-    "id": "py-anagrams",
-    "title": "Anagrams (Python)",
-    "language": "python",
-    "difficulty": "Medium",
-    "description": "Check if two words are anagrams.",
-    "starter_py": "def is_anagram(a,b):\n    # implement\n    pass\n\nprint(is_anagram('listen','silent'))",
-    "solution_py": "def is_anagram(a,b): return sorted(a)==sorted(b)"
-  },
-  {
-    "id": "py-anagrams",
-    "title": "Lists (C)",
-    "language": "c",
-    "difficulty": "High",
-    "description": "Create a linked List data structure",
-    "starter_c": "#include <stdio.h>\n#include <stdlib.h>\n\nvoid create node function(char *s){ /* implement */ }\n\nint main(){ /* implement */ return 0; }",
-    "solution_c": "No solution presently"
-  },
-  {
-    "id": "Redirecting An Html Web Page",
-    "title": "Adding links to other files in html",
+    "id": "html-redirect-link",
+    "title": "Adding Links in HTML",
     "language": "html",
     "difficulty": "Easy",
-    "description": "Add a link to google.com",
-    "starter_html": "<!DOCTYPE html>\r\n<html lang=\"en\">\r\n<head>\r\n  <meta charset=\"UTF-8\">\r\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\r\n  <title>Document</title>\r\n</head>\r\n<body>\r\n  // Implementation \r\n</body>\r\n</html>",
-    "solution_html": "<!DOCTYPE html>\r\n<html lang=\"en\">\r\n<head>\r\n  <meta charset=\"UTF-8\">\r\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\r\n  <title>Document</title>\r\n</head>\r\n<body>\r\n  Make a search on <a href=\"https://www.google.com\">Google</>\r\n</body>\r\n</html>"
+    "description": "Add an external link to Google.",
+    "starter_html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Document</title>\n</head>\n<body>\n  <!-- implement -->\n</body>\n</html>",
+    "solution_html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Document</title>\n</head>\n<body>\n  Make a search on <a href=\"https://www.google.com\" target=\"_blank\" rel=\"noopener\">Google</a>\n</body>\n</html>"
+  },
+  {
+    "id": "SQL Sales Table",
+    "title": "Create Sales Table",
+    "language": "sql",
+    "difficulty": "Easy",
+    "description": "Create a Sales Table  and Insert sample data into Sales table. The columns present should be : \"sale_id, product_id, quantity_sold, sale_date, total_price\"",
+    "schema_sql": "-- Create Sales table\r\n\r\nCREATE TABLE Sales (//Implement);\r\n\r\n-- Insert sample data into Sales table\r\n\r\nINSERT INTO Sales (//Implement);",
+    "example_query": "-- Create Sales table\r\n\r\nCREATE TABLE Sales (\r\n    sale_id INT PRIMARY KEY,\r\n    product_id INT,\r\n    quantity_sold INT,\r\n    sale_date DATE,\r\n    total_price DECIMAL(10, 2),\r\n    FOREIGN KEY (product_id) REFERENCES Products(product_id)\r\n);\r\n\r\n-- Insert sample data into Sales table\r\n\r\nINSERT INTO Sales (sale_id, product_id, quantity_sold, sale_date, total_price) VALUES\r\n(1, 101, 5, '2024-01-01', 2500.00),\r\n(2, 102, 3, '2024-01-02', 900.00),\r\n(3, 103, 2, '2024-01-02', 60.00),\r\n(4, 104, 4, '2024-01-03', 80.00),\r\n(5, 105, 6, '2024-01-03', 90.00);",
+    "sample_data": {}
   }
 ]

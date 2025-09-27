@@ -8,6 +8,7 @@ import traceback
 import re
 import io
 import binascii
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -93,6 +94,9 @@ CODING_DRIVE_FILE_ID = os.environ.get("CODING_EXERCISES_DRIVE_FILE_ID", "").stri
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "").strip()
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com")
+
+# SQL table row limit for server rendering
+SQL_TABLE_ROW_LIMIT = int(os.environ.get("SQL_TABLE_ROW_LIMIT", "500"))
 
 # --- simple VAPID public key validator (warn early) ---
 def _is_likely_valid_vapid_public_key(s):
@@ -335,132 +339,6 @@ def get_timetable_today():
             except Exception:
                 continue
 
-        return matches
-    except Exception:
-        app.logger.exception("get_timetable_today failed")
-        return []
-
-    """
-    Return a list of dicts representing today's timetable rows.
-
-    Each dict contains:
-      - row_index: sheet row index (1-based, including header)
-      - day, time, subject, facilitator, link, notes (strings)
-
-    Tolerant to header naming variations (case-insensitive, substrings).
-    """
-    try:
-        rows = from_google_sheets() or []
-        if not rows or len(rows) < 2:
-            return []
-
-        # normalize header row
-        header = [str(h).strip() for h in rows[0]]
-        header_lower = [h.lower() for h in header]
-
-        # helper to find a column by trying several possible names
-        def find_col(*names):
-            for n in names:
-                if not n:
-                    continue
-                n = n.lower()
-                # exact substring match first
-                for i, h in enumerate(header_lower):
-                    if n == h or n in h or h in n:
-                        return i
-                # fallback: token match
-                for i, h in enumerate(header_lower):
-                    if any(tok in h for tok in n.split()):
-                        return i
-            return None
-
-        # prefer typical names, but be tolerant
-        col_day = find_col("day", "weekday")
-        col_time = find_col("time", "hour")
-        col_subject = find_col("subject", "course")
-        col_facilitator = find_col("facilitator", "teacher", "instructor", "staff")
-        col_link = find_col("link", "location", "link/location", "meeting", "url")
-        col_notes = find_col("notes", "note", "remarks")
-
-        # default indices - if a column isn't found we'll set to None and handle gracefully
-        cols = {
-            "day": col_day,
-            "time": col_time,
-            "subject": col_subject,
-            "facilitator": col_facilitator,
-            "link": col_link,
-            "notes": col_notes
-        }
-
-        # compute today's string variants
-        today_short = datetime.now().strftime("%a").upper()    # e.g. 'Mon'
-        today_full = datetime.now().strftime("%A").upper()     # 'MONDAY'
-
-        matches = []
-        # iterate over body rows (rows[1:] are data rows). Use 1-based sheet row index: header is row 1.
-        for idx, r in enumerate(rows[1:], start=2):
-            try:
-                # ensure r is list-like
-                rlist = list(r)
-                # read day cell (fall back to first column if day column not found)
-                day_cell = ""
-                if cols["day"] is not None and cols["day"] < len(rlist):
-                    day_cell = str(rlist[cols["day"]]).strip()
-                elif len(rlist) > 0:
-                    day_cell = str(rlist[0]).strip()
-
-                if not day_cell:
-                    continue
-
-                first = day_cell.upper()
-                # match prefix or full form
-                if first.startswith(today_short) or first.startswith(today_full[:3]) or today_full in first:
-                    # produce structured dict
-                    def get_cell(key):
-                        ci = cols.get(key)
-                        if ci is None or ci >= len(rlist):
-                            return ""
-                        return rlist[ci] or ""
-
-                    entry = {
-                        "row_index": idx,
-                        "day": str(get_cell("day")).strip(),
-                        "time": str(get_cell("time")).strip(),
-                        "subject": str(get_cell("subject")).strip(),
-                        "facilitator": str(get_cell("facilitator")).strip(),
-                        "link": str(get_cell("link")).strip(),
-                        "notes": str(get_cell("notes")).strip()
-                    }
-                    matches.append(entry)
-            except Exception:
-                # ignore this row and continue
-                continue
-
-        return matches
-    except Exception:
-        app.logger.exception("get_timetable_today failed")
-        return []
-
-    """
-    Return rows (list-of-lists) from the timetable sheet matching today's weekday.
-    Accepts day names like Mon, MONDAY, Mon., etc. (case-insensitive).
-    """
-    try:
-        rows = from_google_sheets() or []
-        if not rows:
-            return []
-        today_short = datetime.now().strftime("%a").upper()  # e.g. 'Mon' -> 'MON'
-        today_full = datetime.now().strftime("%A").upper()  # 'MONDAY'
-        matches = []
-        for r in rows:
-            if not r or len(r) == 0:
-                continue
-            first = str(r[0]).strip().upper()
-            if not first:
-                continue
-            # match prefix or full
-            if first.startswith(today_short) or first.startswith(today_full[:3]) or today_full in first:
-                matches.append(r)
         return matches
     except Exception:
         app.logger.exception("get_timetable_today failed")
@@ -1131,6 +1009,7 @@ def admin_exercises():
         elif ex["language"] == "sql":
             ex["schema_sql"] = starter
             ex["example_query"] = solution
+            # admin can optionally supply sample data as JSON in the admin UI (not required)
             sample_json = request.form.get("sample_data") or ""
             try:
                 ex["sample_data"] = json.loads(sample_json) if sample_json.strip() else {}
@@ -1246,6 +1125,136 @@ def health_detail(slug):
         app.logger.exception("health_detail failed: %s", e)
         flash("Failed to load detail.", "danger")
         return redirect(url_for("health_index"))
+
+# -------------------------
+# SQL visualizer helpers & route
+# -------------------------
+def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> (sqlite3.Connection, list):
+    """
+    Build an in-memory sqlite DB from admin-provided schema_sql and sample_data.
+    Returns (conn, populated_table_names)
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    if schema_sql:
+        try:
+            cur.executescript(schema_sql)
+        except Exception as e:
+            raise RuntimeError(f"Schema execution error: {e}")
+    populated = []
+    if sample_data and isinstance(sample_data, dict):
+        for table, rows in sample_data.items():
+            if not isinstance(rows, list):
+                continue
+            # infer columns union
+            cols = []
+            for r in rows:
+                if isinstance(r, dict):
+                    for k in r.keys():
+                        if k not in cols:
+                            cols.append(k)
+            if not cols:
+                # if table exists because of schema, still mark it
+                try:
+                    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+                    if cur.fetchone():
+                        populated.append(table)
+                    continue
+                except Exception:
+                    continue
+            # create table if not exists (all text)
+            try:
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+                if not cur.fetchone():
+                    cols_def = ", ".join([f'"{c}" TEXT' for c in cols])
+                    cur.execute(f'CREATE TABLE "{table}" ({cols_def});')
+            except Exception:
+                pass
+            placeholders = ", ".join(["?"] * len(cols))
+            col_list_sql = ", ".join([f'"{c}"' for c in cols])
+            insert_sql = f'INSERT INTO "{table}" ({col_list_sql}) VALUES ({placeholders})'
+            for r in rows:
+                try:
+                    vals = []
+                    if isinstance(r, dict):
+                        for c in cols:
+                            v = r.get(c, None)
+                            vals.append(None if v is None else str(v))
+                    else:
+                        vals = [None] * len(cols)
+                    cur.execute(insert_sql, vals)
+                except Exception:
+                    continue
+            populated.append(table)
+    conn.commit()
+    return conn, populated
+
+@app.route("/exercise-table/<exercise_id>", methods=["GET"])
+def exercise_table_route(exercise_id):
+    """
+    Build an in-memory DB from the exercise's schema_sql and sample_data,
+    then return HTML snippet with SELECT * outputs for each table.
+    """
+    try:
+        exercises = load_coding_exercises()
+        ex = next((e for e in exercises if str(e.get("id")) == str(exercise_id)), None)
+        if not ex:
+            return jsonify({"ok": False, "error": "exercise not found"}), 404
+        if ex.get("language") != "sql":
+            return jsonify({"ok": False, "error": "exercise is not SQL"}), 400
+
+        schema_sql = ex.get("schema_sql") or ""
+        sample_data = ex.get("sample_data") or {}
+
+        try:
+            conn, tables = _safe_create_and_populate_sqlite(schema_sql, sample_data)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"Failed preparing sample DB: {e}"}), 500
+        cur = conn.cursor()
+        if not tables:
+            try:
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+                tables = [r[0] for r in cur.fetchall()]
+            except Exception:
+                tables = []
+        if not tables:
+            html = '<div class="small text-muted">No sample tables available for this exercise.</div>'
+            conn.close()
+            return jsonify({"ok": True, "html": html})
+        html_parts = []
+        for tbl in tables:
+            try:
+                cur.execute(f'SELECT * FROM "{tbl}" LIMIT {SQL_TABLE_ROW_LIMIT}')
+                rows = cur.fetchall()
+                cols = [d[0] for d in cur.description] if cur.description else []
+                tbl_html = []
+                tbl_html.append(f'<div class="mb-2"><strong>Table: {tbl}</strong></div>')
+                tbl_html.append('<div class="table-responsive"><table class="table table-sm table-striped"><thead><tr>')
+                for c in cols:
+                    tbl_html.append(f'<th>{c}</th>')
+                tbl_html.append('</tr></thead><tbody>')
+                if not rows:
+                    tbl_html.append('<tr><td colspan="%d"><em>No rows</em></td></tr>' % (len(cols) or 1))
+                else:
+                    for r in rows:
+                        tbl_html.append('<tr>')
+                        for c in cols:
+                            try:
+                                val = r[c]
+                            except Exception:
+                                val = None
+                            tbl_html.append('<td>%s</td>' % ("" if val is None else str(val)))
+                        tbl_html.append('</tr>')
+                tbl_html.append('</tbody></table></div>')
+                html_parts.append("".join(tbl_html))
+            except Exception as e:
+                html_parts.append(f'<div class="alert alert-warning small">Could not read table {tbl}: {e}</div>')
+        conn.close()
+        return jsonify({"ok": True, "html": "".join(html_parts)})
+    except Exception as e:
+        app.logger.exception("exercise_table_route failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 # -------------------------
 # Global error handler

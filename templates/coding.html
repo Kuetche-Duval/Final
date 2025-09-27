@@ -12,12 +12,13 @@
   .meta { font-size:0.9rem; color: var(--muted); }
   @media (max-width:980px){ .editor-wrap{flex-direction:column} .editor-right{width:auto} }
   .lang-badge { display:inline-block; padding:4px 10px; border-radius:999px; background:rgba(0,0,0,0.04); font-weight:700; margin-left:8px; font-size:0.8rem; }
-  .sql-table { border-collapse:collapse; width:100%; margin-bottom:8px; }
-  .sql-table th, .sql-table td { border:1px solid rgba(0,0,0,0.06); padding:6px; font-size:0.9rem; }
+  .sql-table, .preview-table { border-collapse:collapse; width:100%; margin-bottom:8px; }
+  .sql-table th, .sql-table td, .preview-table th, .preview-table td { border:1px solid rgba(0,0,0,0.06); padding:6px; font-size:0.9rem; }
   .exercise-row { display:flex; flex-direction:column; gap:6px; }
   .exercise-row a { font-weight:700; color:var(--text); text-decoration:none; }
-  .exercise-row a:hover { text-decoration:underline; color:var(--accent); }
+  .exercise-row a:hover { text-decoration:underline; color:var(--accent-green); }
   .hint { font-size:0.9rem; color:var(--muted); margin-top:6px; }
+  .small-muted { font-size:0.85rem; color:var(--muted); }
 </style>
 {% endblock %}
 
@@ -27,7 +28,7 @@
     <div class="d-flex justify-content-between align-items-center mb-2">
       <div>
         <h3 class="mb-0">Coding Practice <small class="meta">— in-browser playground</small></h3>
-        <div class="meta">JS/HTML run live. C is shown for study. SQL rendered visually.</div>
+        <div class="meta">JS/HTML run live. C & Python shown for study. SQL can show a server-rendered table from sample data.</div>
       </div>
       <div>
         <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home_page') }}">Back home</a>
@@ -44,11 +45,11 @@
                 <div class="d-flex justify-content-between align-items-center">
                   <div>
                     <a href="#" class="choose-ex" data-id="{{ ex.id }}">{{ ex.title }}</a>
-                    <div class="small text-muted">{{ ex.description }}</div>
+                    <div class="small-muted">{{ ex.description }}</div>
                   </div>
                   <div class="text-end">
                     <div><span class="lang-badge">{{ ex.language|upper }}</span></div>
-                    <div class="small text-muted mt-1">{{ ex.difficulty }}</div>
+                    <div class="small-muted mt-1">{{ ex.difficulty }}</div>
                   </div>
                 </div>
               </div>
@@ -66,6 +67,7 @@
               <option value="html">HTML+JS (live preview)</option>
               <option value="c">C (study)</option>
               <option value="sql">SQL (visual)</option>
+              <option value="python">Python (study)</option>
             </select>
           </div>
 
@@ -75,7 +77,7 @@
             <button id="showSol" class="btn btn-outline-secondary">Show solution</button>
             <button id="copyCode" class="btn btn-outline-success">Copy</button>
           </div>
-          <div class="hint">Tip: For C copy the code and compile locally (e.g., <code>gcc</code>) or use an online compiler.</div>
+          <div class="hint">Tip: For C/Python copy the code and run locally or use an online REPL. SQL sample tables can be rendered by the server.</div>
         </div>
       </div>
 
@@ -85,16 +87,21 @@
         <iframe id="previewFrame" class="run-frame" sandbox="allow-scripts"></iframe>
 
         <div class="mt-3">
-          <div class="small text-muted">Solution (hidden)</div>
+          <div class="small-muted">Solution (hidden)</div>
           <pre id="solutionPre" class="solution" style="display:none;"></pre>
 
           <div id="sqlPreview" style="display:none;margin-top:8px;">
-            <div class="small text-muted">Schema</div>
+            <div class="small-muted">Schema</div>
             <pre id="schemaPre" class="solution"></pre>
-            <div class="small text-muted">Sample data</div>
+            <div class="small-muted">Sample data</div>
             <div id="sampleData"></div>
-            <div class="small text-muted">Example query</div>
-            <pre id="exampleQuery" class="solution"></pre>
+            <div class="small-muted">Example query</div>
+            <pre id="exampleQuery" class="solution" style="display:none;"></pre>
+
+            <div class="mt-2">
+              <button id="showServerTableBtn" class="btn btn-outline-primary btn-sm" style="display:none">Show table (server)</button>
+            </div>
+            <div id="sqlServerTable" class="mt-2"></div>
           </div>
         </div>
       </div>
@@ -128,42 +135,59 @@ document.addEventListener('DOMContentLoaded', () => {
     // default editorMode based on exercise language
     if(editorMode) {
       const lang = (ex.language || 'js').toLowerCase();
-      if(['js','html','c','sql'].includes(lang)) editorMode.value = lang;
+      if(['js','html','c','sql','python'].includes(lang)) editorMode.value = lang;
     }
 
     // populate code editor according to language
     if(ex.language === 'js') {
-      if(codeEditor) codeEditor.value = ex.starter_js || '';
-      if(solutionPre) solutionPre.textContent = ex.solution_js || '';
+      codeEditor.value = ex.starter_js || '';
+      solutionPre.textContent = ex.solution_js || '';
       sqlPreview.style.display = 'none';
       jsConsole.style.display = '';
       preview.style.display = '';
+      showSolBtn.style.display = '';
     } else if(ex.language === 'html') {
-      if(codeEditor) codeEditor.value = ex.starter_html || '';
-      if(solutionPre) solutionPre.textContent = ex.solution_html || '';
+      codeEditor.value = ex.starter_html || '';
+      solutionPre.textContent = ex.solution_html || '';
       sqlPreview.style.display = 'none';
       jsConsole.style.display = 'none';
       preview.style.display = '';
+      showSolBtn.style.display = '';
     } else if(ex.language === 'c') {
-      if(codeEditor) codeEditor.value = ex.starter_c || '';
-      if(solutionPre) solutionPre.textContent = ex.solution_c || '';
+      codeEditor.value = ex.starter_c || '';
+      solutionPre.textContent = ex.solution_c || '';
       sqlPreview.style.display = 'none';
       jsConsole.style.display = 'none';
       preview.style.display = 'none';
+      showSolBtn.style.display = '';
+    } else if(ex.language === 'python') {
+      codeEditor.value = ex.starter_py || '';
+      solutionPre.textContent = ex.solution_py || '';
+      sqlPreview.style.display = 'none';
+      jsConsole.style.display = 'none';
+      preview.style.display = 'none';
+      showSolBtn.style.display = '';
     } else if(ex.language === 'sql') {
-      if(codeEditor) codeEditor.value = ex.schema_sql || ex.example_query || '';
-      if(solutionPre) solutionPre.textContent = ex.example_query || '';
+      // For SQL: editor contains schema; example query is present but kept hidden until "Show solution"
+      codeEditor.value = ex.schema_sql || ex.example_query || '';
+      // DO NOT populate the generic solutionPre for SQL (we use exampleQuery instead)
+      solutionPre.textContent = '';
       sqlPreview.style.display = '';
       document.getElementById('schemaPre').textContent = ex.schema_sql || '';
-      document.getElementById('exampleQuery').textContent = ex.example_query || '';
+      // Put example query into its own pre but keep it hidden
+      const exqEl = document.getElementById('exampleQuery');
+      exqEl.textContent = ex.example_query || '';
+      exqEl.style.display = 'none';
       const sampleData = ex.sample_data || {};
       const sampleRoot = document.getElementById('sampleData');
       sampleRoot.innerHTML = '';
       for(const tableName of Object.keys(sampleData)){
-        const rows = sampleData[tableName];
-        const table = document.createElement('table');
-        table.className = 'sql-table';
+        const rows = sampleData[tableName] || [];
+        const heading = document.createElement('div'); heading.className='small-muted'; heading.textContent = tableName;
+        sampleRoot.appendChild(heading);
         if(rows.length){
+          const table = document.createElement('table');
+          table.className = 'preview-table';
           const thead = document.createElement('thead');
           const tr = document.createElement('tr');
           Object.keys(rows[0]).forEach(c => { const th = document.createElement('th'); th.textContent = c; tr.appendChild(th); });
@@ -175,20 +199,33 @@ document.addEventListener('DOMContentLoaded', () => {
             tbody.appendChild(tr2);
           });
           table.appendChild(tbody);
+          sampleRoot.appendChild(table);
         } else {
-          const em = document.createElement('div'); em.textContent = 'No sample rows';
-          sampleRoot.appendChild(em);
+          const em = document.createElement('div'); em.textContent = 'No sample rows'; sampleRoot.appendChild(em);
         }
-        const heading = document.createElement('div'); heading.className='small text-muted'; heading.textContent = tableName;
-        sampleRoot.appendChild(heading);
-        sampleRoot.appendChild(table);
       }
       jsConsole.style.display = 'none';
       preview.style.display = 'none';
+      // show the "Show solution" button for SQL so user can reveal the example query
+      showSolBtn.style.display = '';
     }
 
+    // hide any visible solution on exercise switch
     if(solutionPre) { solutionPre.style.display = 'none'; }
     if(showSolBtn) { showSolBtn.textContent = 'Show solution'; }
+
+    const showServerBtn = document.getElementById('showServerTableBtn');
+    const serverContainer = document.getElementById('sqlServerTable');
+    if(ex.language === 'sql'){
+      showServerBtn.style.display = '';
+      showServerBtn.textContent = 'Show table (server)';
+      serverContainer.innerHTML = '';
+      serverContainer.style.display = 'block';
+    } else {
+      showServerBtn.style.display = 'none';
+      serverContainer.innerHTML = '';
+      serverContainer.style.display = 'none';
+    }
   }
 
   document.body.addEventListener('click', (e) => {
@@ -211,24 +248,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const mode = editorMode ? editorMode.value : 'js';
       const code = codeEditor ? codeEditor.value : '';
 
-      // reset displays
-      sqlPreview.style.display = 'none';
-      jsConsole.style.display = 'none';
-      preview.style.display = '';
+      if(sqlPreview) sqlPreview.style.display = 'none';
+      if(jsConsole) jsConsole.style.display = 'none';
+      if(preview) preview.style.display = '';
 
       if(mode === 'html'){
-        if(jsConsole) jsConsole.style.display = 'none';
         if(preview) {
           const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${code}</body></html>`;
           preview.srcdoc = html;
         }
       } else if(mode === 'js'){
-        if(preview) preview.style.display = '';
         if(jsConsole) {
           jsConsole.style.display = '';
           jsConsole.textContent = '';
         }
-
         const blobContent = `
           (function(){
             const _log = console.log;
@@ -253,9 +286,11 @@ document.addEventListener('DOMContentLoaded', () => {
           preview.onload = () => { try { URL.revokeObjectURL(url); } catch(_){}; preview.onload = null; };
         }
       } else if(mode === 'c'){
-        alert('C code is for study: copy it and compile locally (eg. gcc) or use an online C compiler like Replit or Godbolt.');
+        alert('C: view/copy the code and compile locally or use an online C IDE (Replit, Godbolt).');
+      } else if(mode === 'python'){
+        alert('Python: view/copy the code and run in your local Python or an online REPL (Replit, Trinket).');
       } else if(mode === 'sql'){
-        sqlPreview.style.display = '';
+        if(sqlPreview) sqlPreview.style.display = '';
       }
     });
   }
@@ -272,7 +307,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const showSol = document.getElementById('showSol');
   if(showSol){
     showSol.addEventListener('click', () => {
+      if(!current) return;
       const pre = document.getElementById('solutionPre');
+      const exq = document.getElementById('exampleQuery');
+
+      const isSql = String(current.language).toLowerCase() === 'sql';
+      if(isSql){
+        // toggle visibility of the example query (SQL "solution")
+        const hidden = (exq.style.display === 'none' || !exq.style.display);
+        exq.style.display = hidden ? 'block' : 'none';
+        showSol.textContent = hidden ? 'Hide solution' : 'Show solution';
+        // keep generic solutionPre hidden for SQL
+        if(pre) pre.style.display = 'none';
+        return;
+      }
+
+      // Non-SQL behavior: toggle generic solutionPre which already contains the solution text
       if(!pre) return;
       const isHidden = (pre.style.display === 'none' || !pre.style.display);
       if(isHidden){
@@ -316,6 +366,41 @@ document.addEventListener('DOMContentLoaded', () => {
           alert('Copy failed');
         }
       });
+    });
+  }
+
+  // server-side table fetch for SQL exercises
+  const showServerBtn = document.getElementById('showServerTableBtn');
+  if(showServerBtn){
+    showServerBtn.addEventListener('click', async function loadServerTable() {
+      if(!current || String(current.language).toLowerCase() !== 'sql') return;
+      const container = document.getElementById('sqlServerTable');
+      // toggle behavior: if container already has content and visible -> hide
+      if(container.innerHTML && container.style.display !== 'none') {
+        container.style.display = 'none';
+        showServerBtn.textContent = 'Show table (server)';
+        return;
+      }
+      showServerBtn.disabled = true;
+      showServerBtn.textContent = 'Loading…';
+      container.innerHTML = '';
+      try {
+        const res = await fetch('/exercise-table/' + encodeURIComponent(String(current.id)));
+        const json = await res.json();
+        if(!json.ok){
+          container.innerHTML = `<div class="alert alert-danger small">Error: ${json.error || 'Unknown'}</div>`;
+          showServerBtn.textContent = 'Show table (server)';
+          showServerBtn.disabled = false;
+          return;
+        }
+        container.innerHTML = json.html || '<div class="small-muted">No table data</div>';
+        showServerBtn.textContent = 'Hide table (server)';
+        showServerBtn.disabled = false;
+      } catch (err) {
+        container.innerHTML = `<div class="alert alert-danger small">Request failed: ${err.toString()}</div>`;
+        showServerBtn.textContent = 'Show table (server)';
+        showServerBtn.disabled = false;
+      }
     });
   }
 

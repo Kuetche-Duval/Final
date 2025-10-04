@@ -95,7 +95,7 @@
     "language": "sql",
     "difficulty": "Easy",
     "description": "Create a Sales Table  and Insert sample data into Sales table. The columns present should be : \"sale_id, product_id, quantity_sold, sale_date, total_price\"",
-    "schema_sql": "-- Create Sales table\r\n\r\nCREATE TABLE Sales (//Implement);\r\n\r\n-- Insert sample data into Sales table\r\n\r\nINSERT INTO Sales (//Implement);",
+    "schema_sql": "-- Create Sales table\r\n\r\nCREATE TABLE Sales (\r\n    sale_id INT PRIMARY KEY,\r\n    product_id INT,\r\n    quantity_sold INT,\r\n    sale_date DATE,\r\n    total_price DECIMAL(10, 2),\r\n    FOREIGN KEY (product_id) REFERENCES Products(product_id)\r\n);\r\n\r\n-- Insert sample data into Sales table\r\n\r\nINSERT INTO Sales (sale_id, product_id, quantity_sold, sale_date, total_price) VALUES\r\n(1, 101, 5, '2024-01-01', 2500.00),\r\n(2, 102, 3, '2024-01-02', 900.00),\r\n(3, 103, 2, '2024-01-02', 60.00),\r\n(4, 104, 4, '2024-01-03', 80.00),\r\n(5, 105, 6, '2024-01-03', 90.00);",
     "example_query": "-- Create Sales table\r\n\r\nCREATE TABLE Sales (\r\n    sale_id INT PRIMARY KEY,\r\n    product_id INT,\r\n    quantity_sold INT,\r\n    sale_date DATE,\r\n    total_price DECIMAL(10, 2),\r\n    FOREIGN KEY (product_id) REFERENCES Products(product_id)\r\n);\r\n\r\n-- Insert sample data into Sales table\r\n\r\nINSERT INTO Sales (sale_id, product_id, quantity_sold, sale_date, total_price) VALUES\r\n(1, 101, 5, '2024-01-01', 2500.00),\r\n(2, 102, 3, '2024-01-02', 900.00),\r\n(3, 103, 2, '2024-01-02', 60.00),\r\n(4, 104, 4, '2024-01-03', 80.00),\r\n(5, 105, 6, '2024-01-03', 90.00);",
     "sample_data": {}
   }

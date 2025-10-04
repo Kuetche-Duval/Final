@@ -1,0 +1,570 @@
+{% extends 'base.html' %}
+
+{% block title %}
+  Ask a Question
+{% endblock %}
+
+{% block styles %}
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<style>
+  :root{
+    --bg: #f6f8fb;
+    --card-bg: #ffffff;
+    --text: #0b1220;
+    --muted: #6b7280;
+    --accent-green: #25d366;
+    --card-radius: 12px;
+  }
+  [data-theme="dark"]{
+    --bg: #08101a;
+    --card-bg: #071019;
+    --text: #e6eef8;
+    --muted: #98a0b3;
+  }
+  body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+  .card { background: var(--card-bg); border-radius: var(--card-radius); box-shadow: 0 6px 20px rgba(3,3,3,0.06); padding: 14px; }
+  .page-header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
+  .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .question-list { list-style:none; padding:0; margin:0; display:grid; gap:10px; }
+  .question-item { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; padding:12px 14px; border-radius:12px; background: rgba(0,0,0,0.02); cursor: pointer; min-width:0; }
+  .question-item .left { min-width:0; flex:1 1 auto; }
+  .category-badge { background: rgba(37,211,102,0.12); color: var(--accent-green); padding:4px 8px; border-radius:10px; font-weight:700; font-size:.86rem; white-space:nowrap; }
+  .author { color: var(--muted); font-weight:700; font-size:.88rem; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .message-text { color: var(--text); font-size: .97rem; white-space:pre-wrap; word-break:break-word; overflow-wrap:break-word; hyphens:auto; }
+  .op-attempt { margin-top:8px; padding:8px; background:rgba(0,0,0,0.02); border-radius:8px; color:var(--muted); font-size:.92rem; }
+  .op-attempt small { color:var(--muted); display:block; margin-bottom:6px; font-weight:700; }
+  .btn-sub { font-size: .85rem; padding:6px 8px; border-radius:8px; }
+  .answer-panel { display:none; margin-top:8px; }
+  .tiny-link { font-size:.85rem; color:var(--accent-green); text-decoration:underline; cursor:pointer; background:none;border:0;padding:0; }
+  .subscribe-btn { background:#fff3cd; border:1px solid #ffeeba; color:#856404; }
+  .subscribe-btn.subscribed { background:#d4edda; border-color:#c3e6cb; color:#155724; }
+  .status-inline { margin-left:8px; font-size:0.85rem; color:var(--muted); }
+  /* ensure children don't overflow and wrap nicely */
+  .meta-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0; }
+  .meta-right { min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
+  @media (max-width:992px) { .question-item{flex-direction:column; align-items:stretch} .author { max-width:100%; white-space:normal; } .meta-right { text-align:left; } }
+  @media (max-width:576px) { .question-item{padding:10px} .author { max-width:140px; } .message-text { font-size:0.95rem } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="card">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div><strong>💬 Ask & Answer Questions</strong></div>
+      <div class="d-flex gap-2 align-items-center">
+        <button id="theme-toggle" class="btn btn-sm btn-outline-secondary">Toggle theme</button>
+        <div class="small text-muted">Newton's Nerds</div>
+      </div>
+    </div>
+
+    <!-- New Question Form -->
+    <form id="new-question-form" method="POST" action="{{ url_for('questions_page') }}" class="mb-4" novalidate>
+      <div class="row g-2">
+        <div class="col-md-5">
+          <label for="category" class="form-label small">Category</label>
+          <select class="form-select" id="category" name="category" required>
+            <option value="">-- Select Category --</option>
+            {% for c in categories %}
+              <option value="{{ c }}">{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-7 d-flex align-items-end">
+          <button type="submit" class="btn btn-success w-100">➕ Submit Question (attempt required)</button>
+        </div>
+      </div>
+
+      <div class="mb-3 mt-2">
+        <label for="question" class="form-label small">Your Question</label>
+        <textarea class="form-control" id="question" name="question" rows="3" required></textarea>
+      </div>
+
+      <div class="mb-3">
+        <label for="attempt" class="form-label small">Your Attempt (required)</label>
+        <textarea class="form-control" id="attempt" name="attempt" rows="3" required></textarea>
+        <div class="form-text small text-muted">You must provide your attempt before submitting the question.</div>
+      </div>
+
+      <!-- optional name (kept but hidden by default) -->
+      <div style="display:none">
+        <input type="text" name="name" placeholder="Optional name">
+      </div>
+    </form>
+
+    <hr>
+
+    <!-- Filter + sort -->
+    <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+      <div class="d-flex align-items-center gap-2">
+        <label class="small mb-0">📂 Filter:</label>
+        <form id="filter-form" method="GET" action="{{ url_for('questions_page') }}">
+          <select class="form-select form-select-sm" id="categoryFilter" name="categoryFilter" onchange="this.form.submit()" style="max-width:220px;">
+            <option value="">All</option>
+            {% for c in categories %}
+              <option value="{{ c }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </form>
+      </div>
+
+      <div class="ms-auto d-flex gap-2 align-items-center">
+        <input id="searchBox" class="form-control form-control-sm" placeholder="Search questions..." style="min-width:200px;">
+        <select id="sortSelect" class="form-select form-select-sm" style="width:170px">
+          <option value="none">Sort: Default</option>
+          <option value="new">Sort: Newest first</option>
+          <option value="old">Sort: Oldest first</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Questions list -->
+    <ul class="question-list" id="questionsList" aria-live="polite">
+      {% for q in questions %}
+        {% set cat = q[0] if q|length > 0 else "Other" %}
+        {% set author = q[1] if q|length > 1 and q[1] else "Anonymous" %}
+        {% set text = q[2] if q|length > 2 else "" %}
+        {% set attempt = q[3] if q|length > 3 else "" %}
+        {% set timestr = q[4] if q|length > 4 else "" %}
+        <li tabindex="0" class="question-item" role="button"
+            data-author="{{ author|e }}"
+            data-category="{{ cat|e }}"
+            data-question="{{ text|e }}"
+            data-attempt="{{ attempt|e }}"
+            data-time="{{ timestr|e }}">
+          <div class="left">
+            <div class="d-flex justify-content-between align-items-start mb-1 meta-row">
+              <div style="display:flex;gap:8px;align-items:center;min-width:0">
+                <div class="category-badge">{{ cat }}</div>
+                <div class="author" title="{{ author }}">{{ author }}</div>
+              </div>
+              <div class="meta-right small text-muted">{{ timestr }}</div>
+            </div>
+
+            <div class="message-text">{{ text }}</div>
+
+            <!-- OP's attempt (visible to answerers) -->
+            <div class="op-attempt" aria-hidden="false">
+              <small>OP's attempt</small>
+              <div class="op-attempt-short">{{ attempt[:180] }}{% if attempt|length > 180 %}…{% endif %}</div>
+              {% if attempt|length > 180 %}
+                <button class="tiny-link show-full-attempt">Show full attempt</button>
+              {% endif %}
+              <div class="op-attempt-full" style="display:none; margin-top:8px;">{{ attempt }}</div>
+            </div>
+
+            <!-- Answer / send panel -->
+            <div class="answer-panel mt-2" aria-hidden="true">
+              <div class="mb-2">
+                <label class="form-label small">Your answer (you'll send it to the community)</label>
+                <textarea class="form-control answer-text" rows="3" placeholder="Write your short answer here..."></textarea>
+              </div>
+
+              <div class="d-flex gap-2">
+                {% if community_links.get(cat) %}
+                  <a class="btn btn-outline-success btn-sub open-group" href="{{ community_links.get(cat) }}" target="_blank" rel="noopener">Open {{ cat }} Community</a>
+                {% else %}
+                  <button class="btn btn-outline-secondary btn-sub" disabled>Community not set</button>
+                {% endif %}
+
+                <button class="btn btn-outline-warning btn-sub subscribe-btn" data-subject="{{ cat }}">🔔 Subscribe</button>
+
+                <button class="btn btn-primary btn-sub copy-answer">Copy answer</button>
+                <button class="btn btn-info btn-sub share-whatsapp">Share to WhatsApp</button>
+              </div>
+
+              <div class="form-text small text-muted mt-2">Tip: open the community link, paste your answer and send it in the group. The app cannot securely post into WhatsApp groups for you.</div>
+            </div>
+          </div>
+
+          <div style="min-width:80px; text-align:right" class="meta-right-small">
+            <div class="small text-muted">Asked by {{ author }}</div>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<!-- Community JSON & vapid key -->
+<script type="application/json" id="communityLinksData">{{ community_links|tojson }}</script>
+<script type="application/json" id="vapidKeyData">{{ vapid_public_key|tojson }}</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const communityLinksEl = document.getElementById('communityLinksData');
+  const vapidEl = document.getElementById('vapidKeyData');
+  let communityLinks = {};
+  let vapidPublicKey = "";
+  try { communityLinks = communityLinksEl ? JSON.parse(communityLinksEl.textContent || '{}') : {}; } catch(e){ communityLinks = {}; console.error(e); }
+  try { vapidPublicKey = vapidEl ? JSON.parse(vapidEl.textContent || '""') : ""; } catch(e){ vapidPublicKey = ""; console.error(e); }
+
+  /* --- Interaction handlers (existing features) --- */
+  document.querySelectorAll('.question-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (['BUTTON','A','TEXTAREA','INPUT','SELECT','LABEL'].includes(e.target.tagName)) return;
+      const panel = item.querySelector('.answer-panel');
+      if (!panel) return;
+      const isVisible = panel.style.display === 'block';
+      panel.style.display = isVisible ? 'none' : 'block';
+      panel.setAttribute('aria-hidden', String(isVisible ? 'true' : 'false'));
+    });
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); item.click(); }
+    });
+  });
+
+  document.querySelectorAll('.show-full-attempt').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const item = btn.closest('.question-item');
+      const full = item.querySelector('.op-attempt-full');
+      const short = item.querySelector('.op-attempt-short');
+      if (!full || !short) return;
+      if (full.style.display === 'none' || !full.style.display) {
+        full.style.display = 'block'; short.style.display = 'none'; btn.textContent = 'Hide full attempt';
+      } else {
+        full.style.display = 'none'; short.style.display = ''; btn.textContent = 'Show full attempt';
+      }
+    });
+  });
+
+  document.querySelectorAll('.copy-answer').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const item = btn.closest('.question-item');
+      const answerEl = item.querySelector('.answer-text');
+      const answer = (answerEl && (answerEl.value ?? answerEl.textContent ?? '')) || '';
+      navigator.clipboard.writeText(answer).then(() => {
+        const old = btn.textContent;
+        btn.textContent = 'Copied ✓';
+        setTimeout(() => btn.textContent = old, 1500);
+      }).catch(() => alert('Copy failed — please select and copy manually.'));
+    });
+  });
+
+  document.querySelectorAll('.share-whatsapp').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const item = btn.closest('.question-item');
+      if(!item) return;
+      const answer = (item.querySelector('.answer-text')?.value || '').trim();
+      const subject = item.dataset?.category || '';
+      const group = communityLinks[subject] || '';
+      let text = answer || '';
+      if (group) text += (text ? "\n\n" : "") + "Group: " + group;
+      const url = 'https://api.whatsapp.com/send?text=' + encodeURIComponent(text || '(no text)');
+      window.open(url, '_blank');
+    });
+  });
+
+  /* --- Theme --- */
+  function applyTheme(theme) {
+    if (theme) document.documentElement.setAttribute('data-theme', theme);
+    else document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('site-theme', theme || '');
+  }
+  const themeToggle = document.getElementById('theme-toggle');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      const cur = localStorage.getItem('site-theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      applyTheme(cur === 'dark' ? 'light' : 'dark');
+    });
+  }
+  const saved = localStorage.getItem('site-theme'); if (saved) applyTheme(saved);
+
+  /* --- Search & Sort --- */
+  const searchBox = document.getElementById('searchBox');
+  const sortSelect = document.getElementById('sortSelect');
+  const list = document.getElementById('questionsList');
+  function filterList() {
+    if (!searchBox || !list) return;
+    const q = (searchBox.value || '').toLowerCase();
+    Array.from(list.children).forEach(li => {
+      const txt = (li.dataset.question || '').toLowerCase() + ' ' + (li.dataset.author || '').toLowerCase() + ' ' + (li.dataset.category || '').toLowerCase() + ' ' + (li.dataset.attempt || '').toLowerCase();
+      li.style.display = txt.includes(q) ? '' : 'none';
+    });
+  }
+  if (searchBox) searchBox.addEventListener('input', filterList);
+  function sortListBy(option) {
+    if (!list) return;
+    const nodes = Array.from(list.children).filter(n => n.style.display !== 'none');
+    if (option === 'new') {
+      nodes.sort((a,b) => (Date.parse(b.dataset.time || 0) - Date.parse(a.dataset.time || 0)));
+    } else if (option === 'old') {
+      nodes.sort((a,b) => (Date.parse(a.dataset.time || 0) - Date.parse(b.dataset.time || 0)));
+    } else return;
+    nodes.forEach(n => list.appendChild(n));
+  }
+  if (sortSelect) {
+    sortSelect.addEventListener('change', () => sortListBy(sortSelect.value));
+    if (sortSelect.value && sortSelect.value !== 'none') sortListBy(sortSelect.value);
+  }
+
+  /* --- Form validation --- */
+  const newQForm = document.getElementById('new-question-form');
+  if (newQForm) {
+    newQForm.addEventListener('submit', (ev) => {
+      const q = document.getElementById('question');
+      const a = document.getElementById('attempt');
+      if (!q.value.trim() || !a.value.trim()) {
+        ev.preventDefault();
+        alert('Please fill both question and your attempt before submitting.');
+      }
+    });
+  }
+
+  /* --- Push helpers --- */
+  function urlBase64ToUint8Array(base64String) {
+    if (!base64String) return null;
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
+  // SW registration + subscription management
+  let registrationForPush = null;
+  let currentSubscription = null;
+  let serverSubjectsForEndpoint = []; // subjects saved on server for this endpoint
+
+  function updateSubscribeButtonsUI() {
+    document.querySelectorAll('.subscribe-btn').forEach(btn => {
+      const subj = btn.dataset.subject || '';
+      const subscribed = currentSubscription && serverSubjectsForEndpoint.includes(subj);
+      if (subscribed) {
+        btn.textContent = 'Subscribed ✓';
+        btn.classList.add('subscribed');
+        btn.dataset.state = 'subscribed';
+        btn.disabled = false;
+      } else {
+        btn.textContent = '🔔 Subscribe';
+        btn.classList.remove('subscribed');
+        btn.dataset.state = 'none';
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function initServiceWorkerAndSubscription() {
+    if (!('serviceWorker' in navigator)) {
+      console.warn("Service workers not supported.");
+      return;
+    }
+    try {
+      // register at root for broadest scope (important for mobile)
+      registrationForPush = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+      try { await registrationForPush.update(); } catch(e){ /* ignore */ }
+      await navigator.serviceWorker.ready;
+
+      // listen for messages from SW (pushsubscriptionchange notifications)
+      navigator.serviceWorker.addEventListener('message', (ev) => {
+        console.log('[page] SW message', ev.data);
+        if (ev.data && ev.data.type === 'SUBSCRIPTION_LOST') {
+          console.warn('Push subscription possibly lost. Consider re-subscribing.');
+        }
+      });
+
+      try {
+        currentSubscription = await registrationForPush.pushManager.getSubscription();
+      } catch (e) {
+        console.error('getSubscription failed', e);
+        currentSubscription = null;
+      }
+
+      // if we already have an endpoint stored in localStorage, prefer verifying that at server
+      const savedEndpoint = localStorage.getItem('subscriptionEndpoint');
+      if (currentSubscription && currentSubscription.endpoint) {
+        // keep currentSubscription
+      } else if (savedEndpoint) {
+        // If the browser lost subscription object (some mobiles do), we still query server to show subscribe status
+        currentSubscription = { endpoint: savedEndpoint };
+      }
+
+      if (currentSubscription && currentSubscription.endpoint) {
+        try {
+          const resp = await fetch('/subscriptions/check?endpoint=' + encodeURIComponent(currentSubscription.endpoint));
+          if (resp.ok) {
+            const j = await resp.json();
+            if (j && j.ok && Array.isArray(j.subjects)) {
+              serverSubjectsForEndpoint = j.subjects;
+            }
+          }
+        } catch (e) {
+          console.error("Error querying server for subscriptions:", e);
+        }
+      } else {
+        serverSubjectsForEndpoint = [];
+      }
+      updateSubscribeButtonsUI();
+      console.log("[subscribe] SW ready. subscription:", !!currentSubscription);
+    } catch (err) {
+      console.error("[subscribe] SW register/getSubscription failed:", err);
+    }
+  }
+
+  async function subscribeForSubject(subject, btn) {
+    if (!registrationForPush) {
+      alert("Service worker not ready — reload the page and try again.");
+      return;
+    }
+
+    // request permission on user gesture
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      alert('Please allow notifications to subscribe (check browser settings).');
+      return;
+    }
+
+    try {
+      let sub = await registrationForPush.pushManager.getSubscription();
+      if (!sub) {
+        if (!vapidPublicKey) {
+          alert('Push not configured on the server (no VAPID public key).');
+          console.error("Missing VAPID public key value:", vapidPublicKey);
+          return;
+        }
+        sub = await registrationForPush.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+        });
+      }
+
+      currentSubscription = sub;
+      const subObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
+
+      // send to server and wait for successful sheet append BEFORE informing user
+      let res, jsonRes;
+      try {
+        res = await fetch('{{ url_for("save_subscription_route") }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription: subObj, subject: subject, client_id: 'web' })
+        });
+      } catch (e) {
+        console.error("[subscribe] network error while saving subscription:", e);
+        alert('Network error while saving subscription. Please try again.');
+        return;
+      }
+
+      try { jsonRes = await res.json(); } catch(e){ jsonRes = null; }
+
+      if (!res.ok) {
+        console.error("[subscribe] server returned error", res.status, jsonRes);
+        alert('Failed to save subscription on server: ' + (jsonRes && jsonRes.error ? jsonRes.error : res.statusText));
+        return;
+      }
+
+      if (jsonRes && jsonRes.ok) {
+        // only now consider subscription saved
+        // persist endpoint locally so page can remember even if browser gives different sub object later
+        try {
+          localStorage.setItem('subscriptionEndpoint', subObj.endpoint || '');
+        } catch (e) { /* ignore storage errors */ }
+
+        // update local serverSubjectsForEndpoint (avoid duplicates)
+        if (!serverSubjectsForEndpoint.includes(subject)) serverSubjectsForEndpoint.push(subject);
+        updateSubscribeButtonsUI();
+        if (btn) { btn.textContent = 'Subscribed ✓'; btn.classList.add('subscribed'); }
+
+        // small feedback AFTER server confirms
+        console.log('[subscribe] subscribed on endpoint', subObj.endpoint);
+        alert('Subscribed successfully ✓ (server saved)');
+      } else {
+        console.error("[subscribe] unexpected server response", jsonRes);
+        alert('Subscription saved? server response: ' + JSON.stringify(jsonRes));
+      }
+    } catch (err) {
+      console.error("pushManager.subscribe failed:", err);
+      if (err && err.name === 'NotAllowedError') {
+        alert('Notifications are blocked for this site. Check your phone settings (Site settings → Notifications).');
+      } else if (err && err.name === 'SecurityError') {
+        alert('Push subscription failed due to security restrictions (must be HTTPS).');
+      } else {
+        alert("Subscription failed: " + (err && err.message ? err.message : String(err)));
+      }
+    }
+  }
+
+  async function unsubscribeEndpoint(btn) {
+    if (!registrationForPush) {
+      alert("Service worker not ready.");
+      return;
+    }
+    try {
+      const sub = await registrationForPush.pushManager.getSubscription();
+      if (!sub) {
+        // still attempt server-side cleanup if we have a saved endpoint locally
+        const savedEndpoint = localStorage.getItem('subscriptionEndpoint');
+        if (!savedEndpoint) {
+          alert('No active subscription to unsubscribe.');
+          return;
+        }
+        if (!confirm('Unsubscribe this browser from all subjects? This will remove saved subscriptions stored on the server for this browser.')) {
+          return;
+        }
+        try {
+          await fetch('/subscriptions/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ endpoint: savedEndpoint })
+          });
+        } catch(e) { console.error("server-side delete failed", e); }
+        localStorage.removeItem('subscriptionEndpoint');
+        currentSubscription = null;
+        serverSubjectsForEndpoint = [];
+        updateSubscribeButtonsUI();
+        alert('Requested server cleanup for stored endpoint.');
+        return;
+      }
+
+      if (!confirm('Unsubscribe this browser from all subjects? This will remove saved subscriptions stored on the server for this browser.')) {
+        return;
+      }
+      const ok = await sub.unsubscribe();
+      if (!ok) console.warn("sub.unsubscribe returned false");
+
+      try {
+        await fetch('/subscriptions/delete', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ endpoint: sub.endpoint })
+        });
+      } catch (e) {
+        console.error("Failed to request server-side deletion:", e);
+      }
+      try { localStorage.removeItem('subscriptionEndpoint'); } catch(e){}
+
+      currentSubscription = null;
+      serverSubjectsForEndpoint = [];
+      updateSubscribeButtonsUI();
+      alert('Unsubscribed locally and requested server cleanup.');
+    } catch (e) {
+      console.error("Unsubscribe failed", e);
+      alert('Unsubscribe failed (see console).');
+    }
+  }
+
+  // delegated click handler for subscribe buttons
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('.subscribe-btn');
+    if (!btn) return;
+    e.preventDefault();
+    const subj = btn.dataset.subject || 'Other';
+    const state = btn.dataset.state || 'none';
+    if (state === 'subscribed') {
+      // unsubscribe globally for endpoint
+      unsubscribeEndpoint(btn);
+    } else {
+      subscribeForSubject(subj, btn);
+    }
+  });
+
+  // initialize SW & subscription detection
+  initServiceWorkerAndSubscription();
+});
+</script>
+{% endblock %}

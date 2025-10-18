@@ -7,3 +7,11 @@ venv/
 *.log
 trial.py
 trial.py
+sql_trial_folder/app.py
+sql_trial_folder/key_file
+sql_trial_folder/sql.py
+sql_trial_folder/store_transactions.db
+sql_trial_folder/store_transactions.db-journal
+sql_trial_folder/templates/coding.html
+sql_trial_folder/templates/base.html
+templates/coding.html

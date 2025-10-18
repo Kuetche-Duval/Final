@@ -1129,7 +1129,7 @@ def health_detail(slug):
 # -------------------------
 # SQL visualizer helpers & route
 # -------------------------
-def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> (sqlite3.Connection, list):
+def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> sqlite3.Connection | list:
     """
     Build an in-memory sqlite DB from admin-provided schema_sql and sample_data.
     Returns (conn, populated_table_names)
@@ -1190,7 +1190,7 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> (sqlite3.C
     conn.commit()
     return conn, populated
 
-@app.route("/exercise-table/<exercise_id>", methods=["GET"])
+@app.route("/exercise-table/<exercise_id>", methods=["GET", "POST"])
 def exercise_table_route(exercise_id):
     """
     Build an in-memory DB from the exercise's schema_sql and sample_data,

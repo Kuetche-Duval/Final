@@ -46,7 +46,7 @@
               <table class="table table-hover align-middle mb-0">
                 <thead>
                   <tr>
-                    <th>Day</th><th>Time</th><th>Subject</th><th>Facilitator</th><th>Link/Location</th><th>Notes</th>
+                    <th>Day</th><th>Time</th><th>Subject</th><th>Notes</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -56,17 +56,6 @@
                         <td>{{ row.day or '' }}</td>
                         <td>{{ row.time or '' }}</td>
                         <td>{{ row.subject or '' }}</td>
-                        <td>{{ row.facilitator or '' }}</td>
-                        <td>
-                          {% if row.link %}
-                            {% set linkval = row.link|string %}
-                            {% if linkval.startswith('http') or linkval.startswith('www.') %}
-                              <a href="{{ linkval }}" target="_blank" rel="noopener noreferrer">{{ linkval }}</a>
-                            {% else %}
-                              {{ linkval }}
-                            {% endif %}
-                          {% endif %}
-                        </td>
                         <td>{{ row.notes or '' }}</td>
                       </tr>
                     {% endfor %}
@@ -99,67 +88,20 @@
       </div>
 
       <!-- Gallery -->
-      <section class="section mt-3 col-12">
+      <section class="section mt-3">
         <h4 class="mb-3">🖼️ Motivation / Prayers / Verses (Gallery)</h4>
         <div class="row g-3">
           {% if dr_values %}
             {% for item in dr_values %}
-              {# Resolve title and image source robustly #}
-              {% set title = (item[0] if item is sequence and item|length>0 else (item.get('name') if item is mapping else 'Image')) %}
-              {# meta may be list, string, or mapping #}
-              {% set meta = (item[1] if item is sequence and item|length>1 else item if item is mapping else '') %}
-
-              {# helper to extract candidate src/id from meta #}
-              {% set img_candidate = '' %}
-              {% if meta is string %}
-                {% set img_candidate = meta %}
-              {% elif meta is mapping %}
-                {% if meta.get('id') %} {% set img_candidate = meta.get('id') %} 
-                {% elif meta.get('fileId') %} {% set img_candidate = meta.get('fileId') %}
-                {% elif meta.get('thumbnailLink') %} {% set img_candidate = meta.get('thumbnailLink') %}
-                {% elif meta.get('url') %} {% set img_candidate = meta.get('url') %}
-                {% endif %}
-              {% elif meta is sequence and meta|length>0 %}
-                {% for maybe in meta %}
-                  {% if maybe is string and maybe|length > 5 %}
-                    {% set img_candidate = maybe %}
-                    {% break %}
-                  {% elif maybe is mapping %}
-                    {% if maybe.get('id') %} {% set img_candidate = maybe.get('id') %} {% break %} {% endif %}
-                  {% endif %}
-                {% endfor %}
-              {% endif %}
-
-              {# Decide final URL: if candidate looks like a Drive id (alphanumeric with - or _), use drive_image route; else if starts with http use it directly #}
-              {% set img_url = '' %}
-              {% if img_candidate %}
-                {% if img_candidate.startswith('http') %}
-                  {% set img_url = img_candidate %}
-                {% elif img_candidate is string and img_candidate|regex_search('^[A-Za-z0-9_-]{10,}$') %}
-                  {% set img_url = url_for('drive_image', file_id=img_candidate) %}
-                {% else %}
-                  {% set img_url = img_candidate %}
-                {% endif %}
-              {% endif %}
-
-              {# caption heuristics #}
-              {% set caption = '' %}
-              {% if item is sequence and item|length>1 %}
-                {% set maybe_meta = item[1] %}
-                {% if maybe_meta is sequence and maybe_meta|length>0 %}
-                  {% set caption = maybe_meta[0] %}
-                {% elif maybe_meta is mapping and maybe_meta.get('description') %}
-                  {% set caption = maybe_meta.get('description') %}
-                {% endif %}
-              {% elif item is mapping and item.get('description') %}
-                {% set caption = item.get('description') %}
-              {% endif %}
-
+              {% set title = item[0] if item|length>0 else 'Image' %}
+              {% set meta = item[1] if item|length>1 else [] %}
+              {% set caption = (meta[0] if meta|length>0 else '') %}
+              {% set img_id = (meta[1] if meta|length>1 else meta if meta is string else '') %}
               <div class="col-6 col-md-4 col-lg-3">
                 <div class="card shadow-sm h-100">
                   <div class="aspect-1-1">
-                    {% if img_url %}
-                      <img class="thumb" src="{{ img_url }}" alt="{{ title }}" loading="lazy" data-fit="contain" data-bs-toggle="modal" data-bs-target="#imageModal" data-imgsrc="{{ img_url }}" />
+                    {% if img_id %}
+                      <img class="thumb" src="{{ url_for('drive_image', file_id=img_id) }}" alt="{{ title }}" loading="lazy" data-fit="contain" data-bs-toggle="modal" data-bs-target="#imageModal" data-imgsrc="{{ img_url }}" />
                     {% else %}
                       <div class="img-placeholder">No Image</div>
                     {% endif %}
@@ -228,7 +170,7 @@
                   {% set fname = f.get('name') or f.get('title') or 'Untitled Form' %}
                   {% set fid = f.get('id') or (f.get('fileId') if f.get('fileId') else '') %}
                   {% set link = f.get('webViewLink') or ('https://docs.google.com/forms/d/' ~ fid ~ '/viewform') %}
-                  <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <li class="list-group-item">
                     <div>
                       <div class="fw-bold">{{ fname }}</div>
                       {% if f.get('description') %}<div class="small text-muted">{{ f.get('description') }}</div>{% endif %}

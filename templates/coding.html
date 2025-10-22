@@ -19,6 +19,7 @@
   .exercise-row a:hover { text-decoration:underline; color:var(--accent-green); }
   .hint { font-size:0.9rem; color:var(--muted); margin-top:6px; }
   .small-muted { font-size:0.85rem; color:var(--muted); }
+  .btn-loading { pointer-events: none; opacity: .7; }
 </style>
 {% endblock %}
 
@@ -83,7 +84,7 @@
 
       <div class="editor-right">
         <label class="small">Output / Preview</label>
-        <div id="jsConsole" style="background:#0b1220;color:#e6eef8;padding:10px;border-radius:8px; min-height:80px; font-family:monospace; font-size:0.9rem; overflow:auto; display:none;"></div>
+        <div id="jsConsole" style="background:#0b1220;color:#e6eef8;padding:10px;border-radius:8px; min-height:80px; font-family:monospace; font-size:0.9rem; overflow:auto; display:none;" aria-live="polite"></div>
         <iframe id="previewFrame" class="run-frame" sandbox="allow-scripts"></iframe>
 
         <div class="mt-3">
@@ -91,8 +92,6 @@
           <pre id="solutionPre" class="solution" style="display:none;"></pre>
 
           <div id="sqlPreview" style="display:none;margin-top:8px;">
-            <div class="small-muted">Schema</div>
-            <pre id="schemaPre" class="solution"></pre>
             <div class="small-muted">Sample data</div>
             <div id="sampleData"></div>
             <div class="small-muted">Example query</div>
@@ -111,8 +110,6 @@
 
 <script type="application/json" id="exercisesData">{{ exercises|tojson }}</script>
 
-<script type="application/json" id="exercisesData">{{ exercises|tojson }}</script>
-
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const exEl = document.getElementById('exercisesData');
@@ -121,108 +118,158 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let current = null;
 
+  const codeEditor = document.getElementById('codeEditor');
+  const solutionPre = document.getElementById('solutionPre');
+  const showSolBtn = document.getElementById('showSol');
+  const editorModeSelect = document.getElementById('editorMode');
+  const jsConsole = document.getElementById('jsConsole');
+  const preview = document.getElementById('previewFrame');
+  const sqlPreview = document.getElementById('sqlPreview');
+  const exampleQueryPre = document.getElementById('exampleQuery');
+  const sampleDataRoot = document.getElementById('sampleData');
+  const showServerBtn = document.getElementById('showServerTableBtn');
+  const serverContainer = document.getElementById('sqlServerTable');
+
+  // Helper: determine canonical code/solution keys for different languages
+  function getStarterFor(ex, mode) {
+    if(!ex) return '';
+    mode = (mode || '').toLowerCase();
+    // check common variants and fallbacks
+    if(mode === 'js') return ex.starter_js || ex.starterJS || ex.starter || '';
+    if(mode === 'html') return ex.starter_html || ex.starterHTML || ex.starter || '';
+    if(mode === 'c') return ex.starter_c || ex.starterC || ex.starter || '';
+    if(mode === 'python') return ex.starter_py || ex.starter_python || ex.starter_python3 || ex.starter || '';
+    if(mode === 'sql') return ex.schema_sql || ex.schema || ex.schemaSql || ex.starter || '';
+    // fallback to any available starter field
+    return ex.starter_js || ex.starter_html || ex.starter_py || ex.starter_c || ex.schema_sql || ex.starter || '';
+  }
+  function getSolutionFor(ex, mode) {
+    if(!ex) return '';
+    mode = (mode || '').toLowerCase();
+    if(mode === 'js') return ex.solution_js || ex.solutionJS || ex.solution || '';
+    if(mode === 'html') return ex.solution_html || ex.solutionHTML || ex.solution || '';
+    if(mode === 'c') return ex.solution_c || ex.solutionC || ex.solution || '';
+    if(mode === 'python') return ex.solution_py || ex.solution_python || ex.solution || '';
+    if(mode === 'sql') return ex.example_query || ex.example_query || ex.exampleQuery || ex.example || '';
+    return ex.solution_js || ex.solution_html || ex.solution_py || ex.solution_c || ex.example_query || ex.solution || '';
+  }
+
+  // helper: render sample data tables into #sampleData (supports multiple tables)
+  function renderSampleData(sample) {
+    sampleDataRoot.innerHTML = '';
+    if (!sample || typeof sample !== 'object' || Object.keys(sample).length === 0) {
+      sampleDataRoot.textContent = 'No sample rows';
+      return;
+    }
+    Object.keys(sample).forEach(tbl => {
+      const rows = Array.isArray(sample[tbl]) ? sample[tbl] : [];
+      const wrapper = document.createElement('div');
+      wrapper.style.marginBottom = '10px';
+      const title = document.createElement('div');
+      title.className = 'small-muted';
+      title.textContent = 'Table: ' + tbl;
+      wrapper.appendChild(title);
+
+      const table = document.createElement('table');
+      table.className = 'sql-table table table-sm';
+      const thead = document.createElement('thead');
+      const tbody = document.createElement('tbody');
+
+      // compute columns as union of keys across rows to be robust
+      const colsSet = new Set();
+      rows.forEach(r => {
+        if (r && typeof r === 'object') {
+          Object.keys(r).forEach(k => colsSet.add(k));
+        }
+      });
+      const cols = Array.from(colsSet);
+
+      if (cols.length === 0) {
+        const noRows = document.createElement('div');
+        noRows.textContent = 'No sample rows';
+        wrapper.appendChild(noRows);
+      } else {
+        const trh = document.createElement('tr');
+        cols.forEach(c => {
+          const th = document.createElement('th');
+          th.textContent = c;
+          trh.appendChild(th);
+        });
+        thead.appendChild(trh);
+        rows.forEach(r => {
+          const tr = document.createElement('tr');
+          cols.forEach(c => {
+            const td = document.createElement('td');
+            const v = r && Object.prototype.hasOwnProperty.call(r, c) ? r[c] : '';
+            td.textContent = v === null || typeof v === 'undefined' ? '' : String(v);
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+      }
+      sampleDataRoot.appendChild(wrapper);
+    });
+  }
+
+  // Apply current exercise & editor mode to UI fields
+  function applyExerciseToUI(ex) {
+    if(!ex) return;
+    current = ex;
+    // decide mode: prefer exercise language unless user changed mode explicitly
+    const lang = (ex.language || 'js').toLowerCase();
+    // keep existing selection unless it's inconsistent with ex language; if mismatch, set to ex language
+    const allowed = ['js','html','c','sql','python'];
+    if(!allowed.includes(editorModeSelect.value) || editorModeSelect.value !== lang) {
+      // set editor mode to exercise language to make solution display consistent by default
+      editorModeSelect.value = lang;
+    }
+    updateEditorFromCurrent();
+  }
+
+  // Fill editor and solution fields from `current` + editorModeSelect
+  function updateEditorFromCurrent() {
+    if(!current) return;
+    const mode = editorModeSelect.value;
+    const starter = getStarterFor(current, mode);
+    const solution = getSolutionFor(current, mode);
+    // Set editor content
+    codeEditor.value = starter || '';
+    // Set solution content
+    solutionPre.textContent = solution || '(No solution provided for this exercise in this language.)';
+    // Show/hide SQL preview area
+    if(mode === 'sql') {
+      sqlPreview.style.display = '';
+      exampleQueryPre.textContent = current.example_query || current.example_query || '';
+      exampleQueryPre.style.display = (exampleQueryPre.textContent ? '' : 'none');
+      renderSampleData(current.sample_data || {});
+      showServerBtn.style.display = '';
+      serverContainer.style.display = 'none';
+    } else {
+      sqlPreview.style.display = 'none';
+      showServerBtn.style.display = (['js','html','c','python'].includes(mode) ? 'none' : 'none');
+      serverContainer.style.display = 'none';
+    }
+    // Show or hide preview/console based on mode
+    jsConsole.style.display = (mode === 'js' ? '' : 'none');
+    preview.style.display = (mode === 'html' || mode === 'js' ? '' : 'none');
+
+    // Hide solution initially
+    solutionPre.style.display = 'none';
+    showSolBtn.textContent = 'Show solution';
+  }
+
+  // Set exercise by id
   function setExercise(id){
     if(!exercises || !exercises.length) return;
     const ex = exercises.find(x => String(x.id) === String(id));
     if(!ex) return;
-    current = ex;
-    const codeEditor = document.getElementById('codeEditor');
-    const solutionPre = document.getElementById('solutionPre');
-    const showSolBtn = document.getElementById('showSol');
-    const editorMode = document.getElementById('editorMode');
-    const jsConsole = document.getElementById('jsConsole');
-    const preview = document.getElementById('previewFrame');
-    const sqlPreview = document.getElementById('sqlPreview');
-
-    if(editorMode) {
-      const lang = (ex.language || 'js').toLowerCase();
-      if(['js','html','c','sql','python'].includes(lang)) editorMode.value = lang;
-    }
-
-    if(ex.language === 'js') {
-      codeEditor.value = ex.starter_js || '';
-      solutionPre.textContent = ex.solution_js || '';
-      sqlPreview.style.display = 'none';
-      jsConsole.style.display = '';
-      preview.style.display = '';
-      showSolBtn.style.display = '';
-    } else if(ex.language === 'html') {
-      codeEditor.value = ex.starter_html || '';
-      solutionPre.textContent = ex.solution_html || '';
-      sqlPreview.style.display = 'none';
-      jsConsole.style.display = 'none';
-      preview.style.display = '';
-      showSolBtn.style.display = '';
-    } else if(ex.language === 'c') {
-      codeEditor.value = ex.starter_c || '';
-      solutionPre.textContent = ex.solution_c || '';
-      sqlPreview.style.display = 'none';
-      jsConsole.style.display = 'none';
-      preview.style.display = 'none';
-      showSolBtn.style.display = '';
-    } else if(ex.language === 'python') {
-      codeEditor.value = ex.starter_py || '';
-      solutionPre.textContent = ex.solution_py || '';
-      sqlPreview.style.display = 'none';
-      jsConsole.style.display = 'none';
-      preview.style.display = 'none';
-      showSolBtn.style.display = '';
-    } else if(ex.language === 'sql') {
-      codeEditor.value = ex.schema_sql || '';
-      document.getElementById('schemaPre').textContent = ex.schema_sql || '';
-      document.getElementById('exampleQuery').textContent = ex.example_query || '';
-      const sampleRoot = document.getElementById('sampleData');
-      sampleRoot.innerHTML = '';
-      if(ex.sample_data && Object.keys(ex.sample_data).length){
-        Object.keys(ex.sample_data).forEach(tbl => {
-          const rows = ex.sample_data[tbl] || [];
-          const table = document.createElement('table');
-          table.className = 'table table-sm table-striped';
-          const thead = document.createElement('thead');
-          const tbody = document.createElement('tbody');
-          // build columns from first row
-          if(rows && rows.length){
-            const cols = Object.keys(rows[0]);
-            const trh = document.createElement('tr');
-            cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; trh.appendChild(th); });
-            thead.appendChild(trh);
-            rows.forEach(r => {
-              const tr = document.createElement('tr');
-              cols.forEach(c => { const td = document.createElement('td'); td.textContent = r[c]; tr.appendChild(td); });
-              tbody.appendChild(tr);
-            });
-            table.appendChild(thead);
-            table.appendChild(tbody);
-            sampleRoot.appendChild(document.createElement('div')).appendChild(table);
-          } else {
-            sampleRoot.appendChild(document.createElement('div')).textContent = 'No sample rows';
-          }
-        });
-      }
-      jsConsole.style.display = 'none';
-      preview.style.display = 'none';
-      showSolBtn.style.display = '';
-    }
-
-    // hide any visible solution on exercise switch
-    if(solutionPre) { solutionPre.style.display = 'none'; }
-    if(showSolBtn) { showSolBtn.textContent = 'Show solution'; }
-
-    const showServerBtn = document.getElementById('showServerTableBtn');
-    const serverContainer = document.getElementById('sqlServerTable');
-    if(ex.language === 'sql'){
-      showServerBtn.style.display = '';
-      showServerBtn.textContent = 'Show table (server)';
-      serverContainer.innerHTML = '';
-      serverContainer.style.display = 'block';
-    } else {
-      showServerBtn.style.display = 'none';
-      serverContainer.innerHTML = '';
-      serverContainer.style.display = 'none';
-    }
+    applyExerciseToUI(ex);
   }
 
-  // click to choose exercise
+  // click to choose exercise (delegated)
   document.body.addEventListener('click', (e) => {
     const el = e.target.closest && e.target.closest('.choose-ex');
     if(!el) return;
@@ -231,123 +278,162 @@ document.addEventListener('DOMContentLoaded', () => {
     if(id != null) setExercise(id);
   });
 
+  // editor mode changes update editor + solution immediately to the canonical fields
+  editorModeSelect.addEventListener('change', () => {
+    updateEditorFromCurrent();
+  });
+
+  // copy button
   const copyBtn = document.getElementById('copyCode');
-  if (copyBtn){
-    copyBtn.addEventListener('click', async () => {
-      code = codeEditor.value
-      navigator.clipboard.writeText(code || '')
-    })
-  }
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(codeEditor.value || '');
+      copyBtn.textContent = 'Copied ✓';
+      setTimeout(()=> copyBtn.textContent = 'Copy', 1500);
+    } catch (e) {
+      console.warn('Clipboard failed', e);
+      alert('Copy failed — please select and copy manually.');
+    }
+  });
 
+  // solution toggle
+  showSolBtn.addEventListener('click', () => {
+    if (solutionPre.style.display === 'none') {
+      solutionPre.style.display = '';
+      showSolBtn.textContent = 'Hide solution';
+    } else {
+      solutionPre.style.display = 'none';
+      showSolBtn.textContent = 'Show solution';
+    }
+  });
 
-  // RUN button behaviour (improved for C and SQL)
+  // RUN button behaviour
   const runBtn = document.getElementById('runBtn');
-  if(runBtn){
-    runBtn.addEventListener('click', async () => {
-      const editorMode = document.getElementById('editorMode');
-      const codeEditor = document.getElementById('codeEditor');
-      const preview = document.getElementById('previewFrame');
-      const jsConsole = document.getElementById('jsConsole');
-      const sqlPreview = document.getElementById('sqlPreview');
+  runBtn.addEventListener('click', async () => {
+    const mode = editorModeSelect ? editorModeSelect.value : 'js';
+    const code = codeEditor ? codeEditor.value : '';
+    // reset server table area
+    serverContainer.style.display = 'none';
+    serverContainer.innerHTML = '';
+    if(jsConsole) { jsConsole.style.display = 'none'; jsConsole.textContent = ''; }
+    if(sqlPreview) sqlPreview.style.display = (mode === 'sql' ? '' : 'none');
+    if(preview) preview.style.display = (mode === 'js' || mode === 'html') ? '' : 'none';
 
-      const mode = editorMode ? editorMode.value : 'js';
-      const code = codeEditor ? codeEditor.value : '';
-
-      if(sqlPreview) sqlPreview.style.display = 'none';
-      if(jsConsole) jsConsole.style.display = 'none';
-      if(preview) preview.style.display = '';
-
-      if(mode === 'html'){
-        if(preview) {
-          const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${code}</body></html>`;
-          preview.srcdoc = html;
-        }
-      } else if(mode === 'js'){
-        if(jsConsole) { jsConsole.style.display = ''; jsConsole.textContent = ''; }
-        const blobContent = `
-          (function(){
-            const _log = console.log;
-            console.log = function(){ const args = Array.from(arguments).map(a => { try { return (typeof a === 'object') ? JSON.stringify(a) : String(a); } catch(e){ return String(a); } }).join(' '); parent.postMessage({type:'console', text: args}, '*'); _log.apply(console, arguments); };
-            try { ${code} } catch(e) { parent.postMessage({type:'console', text: 'Error: ' + e}, '*'); }
-          })();
-        `;
-        const blob = new Blob([blobContent], {type:'text/javascript'});
-        const url = URL.createObjectURL(blob);
-        if(preview){ preview.srcdoc = `<html><body><script src="${url}"><\/script></body></html>`; preview.onload = () => { try { URL.revokeObjectURL(url); } catch(_){}; preview.onload = null; }; }
-      } else if(mode === 'c'){
-        // Copy code and open an online C compiler in new tab (user asked for this)
-        try {
-          await navigator.clipboard.writeText(code || '');
-        } catch (e){
-          // ignore clipboard errors — user can paste manually
-          console.warn('clipboard write failed', e);
-        }
-        // Online compiler URL (OnlineGDB recommended)
-        const online = 'https://www.onlinegdb.com/online_c_compiler';
-        window.open(online, '_blank');
-        // visual hint
-        alert('C code copied to clipboard (if permitted) — paste it into the opened OnlineGDB tab and run.');
-      } else if(mode === 'python'){
-        try {
-          await navigator.clipboard.writeText(code || '');
-        } catch(e){ console.warn('clipboard write failed', e); }
-        window.open('https://replit.com/languages/python3', '_blank');
-        alert('Python code copied to clipboard — paste into the opened REPL.');
-      } else if(mode === 'sql'){
-        if(sqlPreview) sqlPreview.style.display = '';
+    if(mode === 'html') {
+      if(preview) {
+        const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${code}</body></html>`;
+        preview.srcdoc = html;
       }
-    });
-  }
+    } else if(mode === 'js') {
+      if(jsConsole) { jsConsole.style.display = ''; jsConsole.textContent = ''; }
+      const blobContent = `
+        (function(){
+          const _log = console.log;
+          console.log = function(){ 
+            const args = Array.from(arguments).map(a => {
+              try { return (typeof a === 'object') ? JSON.stringify(a) : String(a); } catch(e){ return String(a); }
+            }).join(' ');
+            parent.postMessage({type:'console', text: args}, '*');
+            _log.apply(console, arguments);
+          };
+          try { ${code} } catch(e) { parent.postMessage({type:'console', text: 'Error: ' + (e && e.stack ? e.stack : e)}, '*'); }
+        })();
+      `;
+      const blob = new Blob([blobContent], {type:'text/javascript'});
+      const url = URL.createObjectURL(blob);
+      if(preview){
+        preview.srcdoc = `<html><body><script src="${url}"><\/script></body></html>`;
+        preview.onload = () => {
+          try { URL.revokeObjectURL(url); } catch(_){}
+          preview.onload = null;
+        };
+      }
+    } else if(mode === 'c') {
+      try { await navigator.clipboard.writeText(code || ''); } catch(e){ /* ignore */ }
+      window.open('https://www.onlinegdb.com/online_c_compiler', '_blank');
+      alert('C code copied to clipboard (if permitted) — paste into OnlineGDB and run.');
+    } else if(mode === 'python') {
+      try { await navigator.clipboard.writeText(code || ''); } catch(e){ /* ignore */ }
+      window.open('https://replit.com/languages/python3', '_blank');
+      alert('Python code copied to clipboard — paste into the opened REPL.');
+    } else if(mode === 'sql') {
+      sqlPreview.style.display = '';
+    }
+  });
 
-  // handle console messages from preview iframe
+  // receive messages from iframe (console output)
   window.addEventListener('message', (ev) => {
     try {
       if(!ev.data || ev.data.type !== 'console') return;
-      const jsConsole = document.getElementById('jsConsole');
       if(!jsConsole) return;
       jsConsole.textContent += String(ev.data.text) + '\n';
+      jsConsole.scrollTop = jsConsole.scrollHeight;
     } catch(_) {}
   });
 
-  // Show server table button: now POSTS the SQL you wrote in the editor to the server endpoint (so CREATE/INSERT + SELECT are supported)
-  const showServerBtn = document.getElementById('showServerTableBtn');
-  if(showServerBtn){
-    showServerBtn.addEventListener('click', async function loadServerTable() {
-      if(!current || String(current.language).toLowerCase() !== 'sql') return;
-      const container = document.getElementById('sqlServerTable');
-      // toggle: hide if already visible
-      if(container.innerHTML && container.style.display !== 'none') { container.style.display = 'none'; showServerBtn.textContent = 'Show table (server)'; return; }
-      showServerBtn.disabled = true;
-      showServerBtn.textContent = 'Loading…';
-      container.innerHTML = '';
-      try {
-        const codeEditor = document.getElementById('codeEditor');
-        const sqlText = codeEditor ? codeEditor.value : (current.schema_sql || '');
-        const res = await fetch('/exercise-table/' + encodeURIComponent(String(current.id)), {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ sql: sqlText })
-        });
-        const json = await res.json();
-        if(!json.ok){
-          container.innerHTML = `<div class="alert alert-danger small">Error: ${json.error || 'Unknown'}</div>`;
-          showServerBtn.textContent = 'Show table (server)';
-          showServerBtn.disabled = false;
-          return;
-        }
-        container.innerHTML = json.html || '<div class="small-muted">No table data</div>';
-        showServerBtn.textContent = 'Hide table (server)';
-        showServerBtn.disabled = false;
-      } catch (err) {
-        container.innerHTML = `<div class="alert alert-danger small">Request failed: ${err.toString()}</div>`;
-        showServerBtn.textContent = 'Show table (server)';
-        showServerBtn.disabled = false;
-      }
-    });
-  }
+  // Show server table button: POSTs the editor SQL to server and displays returned HTML
+  let serverVisible = false;
+  showServerBtn.addEventListener('click', async () => {
+    if(!current || String(current.language).toLowerCase() !== 'sql') return;
+    if(serverVisible) {
+      serverContainer.style.display = 'none';
+      serverContainer.innerHTML = '';
+      showServerBtn.textContent = 'Show table (server)';
+      serverVisible = false;
+      return;
+    }
 
-  // initial selection
-  if(exercises && exercises.length) setExercise(exercises[0].id);
+    showServerBtn.disabled = true;
+    showServerBtn.classList.add('btn-loading');
+    const origText = showServerBtn.textContent;
+    showServerBtn.textContent = 'Loading…';
+    serverContainer.style.display = ''; // ensure visible while loading
+    serverContainer.innerHTML = '<div class="small-muted">Loading table from server…</div>';
+
+    try {
+      const sqlText = codeEditor ? codeEditor.value : (current.schema_sql || '');
+      const resp = await fetch('/exercise-table/' + encodeURIComponent(String(current.id)), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ sql: sqlText })
+      });
+
+      let json;
+      try {
+        json = await resp.json();
+      } catch (parseErr) {
+        const text = await resp.text();
+        serverContainer.innerHTML = '<div class="alert alert-warning small">Server returned non-JSON response — rendering raw HTML below.</div>' + text;
+        showServerBtn.textContent = 'Hide table (server)';
+        serverVisible = true;
+        return;
+      }
+
+      if(!json.ok) {
+        serverContainer.innerHTML = `<div class="alert alert-danger small">Error: ${json.error || 'Unknown server error'}</div>`;
+        showServerBtn.textContent = 'Show table (server)';
+        serverVisible = false;
+      } else {
+        serverContainer.innerHTML = json.html || '<div class="small-muted">No table data</div>';
+        showServerBtn.textContent = 'Hide table (server)';
+        serverVisible = true;
+      }
+
+    } catch (err) {
+      serverContainer.innerHTML = `<div class="alert alert-danger small">Request failed: ${err && err.message ? err.message : String(err)}</div>`;
+      showServerBtn.textContent = 'Show table (server)';
+      serverVisible = false;
+    } finally {
+      showServerBtn.disabled = false;
+      showServerBtn.classList.remove('btn-loading');
+    }
+  });
+
+  // initial selection: pick first exercise if any
+  if(exercises && exercises.length) {
+    // prefer the first SQL or first item if none — keep UX consistent
+    setExercise(exercises[0].id);
+  }
 });
 </script>
 

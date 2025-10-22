@@ -212,7 +212,7 @@ main.container, .container {
 .btn-primary:hover { background: var(--btn-hover-bg); color: #fff; border-color: var(--btn-hover-bg); }
 .btn-outline { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
 .btn-outline:hover { background: var(--accent); color: #fff; }
-
+.hidden {display: none;}
 /* ---------- Tables ---------- */
 .table-responsive { display:block; width:100%; overflow-x:auto; -webkit-overflow-scrolling: touch; }
 table { width: 100%; border-collapse: collapse; }

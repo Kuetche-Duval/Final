@@ -15,3 +15,4 @@ sql_trial_folder/store_transactions.db-journal
 sql_trial_folder/templates/coding.html
 sql_trial_folder/templates/base.html
 templates/coding.html
+sql_trial_folder/trial.sql

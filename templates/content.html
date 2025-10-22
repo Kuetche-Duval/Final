@@ -1,12 +1,34 @@
 {% extends 'base.html' %}
-
 {% block title %}TimeTable • Quotes • Forms{% endblock %}
 
 {% block styles %}
 <style>
-.aspect-1-1{position:relative;width:100%;padding-top:100%;overflow:hidden}
-.hero-img,.thumb{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
-  @media (max-width:576px){ .card-header{font-size:.95rem} .table-responsive{max-height:55vh} }
+/* Aspect helpers */
+.aspect-1-1{position:relative;width:100%;padding-top:100%;overflow:hidden;border-radius:8px}
+.aspect-16-9{position:relative;width:100%;padding-top:56.25%;overflow:hidden;border-radius:8px}
+
+/* image styles */
+.hero-img, .thumb {
+  position:absolute; top:0; left:0; width:100%; height:100%;
+  display:block; object-fit:cover; object-position:center;
+  transition:transform .25s ease;
+}
+.hero-img[data-fit="contain"], .thumb[data-fit="contain"] { object-fit:contain; background: #f6f6f6; }
+.hero-img:hover, .thumb:hover { transform: scale(1.02); }
+
+/* fallback placeholder */
+.img-placeholder {
+  position:absolute; top:0; left:0; width:100%; height:100%;
+  display:flex; align-items:center; justify-content:center;
+  background: linear-gradient(180deg,#f3f4f6,#e9ecef);
+  color:#6b7280; font-size:0.95rem;
+}
+
+/* table responsiveness tweaks */
+@media (max-width:576px){ .card-header{font-size:.95rem} .table-responsive{max-height:55vh} }
+
+/* small gallery card tweaks */
+.card .card-body .fw-bold { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 </style>
 {% endblock %}
 
@@ -14,90 +36,132 @@
 <div class="container py-4">
   <section class="section">
     <div class="row g-4">
+
+      <!-- Today's timetable (uses timetable_today produced by get_timetable_today) -->
       <div class="col-lg-7" id="today_timetable">
         <div class="card shadow">
           <div class="card-header bg-info text-white fw-bold">🕒 Today’s Timetable</div>
           <div class="card-body">
             <div class="table-responsive">
-              <table class="table table-hover align-middle">
+              <table class="table table-hover align-middle mb-0">
                 <thead>
                   <tr>
-                    {# Use sheet_title if available; otherwise render standard headers #}
-                    {% if sheet_title %}
-                      {% for title in sheet_title %}
-                        <th>{{ title }}</th>
-                      {% endfor %}
-                    {% else %}
-                      <th>Day</th><th>Time</th><th>Subject</th><th>Facilitator</th><th>Link/Location</th><th>Notes</th>
-                    {% endif %}
+                    <th>Day</th><th>Time</th><th>Subject</th><th>Facilitator</th><th>Link/Location</th><th>Notes</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {% if today_date %}
-                    {# today_date expected as list of rows (each row is a list) #}
-                    {% for pair in today_date %}
-                      {% set row = pair[1] %}
+                  {% if timetable_today and timetable_today|length %}
+                    {% for row in timetable_today %}
                       <tr>
-                        <td>{{ row[0] | default('') }}</td>
-                        <td>{{ row[1] | default('') }}</td>
-                        <td>{{ row[2] | default('') }}</td>
-                        <td>{{ row[3] | default('') }}</td>
+                        <td>{{ row.day or '' }}</td>
+                        <td>{{ row.time or '' }}</td>
+                        <td>{{ row.subject or '' }}</td>
+                        <td>{{ row.facilitator or '' }}</td>
                         <td>
-                          {% if row|length > 4 and row[4] %}
-                            {% set linkval = row[4] %}
-                            {% if 'http' in linkval or linkval.startswith('www.') %}
+                          {% if row.link %}
+                            {% set linkval = row.link|string %}
+                            {% if linkval.startswith('http') or linkval.startswith('www.') %}
                               <a href="{{ linkval }}" target="_blank" rel="noopener noreferrer">{{ linkval }}</a>
                             {% else %}
                               {{ linkval }}
                             {% endif %}
-                          {% else %}
-                            {{ '' }}
                           {% endif %}
                         </td>
-                        <td>{{ row[5] | default('') }}</td>
+                        <td>{{ row.notes or '' }}</td>
                       </tr>
                     {% endfor %}
                   {% else %}
-                    <tr><td colspan="{{ sheet_title|length if sheet_title else 6 }}" class="text-muted">No timetable entries for today.</td></tr>
+                    <tr><td colspan="6" class="text-muted">No timetable entries for today.</td></tr>
                   {% endif %}
                 </tbody>
               </table>
             </div>
-            <a class="btn btn-outline-info" href="#" role="button">Add to Calendar (.ics)</a>
+            <a class="btn btn-outline-info mt-3" href="#" role="button">Add to Calendar (.ics)</a>
           </div>
         </div>
       </div>
 
+      <!-- Daily motivation (hero) -->
       <div class="col-lg-5" id="daily_motivation">
         <div class="card shadow h-100">
           <div class="card-header bg-success text-white fw-bold">💡 Daily Motivation</div>
           <div class="card-body text-center">
-            <div class="aspect-16-9">
-              <img class="hero-img" src="{{ url_for('drive_image', file_id='1tTyhT4O_LoCaU8OL0DcCjuVm3o1z9gzY') }}" alt="Motivational artwork" loading="lazy" />
+            <div class="aspect-16-9 mb-3">
+              {# Example: if you store a Drive id, pass it to drive_image. Else you can put a full URL. #}
+              {% set hero_id = '1tTyhT4O_LoCaU8OL0DcCjuVm3o1z9gzY' %}
+              <img class="hero-img" src="{{ url_for('drive_image', file_id=hero_id) }}" alt="Motivational artwork" loading="lazy" data-fit="cover" data-bs-toggle="modal" data-bs-target="#imageModal" data-imgsrc="{{ url_for('drive_image', file_id=hero_id) }}" />
             </div>
-            <h5 class="card-title mt-3">“Stay Consistent”</h5>
+            <h5 class="card-title mt-0">“Stay Consistent”</h5>
             <p class="card-text small text-muted">Success = small efforts repeated daily.</p>
             <a class="btn btn-outline-success" href="https://drive.google.com/drive/folders/1A7Hu5mNYkaUS1wVtCtoVMEd2u7QxZy3h?usp=drive_link" target="_blank" rel="noopener noreferrer">See all quotes</a>
           </div>
         </div>
       </div>
 
-      <section class="section mt-3">
+      <!-- Gallery -->
+      <section class="section mt-3 col-12">
         <h4 class="mb-3">🖼️ Motivation / Prayers / Verses (Gallery)</h4>
         <div class="row g-3">
           {% if dr_values %}
             {% for item in dr_values %}
-              {% set title = item[0] if item|length>0 else 'Image' %}
-              {% set meta = item[1] if item|length>1 else [] %}
-              {% set caption = (meta[0] if meta|length>0 else '') %}
-              {% set img_id = (meta[1] if meta|length>1 else meta if meta is string else '') %}
+              {# Resolve title and image source robustly #}
+              {% set title = (item[0] if item is sequence and item|length>0 else (item.get('name') if item is mapping else 'Image')) %}
+              {# meta may be list, string, or mapping #}
+              {% set meta = (item[1] if item is sequence and item|length>1 else item if item is mapping else '') %}
+
+              {# helper to extract candidate src/id from meta #}
+              {% set img_candidate = '' %}
+              {% if meta is string %}
+                {% set img_candidate = meta %}
+              {% elif meta is mapping %}
+                {% if meta.get('id') %} {% set img_candidate = meta.get('id') %} 
+                {% elif meta.get('fileId') %} {% set img_candidate = meta.get('fileId') %}
+                {% elif meta.get('thumbnailLink') %} {% set img_candidate = meta.get('thumbnailLink') %}
+                {% elif meta.get('url') %} {% set img_candidate = meta.get('url') %}
+                {% endif %}
+              {% elif meta is sequence and meta|length>0 %}
+                {% for maybe in meta %}
+                  {% if maybe is string and maybe|length > 5 %}
+                    {% set img_candidate = maybe %}
+                    {% break %}
+                  {% elif maybe is mapping %}
+                    {% if maybe.get('id') %} {% set img_candidate = maybe.get('id') %} {% break %} {% endif %}
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+
+              {# Decide final URL: if candidate looks like a Drive id (alphanumeric with - or _), use drive_image route; else if starts with http use it directly #}
+              {% set img_url = '' %}
+              {% if img_candidate %}
+                {% if img_candidate.startswith('http') %}
+                  {% set img_url = img_candidate %}
+                {% elif img_candidate is string and img_candidate|regex_search('^[A-Za-z0-9_-]{10,}$') %}
+                  {% set img_url = url_for('drive_image', file_id=img_candidate) %}
+                {% else %}
+                  {% set img_url = img_candidate %}
+                {% endif %}
+              {% endif %}
+
+              {# caption heuristics #}
+              {% set caption = '' %}
+              {% if item is sequence and item|length>1 %}
+                {% set maybe_meta = item[1] %}
+                {% if maybe_meta is sequence and maybe_meta|length>0 %}
+                  {% set caption = maybe_meta[0] %}
+                {% elif maybe_meta is mapping and maybe_meta.get('description') %}
+                  {% set caption = maybe_meta.get('description') %}
+                {% endif %}
+              {% elif item is mapping and item.get('description') %}
+                {% set caption = item.get('description') %}
+              {% endif %}
+
               <div class="col-6 col-md-4 col-lg-3">
                 <div class="card shadow-sm h-100">
                   <div class="aspect-1-1">
-                    {% if img_id %}
-                      <img class="thumb" src="{{ url_for('drive_image', file_id=img_id) }}" alt="{{ title }}" loading="lazy" />
+                    {% if img_url %}
+                      <img class="thumb" src="{{ img_url }}" alt="{{ title }}" loading="lazy" data-fit="contain" data-bs-toggle="modal" data-bs-target="#imageModal" data-imgsrc="{{ img_url }}" />
                     {% else %}
-                      <div class="thumb" style="background:linear-gradient(180deg,#eee,#ddd);display:flex;align-items:center;justify-content:center;font-size:.9rem;color:#666;">No Image</div>
+                      <div class="img-placeholder">No Image</div>
                     {% endif %}
                   </div>
                   <div class="card-body">
@@ -115,12 +179,15 @@
     </div>
   </section>
 
+  <!-- Full Timetable (week) -->
   <section class="section mt-4">
     <h4 class="mb-3">📅 Full Timetable (Week)</h4>
     <div class="table-responsive">
       {% if sheet_title %}
         <table class="table table-striped table-hover align-middle mb-0">
-          <thead class="table-primary"><tr>{% for title in sheet_title %}<th>{{ title }}</th>{% endfor %}</tr></thead>
+          <thead class="table-primary">
+            <tr>{% for title in sheet_title %}<th>{{ title }}</th>{% endfor %}</tr>
+          </thead>
           <tbody>
             {% if sheet_content %}
               {% for value in sheet_content %}
@@ -137,10 +204,12 @@
     </div>
   </section>
 
+  <!-- Notes & Forms -->
   <section class="section mt-4">
     <div class="row g-4" id="notes_and_ressources">
       <div class="col-md-6">
-        <div class="card shadow"><div class="card-header bg-warning fw-bold">📂 Notes & Resources (Drive)</div>
+        <div class="card shadow">
+          <div class="card-header bg-warning fw-bold">📂 Notes & Resources (Drive)</div>
           <div class="card-body">
             <p class="mb-2">All PDFs and notes are in the shared Drive:</p>
             <a class="btn btn-warning" target="_blank" rel="noopener noreferrer" href="https://drive.google.com/drive/folders/16iL3bG1KHn3l-RDtrgof2kkA3DAILgbo">Open Shared Drive</a>
@@ -151,30 +220,72 @@
 
       <div class="col-md-6" id="google_forms_quizzes">
         <div class="card shadow">
-            <div class="card-header bg-secondary text-white fw-bold">📝 Google Forms (Quizzes)</div>
-            <div class="card-body">
-                {% if form_list %}
-                    <ul class="list-group">
-                        {% for f in form_list %}
-                            {% set fname = f.get('name') or f.get('title') or 'Untitled Form' %}
-                            {% set fid = f.get('id') or (f.get('fileId') if f.get('fileId') else '') %}
-                            {% set link = f.get('webViewLink') or ('https://docs.google.com/forms/d/' ~ fid ~ '/viewform') %}
-                            <li class="list-group-item d-flex justify-content-between align-items-center">
-                                <div>
-                                    <div class="fw-bold">{{ fname }}</div>
-                                    {% if f.get('description') %}<div class="small text-muted">{{ f.get('description') }}</div>{% endif %}
-                                </div>
-                                <a class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer" href="{{ link }}">Open</a>
-                            </li>
-                        {% endfor %}
-                    </ul>
-                {% else %}
-                    <div class="small text-muted">No forms found. Ensure <code>FORMS_FOLDER_ID</code> is set and the service account has Viewer access to the folder.</div>
-                {% endif %}
-            </div>
+          <div class="card-header bg-secondary text-white fw-bold">📝 Google Forms (Quizzes)</div>
+          <div class="card-body">
+            {% if form_list %}
+              <ul class="list-group">
+                {% for f in form_list %}
+                  {% set fname = f.get('name') or f.get('title') or 'Untitled Form' %}
+                  {% set fid = f.get('id') or (f.get('fileId') if f.get('fileId') else '') %}
+                  {% set link = f.get('webViewLink') or ('https://docs.google.com/forms/d/' ~ fid ~ '/viewform') %}
+                  <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                      <div class="fw-bold">{{ fname }}</div>
+                      {% if f.get('description') %}<div class="small text-muted">{{ f.get('description') }}</div>{% endif %}
+                    </div>
+                    <a class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer" href="{{ link }}">Open</a>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <div class="small text-muted">No forms found. Ensure <code>FORMS_FOLDER_ID</code> is set and the service account has Viewer access to the folder.</div>
+            {% endif %}
+          </div>
         </div>
       </div>
     </div>
   </section>
 </div>
+
+{# Simple Bootstrap modal for viewing images full-size (works without extra libs) #}
+<div class="modal fade" id="imageModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-xl">
+    <div class="modal-content bg-transparent border-0">
+      <div class="modal-body p-0" style="background: rgba(0,0,0,0.8);">
+        <button type="button" class="btn-close btn-close-white position-absolute m-3" data-bs-dismiss="modal" aria-label="Close" style="z-index:1051"></button>
+        <div style="padding:1rem; display:flex; align-items:center; justify-content:center; min-height:60vh;">
+          <img id="modalImage" src="" alt="Preview" style="max-width:100%; max-height:80vh; object-fit:contain; border-radius:8px;">
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  // lightbox: set modal image src from data-imgsrc attributes
+  const imageModal = document.getElementById('imageModal');
+  const modalImg = document.getElementById('modalImage');
+  const bsModal = imageModal ? new bootstrap.Modal(imageModal) : null;
+
+  document.body.addEventListener('click', function (ev) {
+    const target = ev.target;
+    if (!target) return;
+    // use dataset.imgsrc to populate modal (applies to hero-img and thumb)
+    if (target.dataset && target.dataset.imgsrc) {
+      const src = target.dataset.imgsrc;
+      modalImg.src = src;
+      try { bsModal && bsModal.show(); } catch(e){ console.error(e); }
+    }
+  });
+
+  // graceful fallback if modal closed: clear src to release memory
+  if (imageModal) {
+    imageModal.addEventListener('hidden.bs.modal', function () { modalImg.src = ''; });
+  }
+});
+</script>
 {% endblock %}

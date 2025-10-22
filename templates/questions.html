@@ -44,6 +44,7 @@
   .meta-right { min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
   @media (max-width:992px) { .question-item{flex-direction:column; align-items:stretch} .author { max-width:100%; white-space:normal; } .meta-right { text-align:left; } }
   @media (max-width:576px) { .question-item{padding:10px} .author { max-width:140px; } .message-text { font-size:0.95rem } }
+  .small-help { font-size:0.85rem; color:var(--muted); margin-top:6px; }
 </style>
 {% endblock %}
 
@@ -61,16 +62,22 @@
     <!-- New Question Form -->
     <form id="new-question-form" method="POST" action="{{ url_for('questions_page') }}" class="mb-4" novalidate>
       <div class="row g-2">
-        <div class="col-md-5">
+        <div class="col-md-4">
           <label for="category" class="form-label small">Category</label>
           <select class="form-select" id="category" name="category" required>
             <option value="">-- Select Category --</option>
             {% for c in categories %}
-              <option value="{{ c }}">{{ c }}</option>
+              <option value="{{ c }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
             {% endfor %}
           </select>
         </div>
-        <div class="col-md-7 d-flex align-items-end">
+
+        <div class="col-md-4">
+          <label for="name" class="form-label small">Your name (optional)</label>
+          <input id="name" name="name" class="form-control" placeholder="Anonymous (optional)">
+        </div>
+
+        <div class="col-md-4 d-flex align-items-end">
           <button type="submit" class="btn btn-success w-100">➕ Submit Question (attempt required)</button>
         </div>
       </div>
@@ -84,11 +91,6 @@
         <label for="attempt" class="form-label small">Your Attempt (required)</label>
         <textarea class="form-control" id="attempt" name="attempt" rows="3" required></textarea>
         <div class="form-text small text-muted">You must provide your attempt before submitting the question.</div>
-      </div>
-
-      <!-- optional name (kept but hidden by default) -->
-      <div style="display:none">
-        <input type="text" name="name" placeholder="Optional name">
       </div>
     </form>
 
@@ -199,7 +201,43 @@ document.addEventListener('DOMContentLoaded', () => {
   try { communityLinks = communityLinksEl ? JSON.parse(communityLinksEl.textContent || '{}') : {}; } catch(e){ communityLinks = {}; console.error(e); }
   try { vapidPublicKey = vapidEl ? JSON.parse(vapidEl.textContent || '""') : ""; } catch(e){ vapidPublicKey = ""; console.error(e); }
 
-  /* --- Interaction handlers (existing features) --- */
+  /* ---------- Cookie helpers (persist user details & fallback endpoint) ---------- */
+  function setCookie(name, value, days=365) {
+    const v = encodeURIComponent(value);
+    const expires = new Date(Date.now() + days*864e5).toUTCString();
+    document.cookie = name + "=" + v + "; expires=" + expires + "; path=/; SameSite=Lax";
+  }
+  function getCookie(name) {
+    const m = document.cookie.match('(?:^|; )' + name.replace(/([.$?*|{}()[]\\\/+^])/g, '\\$1') + '=([^;]*)');
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+  function delCookie(name) {
+    document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+  }
+
+  /* persist user info (name & last category) as JSON string in nn_user cookie */
+  function saveUserToCookie(userObj) {
+    try {
+      setCookie('nn_user', JSON.stringify(userObj), 365);
+    } catch(e) { console.warn("saveUserToCookie failed", e); }
+  }
+  function readUserFromCookie() {
+    try {
+      const s = getCookie('nn_user');
+      return s ? JSON.parse(s) : {};
+    } catch(e) { return {}; }
+  }
+
+  // Prefill form fields with cookie values
+  const nameInput = document.getElementById('name');
+  const categorySelect = document.getElementById('category');
+  const userCookie = readUserFromCookie();
+  if (nameInput && userCookie.name) nameInput.value = userCookie.name || '';
+  if (categorySelect && userCookie.lastCategory) {
+    try { categorySelect.value = userCookie.lastCategory; } catch(_) {}
+  }
+
+  /* ---------- Basic UI interactions (same as before, improved) ---------- */
   document.querySelectorAll('.question-item').forEach(item => {
     item.addEventListener('click', (e) => {
       if (['BUTTON','A','TEXTAREA','INPUT','SELECT','LABEL'].includes(e.target.tagName)) return;
@@ -257,7 +295,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  /* --- Theme --- */
+  /* ---------- Theme ---------- */
   function applyTheme(theme) {
     if (theme) document.documentElement.setAttribute('data-theme', theme);
     else document.documentElement.removeAttribute('data-theme');
@@ -272,7 +310,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   const saved = localStorage.getItem('site-theme'); if (saved) applyTheme(saved);
 
-  /* --- Search & Sort --- */
+  /* ---------- Search & Sort ---------- */
   const searchBox = document.getElementById('searchBox');
   const sortSelect = document.getElementById('sortSelect');
   const list = document.getElementById('questionsList');
@@ -300,20 +338,30 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sortSelect.value && sortSelect.value !== 'none') sortListBy(sortSelect.value);
   }
 
-  /* --- Form validation --- */
+  /* ---------- Form validation & cookie save ---------- */
   const newQForm = document.getElementById('new-question-form');
   if (newQForm) {
     newQForm.addEventListener('submit', (ev) => {
       const q = document.getElementById('question');
       const a = document.getElementById('attempt');
+      const nameFld = document.getElementById('name');
+      const categoryFld = document.getElementById('category');
       if (!q.value.trim() || !a.value.trim()) {
         ev.preventDefault();
         alert('Please fill both question and your attempt before submitting.');
+        return;
       }
+      // Save optional details to cookie for future
+      const userObj = readUserFromCookie() || {};
+      userObj.name = (nameFld && nameFld.value && nameFld.value.trim()) ? nameFld.value.trim() : (userObj.name || '');
+      userObj.lastCategory = (categoryFld && categoryFld.value) ? categoryFld.value : (userObj.lastCategory || '');
+      saveUserToCookie(userObj);
+      // allow form submit to continue
     });
   }
 
-  /* --- Push helpers --- */
+  /* ---------- Push helpers (improved / cookie fallback) ---------- */
+
   function urlBase64ToUint8Array(base64String) {
     if (!base64String) return null;
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -326,7 +374,19 @@ document.addEventListener('DOMContentLoaded', () => {
     return outputArray;
   }
 
-  // SW registration + subscription management
+  // retry helper for network POSTs
+  async function fetchWithRetry(url, opts={}, retries=3, delay=800) {
+    for (let i=0;i<retries;i++){
+      try {
+        const r = await fetch(url, opts);
+        return r;
+      } catch(e) {
+        if (i === retries-1) throw e;
+        await new Promise(res => setTimeout(res, delay * Math.pow(2,i))); // exponential backoff
+      }
+    }
+  }
+
   let registrationForPush = null;
   let currentSubscription = null;
   let serverSubjectsForEndpoint = []; // subjects saved on server for this endpoint
@@ -349,70 +409,88 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  async function ensureServiceWorkerRegistered() {
+    if (!('serviceWorker' in navigator)) return null;
+    if (registrationForPush) return registrationForPush;
+    try {
+      registrationForPush = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+      await navigator.serviceWorker.ready;
+      // attempt update
+      try { await registrationForPush.update(); } catch(e) {}
+      return registrationForPush;
+    } catch (err) {
+      console.error("Service worker registration failed:", err);
+      registrationForPush = null;
+      return null;
+    }
+  }
+
+  async function queryServerSubjectsForEndpoint(ep) {
+    if (!ep) return [];
+    try {
+      const resp = await fetch('/subscriptions/check?endpoint=' + encodeURIComponent(ep));
+      if (!resp.ok) return [];
+      const j = await resp.json();
+      if (j && j.ok && Array.isArray(j.subjects)) return j.subjects;
+    } catch(e){ console.warn('subscriptions.check failed', e); }
+    return [];
+  }
+
   async function initServiceWorkerAndSubscription() {
     if (!('serviceWorker' in navigator)) {
       console.warn("Service workers not supported.");
+      serverSubjectsForEndpoint = [];
+      updateSubscribeButtonsUI();
       return;
     }
     try {
-      // register at root for broadest scope (important for mobile)
-      registrationForPush = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
-      try { await registrationForPush.update(); } catch(e){ /* ignore */ }
-      await navigator.serviceWorker.ready;
+      const reg = await ensureServiceWorkerRegistered();
+      if (!reg) {
+        updateSubscribeButtonsUI();
+        return;
+      }
+      registrationForPush = reg;
+      // get current subscription if present
+      try { currentSubscription = await registrationForPush.pushManager.getSubscription(); } catch(e){ console.warn('getSubscription failed', e); currentSubscription = null; }
 
-      // listen for messages from SW (pushsubscriptionchange notifications)
+      // cookie fallback: maybe we previously stored endpoint
+      const fallbackEp = getCookie('nn_sub_endpoint');
+      if (!currentSubscription && fallbackEp) {
+        // query server to see if server recorded it; then update UI using server info
+        const subs = await queryServerSubjectsForEndpoint(fallbackEp);
+        if (subs && subs.length) {
+          // pretend subscription exists for UI purposes (we still recommend user re-subscribing to reactivate mobile)
+          currentSubscription = { endpoint: fallbackEp };
+          serverSubjectsForEndpoint = subs;
+        }
+      } else if (currentSubscription && currentSubscription.endpoint) {
+        serverSubjectsForEndpoint = await queryServerSubjectsForEndpoint(currentSubscription.endpoint);
+        // store endpoint in cookie as fallback
+        setCookie('nn_sub_endpoint', currentSubscription.endpoint, 365);
+      } else {
+        serverSubjectsForEndpoint = [];
+      }
+
+      updateSubscribeButtonsUI();
+      // listen for messages from sw (optional)
       navigator.serviceWorker.addEventListener('message', (ev) => {
-        console.log('[page] SW message', ev.data);
         if (ev.data && ev.data.type === 'SUBSCRIPTION_LOST') {
           console.warn('Push subscription possibly lost. Consider re-subscribing.');
         }
       });
-
-      try {
-        currentSubscription = await registrationForPush.pushManager.getSubscription();
-      } catch (e) {
-        console.error('getSubscription failed', e);
-        currentSubscription = null;
-      }
-
-      // if we already have an endpoint stored in localStorage, prefer verifying that at server
-      const savedEndpoint = localStorage.getItem('subscriptionEndpoint');
-      if (currentSubscription && currentSubscription.endpoint) {
-        // keep currentSubscription
-      } else if (savedEndpoint) {
-        // If the browser lost subscription object (some mobiles do), we still query server to show subscribe status
-        currentSubscription = { endpoint: savedEndpoint };
-      }
-
-      if (currentSubscription && currentSubscription.endpoint) {
-        try {
-          const resp = await fetch('/subscriptions/check?endpoint=' + encodeURIComponent(currentSubscription.endpoint));
-          if (resp.ok) {
-            const j = await resp.json();
-            if (j && j.ok && Array.isArray(j.subjects)) {
-              serverSubjectsForEndpoint = j.subjects;
-            }
-          }
-        } catch (e) {
-          console.error("Error querying server for subscriptions:", e);
-        }
-      } else {
-        serverSubjectsForEndpoint = [];
-      }
-      updateSubscribeButtonsUI();
-      console.log("[subscribe] SW ready. subscription:", !!currentSubscription);
     } catch (err) {
-      console.error("[subscribe] SW register/getSubscription failed:", err);
+      console.error("[subscribe] SW init failed:", err);
+      updateSubscribeButtonsUI();
     }
   }
 
   async function subscribeForSubject(subject, btn) {
     if (!registrationForPush) {
-      alert("Service worker not ready — reload the page and try again.");
-      return;
+      const reg = await ensureServiceWorkerRegistered();
+      if (!reg) { alert('Service worker not available. Cannot subscribe!'); return; }
+      registrationForPush = reg;
     }
-
-    // request permission on user gesture
+    // request permission
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
       alert('Please allow notifications to subscribe (check browser settings).');
@@ -436,56 +514,51 @@ document.addEventListener('DOMContentLoaded', () => {
       currentSubscription = sub;
       const subObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
 
-      // send to server and wait for successful sheet append BEFORE informing user
-      let res, jsonRes;
+      // try to save subscription on server with retry
+      let resp;
       try {
-        res = await fetch('{{ url_for("save_subscription_route") }}', {
+        resp = await fetchWithRetry('{{ url_for("save_subscription_route") }}', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ subscription: subObj, subject: subject, client_id: 'web' })
-        });
-      } catch (e) {
-        console.error("[subscribe] network error while saving subscription:", e);
-        alert('Network error while saving subscription. Please try again.');
+        }, 4, 600);
+      } catch (err) {
+        console.error("Network error saving subscription:", err);
+        alert('Network error while saving subscription. Try again later.');
         return;
       }
 
-      try { jsonRes = await res.json(); } catch(e){ jsonRes = null; }
+      let jsonRes = null;
+      try { jsonRes = await resp.json(); } catch(e){ jsonRes = null; }
 
-      if (!res.ok) {
-        console.error("[subscribe] server returned error", res.status, jsonRes);
-        alert('Failed to save subscription on server: ' + (jsonRes && jsonRes.error ? jsonRes.error : res.statusText));
+      if (!resp.ok) {
+        console.error("Server returned error saving subscription:", resp.status, jsonRes);
+        alert('Failed to save subscription on server: ' + (jsonRes && jsonRes.error ? jsonRes.error : resp.statusText));
         return;
       }
 
       if (jsonRes && jsonRes.ok) {
-        // only now consider subscription saved
-        // persist endpoint locally so page can remember even if browser gives different sub object later
-        try {
-          localStorage.setItem('subscriptionEndpoint', subObj.endpoint || '');
-        } catch (e) { /* ignore storage errors */ }
+        try { setCookie('nn_sub_endpoint', subObj.endpoint || '', 365); } catch(e){}
 
-        // update local serverSubjectsForEndpoint (avoid duplicates)
-        if (!serverSubjectsForEndpoint.includes(subject)) serverSubjectsForEndpoint.push(subject);
+        // update local view of subjects (ask server for full list)
+        serverSubjectsForEndpoint = await queryServerSubjectsForEndpoint(subObj.endpoint);
         updateSubscribeButtonsUI();
-        if (btn) { btn.textContent = 'Subscribed ✓'; btn.classList.add('subscribed'); }
-
-        // small feedback AFTER server confirms
-        console.log('[subscribe] subscribed on endpoint', subObj.endpoint);
-        alert('Subscribed successfully ✓ (server saved)');
+        alert('Subscribed successfully ✓ (saved on server)');
       } else {
-        console.error("[subscribe] unexpected server response", jsonRes);
+        console.error("Unexpected server response", jsonRes);
         alert('Subscription saved? server response: ' + JSON.stringify(jsonRes));
       }
     } catch (err) {
-      console.error("pushManager.subscribe failed:", err);
+      console.error("subscribeForSubject failed:", err);
       if (err && err.name === 'NotAllowedError') {
-        alert('Notifications are blocked for this site. Check your phone settings (Site settings → Notifications).');
+        alert('Notifications are blocked for this site. Check your site or browser settings.');
       } else if (err && err.name === 'SecurityError') {
-        alert('Push subscription failed due to security restrictions (must be HTTPS).');
+        alert('Push subscription requires secure context (HTTPS) or localhost.');
       } else {
-        alert("Subscription failed: " + (err && err.message ? err.message : String(err)));
+        alert('Subscription failed: ' + (err && err.message ? err.message : String(err)));
       }
+    } finally {
+      updateSubscribeButtonsUI();
     }
   }
 
@@ -496,9 +569,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     try {
       const sub = await registrationForPush.pushManager.getSubscription();
+      // If sub is not present, still attempt server cleanup using cookie fallback
       if (!sub) {
-        // still attempt server-side cleanup if we have a saved endpoint locally
-        const savedEndpoint = localStorage.getItem('subscriptionEndpoint');
+        const savedEndpoint = getCookie('nn_sub_endpoint');
         if (!savedEndpoint) {
           alert('No active subscription to unsubscribe.');
           return;
@@ -512,8 +585,8 @@ document.addEventListener('DOMContentLoaded', () => {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ endpoint: savedEndpoint })
           });
-        } catch(e) { console.error("server-side delete failed", e); }
-        localStorage.removeItem('subscriptionEndpoint');
+        } catch(e) { console.warn("server-side delete failed", e); }
+        delCookie('nn_sub_endpoint');
         currentSubscription = null;
         serverSubjectsForEndpoint = [];
         updateSubscribeButtonsUI();
@@ -536,8 +609,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (e) {
         console.error("Failed to request server-side deletion:", e);
       }
-      try { localStorage.removeItem('subscriptionEndpoint'); } catch(e){}
-
+      delCookie('nn_sub_endpoint');
       currentSubscription = null;
       serverSubjectsForEndpoint = [];
       updateSubscribeButtonsUI();
@@ -565,6 +637,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // initialize SW & subscription detection
   initServiceWorkerAndSubscription();
+
+  // Save name/category as user interacts (instant)
+  if (nameInput) {
+    nameInput.addEventListener('change', () => {
+      const user = readUserFromCookie() || {};
+      user.name = nameInput.value || '';
+      saveUserToCookie(user);
+    });
+  }
+  if (categorySelect) {
+    categorySelect.addEventListener('change', () => {
+      const user = readUserFromCookie() || {};
+      user.lastCategory = categorySelect.value || '';
+      saveUserToCookie(user);
+    });
+  }
 });
 </script>
 {% endblock %}

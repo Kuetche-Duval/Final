@@ -94,8 +94,6 @@
           <div id="sqlPreview" style="display:none;margin-top:8px;">
             <div class="small-muted">Sample data</div>
             <div id="sampleData"></div>
-            <div class="small-muted">Example query</div>
-            <pre id="exampleQuery" class="solution" style="display:none;"></pre>
 
             <div class="mt-2">
               <button id="showServerTableBtn" class="btn btn-outline-primary btn-sm" style="display:none">Show table (server)</button>
@@ -125,7 +123,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const jsConsole = document.getElementById('jsConsole');
   const preview = document.getElementById('previewFrame');
   const sqlPreview = document.getElementById('sqlPreview');
-  const exampleQueryPre = document.getElementById('exampleQuery');
   const sampleDataRoot = document.getElementById('sampleData');
   const showServerBtn = document.getElementById('showServerTableBtn');
   const serverContainer = document.getElementById('sqlServerTable');
@@ -242,8 +239,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Show/hide SQL preview area
     if(mode === 'sql') {
       sqlPreview.style.display = '';
-      exampleQueryPre.textContent = current.example_query || current.example_query || '';
-      exampleQueryPre.style.display = (exampleQueryPre.textContent ? '' : 'none');
       renderSampleData(current.sample_data || {});
       showServerBtn.style.display = '';
       serverContainer.style.display = 'none';

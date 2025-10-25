@@ -14,7 +14,7 @@ from pathlib import Path
 from threading import Lock
 from flask import (
     Flask, render_template, url_for, redirect, send_file,
-    request, flash, Response, jsonify, send_from_directory
+    request, flash, Response, jsonify, send_from_directory, make_response
 )
 from dotenv import load_dotenv
 
@@ -98,6 +98,10 @@ VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com")
 # SQL table row limit for server rendering
 SQL_TABLE_ROW_LIMIT = int(os.environ.get("SQL_TABLE_ROW_LIMIT", "500"))
 
+# cookie lifetime for remembering user & endpoint (1 year)
+COOKIE_MAX_AGE = 365 * 24 * 60 * 60
+
+
 # --- simple VAPID public key validator (warn early) ---
 def _is_likely_valid_vapid_public_key(s):
     if not s:
@@ -122,6 +126,7 @@ if VAPID_PUBLIC_KEY:
     ok = _is_likely_valid_vapid_public_key(VAPID_PUBLIC_KEY)
     if not ok:
         app.logger.warning("VAPID_PUBLIC_KEY looks invalid; push subscriptions will likely fail. Generate a proper VAPID keypair (e.g. `npx web-push generate-vapid-keys`) and set VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY.")
+
 
 # --- Sheets/Drive helpers (import if available) ---
 try:
@@ -344,6 +349,7 @@ def get_timetable_today():
         app.logger.exception("get_timetable_today failed")
         return []
 
+
 # -------------------------
 # Coding exercises loader
 # -------------------------
@@ -423,6 +429,7 @@ def drive_image(file_id):
                                    b"\xbc\x33\x00\x00\x00\x00IEND\xaeB`\x82")
             small_png.seek(0)
             return send_file(small_png, mimetype="image/png")
+
 
 # -------------------------
 # Subscriptions helpers (improved)
@@ -701,7 +708,16 @@ def questions_page():
             except Exception as e:
                 app.logger.exception("Failed append_row: %s", e)
                 flash("❌ Could not submit question. Try later.", "danger")
-            return redirect(url_for("questions_page"))
+                return redirect(url_for("questions_page"))
+
+            # redirect and set cookies so the browser remembers the user's name & last category
+            resp = redirect(url_for("questions_page"))
+            try:
+                resp.set_cookie('nn_user', username, max_age=COOKIE_MAX_AGE, samesite='Lax')
+                resp.set_cookie('nn_last_category', choice_selected, max_age=COOKIE_MAX_AGE, samesite='Lax')
+            except Exception:
+                app.logger.debug("Failed setting cookies on response")
+            return resp
 
         selected_category = request.args.get("categoryFilter", "").strip()
         try:
@@ -751,6 +767,7 @@ def save_subscription_route():
     """
     Expects JSON: {subscription: {...}, subject: "Mathematics", client_id: "optional"}
     Saves via sheets.save_subscription if available else fallback to append row.
+    On success sets a cookie 'nn_subscription' to the endpoint for client convenience.
     """
     try:
         payload = request.get_json(force=True, silent=True) or {}
@@ -771,7 +788,14 @@ def save_subscription_route():
 
         ok = _save_subscription_to_sheet(subject, client_id, subscription)
         if ok:
-            return jsonify({"ok": True}), 200
+            endpoint = subscription.get("endpoint") if isinstance(subscription, dict) else None
+            resp = jsonify({"ok": True})
+            try:
+                if endpoint:
+                    resp.set_cookie('nn_subscription', endpoint, max_age=COOKIE_MAX_AGE, samesite='Lax')
+            except Exception:
+                app.logger.debug("Failed setting nn_subscription cookie on save")
+            return resp, 200
         else:
             return jsonify({"ok": False, "error": "could not save subscription"}), 500
     except Exception as e:
@@ -784,9 +808,14 @@ def subscriptions_check():
     GET /subscriptions/check?endpoint=<endpoint>
     Returns list of subjects that the server has saved for that subscription endpoint.
     Response: { ok: True, subjects: ["Mathematics", ...] }
+
+    If endpoint is not provided as query param, this endpoint will attempt to read the
+    'nn_subscription' cookie and use that as fallback to query the server.
     """
     try:
         endpoint = request.args.get("endpoint", "").strip()
+        if not endpoint:
+            endpoint = (request.cookies.get('nn_subscription') or "").strip()
         if not endpoint:
             return jsonify({"ok": False, "error": "endpoint required"}), 400
         out_subjects = []
@@ -824,10 +853,15 @@ def subscriptions_check():
 def subscriptions_delete():
     """
     POST { endpoint: "..." } -> deletes subscription rows matching endpoint (either in dedicated sheet or fallback questions sheet)
+    On success clears the nn_subscription cookie so the browser no longer holds the endpoint.
     """
     try:
         data = request.get_json(force=True, silent=True) or {}
         endpoint = (data.get("endpoint") or "").strip() if isinstance(data, dict) else ""
+        # fallback to cookie if endpoint not supplied
+        if not endpoint:
+            endpoint = (request.cookies.get('nn_subscription') or "").strip()
+
         if not endpoint:
             return jsonify({"ok": False, "error": "endpoint required"}), 400
         deleted = False
@@ -859,7 +893,14 @@ def subscriptions_delete():
                 app.logger.exception("Fallback deletion also failed")
         except Exception as e:
             app.logger.exception("subscriptions_delete inner failed: %s", e)
-        return jsonify({"ok": True, "deleted": deleted})
+
+        resp = jsonify({"ok": True, "deleted": deleted})
+        if deleted:
+            try:
+                resp.set_cookie('nn_subscription', '', expires=0, samesite='Lax')
+            except Exception:
+                app.logger.debug("Failed clearing nn_subscription cookie")
+        return resp
     except Exception as e:
         app.logger.exception("subscriptions_delete top-level failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500

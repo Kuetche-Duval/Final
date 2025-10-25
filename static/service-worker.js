@@ -109,6 +109,15 @@ self.addEventListener('push', event => {
 
     try {
       await self.registration.showNotification(title, options);
+      // Also notify open clients (so the UI can increment an unread count or show a toast)
+      try {
+        const all = await clients.matchAll({ includeUncontrolled: true });
+        for (const c of all) {
+          c.postMessage({ type: 'PUSH_RECEIVED', payload });
+        }
+      } catch (e) {
+        // ignore
+      }
     } catch (err) {
       // some browsers may restrict showNotification; still attempt to inform clients
       try {

@@ -1,0 +1,11 @@
+[
+    {
+        "name": "Operating Systems (Introduction), System softwares & application softwares",
+        "form_id" : "",
+        "form_answer_link" : "",
+        "subject": ["Computer-Science"],
+        "topics": ["Operating System (Introduction)", "System software & Application software", "Memory management, Scheduling, I/O, Virtualization"],
+        "notes": "A 30-question A-Level quiz covering introductory OS concepts: kernel, processes/threads, scheduling, memory management (paging/segmentation/virtual memory), device drivers, system vs application software, boot process, file systems, interrupts and basic synchronization/deadlock ideas."
+    }
+      
+]

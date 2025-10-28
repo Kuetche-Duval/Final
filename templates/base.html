@@ -132,6 +132,9 @@
             <a class="nav-link {% if request.path.startswith('/questions') %}active{% endif %}" href="{{ url_for('questions_page') }}">Questions</a>
           </li>
           <li class="nav-item">
+            <a class="nav-link {% if request.path.startswith('/quizzes') %}active{% endif %}" href="{{ url_for('quiz_forms') }}">Quizzes</a>
+          </li>
+          <li class="nav-item">
             <a class="nav-link {% if request.path.startswith('/coding') %}active{% endif %}" href="{{ url_for('coding_page') }}">Coding</a>
           </li>
           <li class="nav-item">
@@ -167,7 +170,7 @@
     <div class="card p-3 p-md-4 text-center">
       <div class="card-body">
         <h5 id="orientationTitle" class="card-title mb-2">Better viewing experience</h5>
-        <p class="small text-muted mb-3">This site works best in landscape on small devices. Please rotate your device for a smoother layout.</p>
+        <p class="small text-muted  mb-3">This site works best in landscape on small devices. Please rotate your device for a smoother layout.</p>
 
         <div class="d-flex align-items-center justify-content-center mb-3 rotate-illustration">
           <div class="device-box device-portrait" id="deviceBox" aria-hidden="true">

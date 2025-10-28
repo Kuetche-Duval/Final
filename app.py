@@ -1167,6 +1167,26 @@ def health_detail(slug):
         flash("Failed to load detail.", "danger")
         return redirect(url_for("health_index"))
 
+def _load_forms_data():
+    try:
+        path = Path("data/quiz_forms.json")
+        if path.exists():
+            with path.open("r", encoding="utf-8") as qf:
+                return json.load(qf)
+    except Exception:
+        app.logger.debug("quiz_forms.json load failed, using defaults")
+    
+    return []
+
+@app.route("/quizzes")
+def quiz_forms():
+    try:
+        forms = _load_forms_data()
+        return render_template("quiz_forms.html", forms=forms, message=FOOTER_MESSAGE)
+    except Exception as e:
+        app.logger.exception("Forms index failed, %s", e)
+        flash("Failed to load Quiz Page.", "danger")
+        return redirect(url_for("home_page"))
 # -------------------------
 # SQL visualizer helpers & route
 # -------------------------

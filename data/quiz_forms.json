@@ -1,11 +1,19 @@
 [
     {
         "name": "Operating Systems (Introduction), System softwares & application softwares",
-        "form_id" : "",
-        "form_answer_link" : "",
+        "form_id" : "https://docs.google.com/forms/d/1Z5RBnMNR7I1eKA23yx3fD0MwXvVvnVXDc5SlWfja7EU/edit",
+        "form_answer_link" : "https://docs.google.com/forms/d/e/1FAIpQLSfdh63vFIxuyRH5WQY4pPdPCL4cfQkrJrIAc7qyLbIE3i6MDw/viewform",
         "subject": ["Computer-Science"],
         "topics": ["Operating System (Introduction)", "System software & Application software", "Memory management, Scheduling, I/O, Virtualization"],
         "notes": "A 30-question A-Level quiz covering introductory OS concepts: kernel, processes/threads, scheduling, memory management (paging/segmentation/virtual memory), device drivers, system vs application software, boot process, file systems, interrupts and basic synchronization/deadlock ideas."
+    },
+    {
+        "name": "A-Level: Gravitational Fields — 30 MCQs (Quiz)",
+        "form_id" : "https://docs.google.com/forms/d/1KShTzfuxCrpW_92NUIdRIl0Gb9vXzGkBIv5IGFBzKt8/edit",
+        "form_answer_link" : "https://docs.google.com/forms/d/e/1FAIpQLSfcRmPTEjIUcpuVqedxxpUWJMLaiotLYRKkdNw2XR9yvlM1NQ/viewform",
+        "subject": ["Physics"],
+        "topics": ["Gravitaitional Potential, Gravitaitional Potential Difference, Gravitational Fields"],
+        "notes": "30 multiple-choice questions on gravitational fields. Feedback contains brief explanations."
     }
       
 ]

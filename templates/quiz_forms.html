@@ -39,7 +39,7 @@
           <p style="margin-top:8px;">{{ f.notes }}</p>
           <div class="d-flex gap-2 mt-2">
             <a class="btn btn-sm btn-outline-primary" href="{{ f.form_answer_link }}">Answer Quiz</a>
-            <button class="btn btn-sm btn-outline-success copy-info" data-info="{{ f.name }} — {{ f.uses }}">Copy Info</button>
+            <button class="btn btn-sm btn-outline-success copy-info" data-info="{{ f.name }} — {{ f.notes }}">Copy Info</button>
           </div>
         </div>
       {% endfor %}

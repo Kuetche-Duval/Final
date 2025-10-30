@@ -101,7 +101,7 @@
                 <div class="card shadow-sm h-100">
                   <div class="aspect-1-1">
                     {% if img_id %}
-                      <img class="thumb" src="{{ url_for('drive_image', file_id=img_id) }}" alt="{{ title }}" loading="lazy" data-fit="cover" data-bs-toggle="modal" data-bs-target="#imageModal" data-imgsrc="{{  url_for('drive_image', file_id=hero_id)  }}" />
+                      <img class="thumb" src="{{ url_for('drive_image', file_id=img_id) }}" alt="{{ title }}" loading="lazy" data-fit="cover" data-bs-toggle="modal" data-bs-target="#imageModal" data-imgsrc="{{  url_for('drive_image', file_id=img_id)  }}" />
                     {% else %}
                       <div class="img-placeholder">No Image</div>
                     {% endif %}

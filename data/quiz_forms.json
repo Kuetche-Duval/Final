@@ -18,16 +18,16 @@
     {
         "name": "Databases",
         "subject": ["Computer-Science"],
-        "form_id" : "",
-        "form_answer_link" : "",
+        "form_id" : "https://docs.google.com/forms/d/1G0cqPeFaRhsuKqJ1Zfcc8_07803jQErzt6bL5NmjS9M/edit",
+        "form_answer_link" : "https://docs.google.com/forms/d/e/1FAIpQLSdqPqc24y1LrHDGgdrSIz-mwV73nG8xhB0rhiHubtHSXNyLTg/viewform",
         "topics": ["Relational databases", "SQL queries", "Normalization", "Transactions (ACID)", "Indexes & ER diagrams"],
         "notes": "30-question A-Level quiz covering RDBMS concepts: keys, joins, normalization, transactions, indexing, views, sharding and basic SQL."
     }, 
     {
         "name": "Process Management",
         "subject": ["Computer-Science"],
-        "form_id" : "",
-        "form_answer_link" : "",
+        "form_id" : "https://docs.google.com/forms/d/152G-HnmQrNB07GfFmvyLDEmZHegDhM9ija9tq1BtGW0/edit",
+        "form_answer_link" : "https://docs.google.com/forms/d/e/1FAIpQLSfZZ5g0o-QEpZxdaAZ31803UIUoJpmRPwYOawUVeQeoux2c0g/viewform",
         "topics": ["Processes vs Threads", "Scheduling algorithms", "Context switching", "Synchronization", "Deadlock and IPC"],
         "notes": "30-question A-Level quiz covering process lifecycle, scheduling strategies, synchronization primitives (semaphores/mutex), inter-process communication and deadlock concepts."
     },
@@ -38,10 +38,69 @@
         "form_answer_link" : "https://docs.google.com/forms/d/e/1FAIpQLSfrg7dPdf0A2l4nX333BITbl2Z7JoWSdDHDgodaePPZXM97AQ/viewform",
         "topics": ["Virtual Memory", "Paging & Segmentation", "TLB & Page Replacement", "Fragmentation", "Garbage Collection"],
         "notes": "30-question A-Level quiz covering memory allocation strategies, virtual memory concepts, page replacement, TLB, fragmentation and basic garbage collection ideas."
-    }
-      
-      
-      
-      
-      
+    },
+    {
+        "name": "Structure & Bonding — Part 1",
+        "subject": ["Chemistry"],
+        "form_id" : "",
+        "form_answer_link" : "https://docs.google.com/forms/d/e/1FAIpQLSc2lzbRrLh8smsx9QLaTyQ52PdA5dyij7uqMbPasrov9lp64A/viewform",
+        "topics": ["Atomic structure", "Ionic bonding", "Covalent bonding", "Electronegativity", "Intermolecular forces", "VSEPR basics"],
+        "notes": "Part 1 covers atomic structure, ionic vs covalent bonds, electronegativity, basic intermolecular forces and VSEPR fundamentals in ordered revision sequence."
+    },
+    {
+        "name": "Structure & Bonding — Part 2",
+        "subject": ["Chemistry"],
+        "form_id" : "https://docs.google.com/forms/d/1pxxX069MTJ4jtXGctZ25-kDYphebTYzQjaii9Po4xEg/edit",
+        "form_answer_link" : "https://docs.google.com/forms/d/e/1FAIpQLSfnyIc-OH6pCEsY7Q5qmDJNwqZuKX94WDEE3Wus57MoztMGbQ/viewform",
+        "topics": ["Hybridisation (sp, sp2, sp3)", "Sigma and pi bonds", "Molecular orbital basics", "Resonance", "Bond energies", "Metallic bonding & properties"],
+        "notes": "Part 2 continues into hybridisation, MO theory, bond order, resonance and physical properties resulting from bonding choices."
+    },
+    {
+        "name": "Structure & Bonding — Part 3",
+        "subject": ["Chemistry"],
+        "form_id": "",
+        "form_answer_link":"https://docs.google.com/forms/d/e/1FAIpQLSeIVUtLa31juKXQVMgKM5IDtnyL2qXLo83K8Z3VmLAdjkA6UA/viewform",
+        "topics": ["Crystal lattices and unit cells", "Packing (ccp/hcp/bcc)", "Ionic vs molecular vs covalent network solids", "Defects", "Intermolecular force trends"],
+        "notes": "Part 3 completes structure and bonding with solid-state structure, packing, defects and physical property consequences."
+    },
+    {
+        "name": "Organic Chemistry — Part 1",
+        "subject": ["Chemistry"],
+        "form_id": "https://docs.google.com/forms/d/1wZDXL2HrO1I3gzA4cNjJALvGtChZ4vtVX8raQgsY5UA/edit",
+        "form_answer_link":"https://docs.google.com/forms/d/e/1FAIpQLSeL0VGIvbEBlsoOtB0UddgSEMZd0-LYAav43z4uqAgMGYx5mA/viewform",
+        "topics": ["Functional groups", "Nomenclature basics", "Structural & stereoisomerism", "Aromaticity", "Isomer examples"],
+        "notes": "Part 1 introduces the essential functional groups, naming and isomerism needed for further reaction study."
+    },
+    {
+        "name": "Organic Chemistry — Part 2",
+        "subject": ["Chemistry"],
+        "form_id": "https://docs.google.com/forms/d/196JwWSbMWxUV24GAXbYs7pYFKydoD-Zu0zAykcSkrqU/edit",
+        "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdxY8J95Nh6qv6M9a8bmoblf6nz2bIan-W5hnjI9VrJE69mxQ/viewform",
+        "topics": ["Reaction mechanisms", "SN1/SN2", "E1/E2", "Electrophilic addition", "Oxidation/reduction of organics"],
+        "notes": "Part 2 focuses on common mechanism types and the conditions that favour each pathway; essential for problem-solving."
+    },      
+    {
+        "name": "Organic Chemistry — Part 3",
+        "subject": ["Chemistry"],
+        "form_id": "",
+        "form_answer_link": "",
+        "topics": ["Halogenoalkane reactions", "Alcohols oxidation & substitution", "Carbonyl chemistry", "Esters and saponification", "Polymers"],
+        "notes": "Part 3 covers reactions typical to functional groups and applications including polymer and acyl chemistry."
+    },
+    {
+        "name": "Inorganic Chemistry — Part 1",
+        "subject": ["Chemistry"],
+        "form_id": "https://docs.google.com/forms/d/1MxrOGTtgM3aAjLY4basaPzUY9YtL1ivftdWdFn9oyu8/edit",
+        "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScgA3P32mBrE5MBLrvTt_e57f41YPmTCoFFMI9RifL_JYpRKw/viewform",
+        "topics": ["Periodicity", "Group 1 (alkali metals)", "Group 2 (alkaline earth)", "Oxide acidity/basicity", "Trends in atomic/ionisation properties"],
+        "notes": "Part 1 covers essential periodic trends and group 1/2 behaviour, useful for early Lower-Sixth inorganic revision."
+    },
+    {
+        "name": "Inorganic Chemistry — Part 2",
+        "subject": ["Chemistry"],
+        "form_id": "https://docs.google.com/forms/d/1E5NSGO63QHGJcofRHHqTNpw5QgjdfI8uKL-WBNviN7c/edit",
+        "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdnSEAJGRhSG4F62_QufbUgVAHuubGIjyAuTJf-Oy_DaoUcPQ/viewform",
+        "topics": ["Halogens (Group 7)", "Noble gases", "Oxidation states", "Displacement reactions", "Reactivity trends of nonmetals"],
+        "notes": "Part 2 covers halogen chemistry, noble gases and redox basics applied to periodic trends and displacement reactions."
+    } 
 ]

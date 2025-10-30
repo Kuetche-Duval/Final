@@ -14,6 +14,34 @@
         "subject": ["Physics"],
         "topics": ["Gravitaitional Potential, Gravitaitional Potential Difference, Gravitational Fields"],
         "notes": "30 multiple-choice questions on gravitational fields. Feedback contains brief explanations."
+    },
+    {
+        "name": "Databases",
+        "subject": ["Computer-Science"],
+        "form_id" : "",
+        "form_answer_link" : "",
+        "topics": ["Relational databases", "SQL queries", "Normalization", "Transactions (ACID)", "Indexes & ER diagrams"],
+        "notes": "30-question A-Level quiz covering RDBMS concepts: keys, joins, normalization, transactions, indexing, views, sharding and basic SQL."
+    }, 
+    {
+        "name": "Process Management",
+        "subject": ["Computer-Science"],
+        "form_id" : "",
+        "form_answer_link" : "",
+        "topics": ["Processes vs Threads", "Scheduling algorithms", "Context switching", "Synchronization", "Deadlock and IPC"],
+        "notes": "30-question A-Level quiz covering process lifecycle, scheduling strategies, synchronization primitives (semaphores/mutex), inter-process communication and deadlock concepts."
+    },
+    {
+        "name": "Memory Management",
+        "subject": ["Computer-Science"],
+        "form_id" : "https://docs.google.com/forms/d/1J6-wSjCBcmEF9kiy1Vzq4G0ihCcg5EYihVJ5-dEdTvU/edit",
+        "form_answer_link" : "https://docs.google.com/forms/d/e/1FAIpQLSfrg7dPdf0A2l4nX333BITbl2Z7JoWSdDHDgodaePPZXM97AQ/viewform",
+        "topics": ["Virtual Memory", "Paging & Segmentation", "TLB & Page Replacement", "Fragmentation", "Garbage Collection"],
+        "notes": "30-question A-Level quiz covering memory allocation strategies, virtual memory concepts, page replacement, TLB, fragmentation and basic garbage collection ideas."
     }
+      
+      
+      
+      
       
 ]

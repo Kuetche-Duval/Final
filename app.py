@@ -150,9 +150,210 @@ except Exception as e:
     def clear_sheet(*a, **k): app.logger.warning("clear_sheet fallback")
     def delete_rows_by_indices(*a, **k): app.logger.warning("delete_rows_by_indices fallback")
     def delete_rows_by_subject(*a, **k): app.logger.warning("delete_rows_by_subject fallback")
-    def save_subscription(subject, client_id, subscription): raise NotImplementedError
-    def list_subscriptions(subject=None): return []
-    def delete_subscriptions_by_endpoint(endpoint): app.logger.warning("delete_subscriptions_by_endpoint fallback")
+    # --- BEGIN FALLBACK: sqlite-backed subscriptions & notifications ---
+    # Local DB path (file)
+    NN_LOCAL_DB = os.environ.get("NN_LOCAL_DB", "nn_local.db")
+    DB_PATH = Path(NN_LOCAL_DB)
+
+    def _init_local_db():
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    endpoint TEXT PRIMARY KEY,
+                    subject TEXT,
+                    client_id TEXT,
+                    p256dh TEXT,
+                    auth TEXT,
+                    raw_json TEXT,
+                    created_at TEXT
+                )
+            """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    endpoint TEXT,
+                    subject TEXT,
+                    title TEXT,
+                    body TEXT,
+                    data TEXT,
+                    created_at TEXT,
+                    delivered INTEGER DEFAULT 0,
+                    delivered_at TEXT
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            app.logger.exception("Failed initializing local subscription DB: %s", e)
+
+    _init_local_db()
+
+    def save_subscription(subject, client_id, subscription):
+        """Persist subscription into local sqlite DB (fallback).
+        subscription can be dict or JSON string.
+        Returns True on success, False on failure.
+        """
+        try:
+            if isinstance(subscription, str):
+                try:
+                    subscription = json.loads(subscription)
+                except Exception:
+                    app.logger.debug("save_subscription: received non-json string")
+                    return False
+            if not isinstance(subscription, dict):
+                app.logger.debug("save_subscription: invalid subscription type")
+                return False
+            endpoint = subscription.get('endpoint')
+            if not endpoint:
+                app.logger.debug("save_subscription: subscription has no endpoint")
+                return False
+            keys = subscription.get('keys') or {}
+            p256dh = keys.get('p256dh') or ''
+            auth = keys.get('auth') or ''
+            subject_norm = (subject or 'Other').strip()
+            now = datetime.utcnow().replace(microsecond=0).isoformat()
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            raw = json.dumps(subscription)
+            # REPLACE ensures upsert by primary key endpoint
+            c.execute("""REPLACE INTO subscriptions(endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
+                         VALUES(?,?,?,?,?,?,?)""", (endpoint, subject_norm, client_id or '', p256dh, auth, raw, now))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            app.logger.exception("save_subscription failed: %s", e)
+            return False
+
+    def list_subscriptions(subject=None):
+        """Return a list of subscription sentinel rows for given subject (case-insensitive).
+        Each row mirrors the sentinel format your code already expects:
+        ['__subscription__', subject, client_id, raw_json, created_at]
+        If subject is None, return all subscriptions.
+        """
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            if subject:
+                subj = subject.strip().lower()
+                c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions WHERE lower(subject)=?", (subj,))
+            else:
+                c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions")
+            rows = c.fetchall()
+            conn.close()
+            out = []
+            for r in rows:
+                subj, client_id, raw_json, created_at = r
+                out.append(["__subscription__", subj, client_id or "", raw_json or "{}", created_at or ""])
+            return out
+        except Exception as e:
+            app.logger.exception("list_subscriptions failed: %s", e)
+            return []
+
+    def delete_subscriptions_by_endpoint(endpoint):
+        """Delete all subscription rows matching given endpoint."""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("DELETE FROM subscriptions WHERE endpoint=?", (endpoint,))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            app.logger.exception("delete_subscriptions_by_endpoint failed: %s", e)
+
+    def get_subjects_for_endpoint(endpoint):
+        """Return list of subjects a given endpoint is subscribed to."""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT subject FROM subscriptions WHERE endpoint=?", (endpoint,))
+            rows = c.fetchall()
+            conn.close()
+            return [r[0] for r in rows]
+        except Exception as e:
+            app.logger.exception("get_subjects_for_endpoint failed: %s", e)
+            return []
+
+    def save_notification_for_endpoint(endpoint, subject, title, body, data_obj):
+        """Persist a notification row for the endpoint. Returns inserted id or None."""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            now = datetime.utcnow().replace(microsecond=0).isoformat()
+            c.execute("""INSERT INTO notifications(endpoint, subject, title, body, data, created_at, delivered)
+                         VALUES (?,?,?,?,?,?,0)""", (endpoint, subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
+            nid = c.lastrowid
+            conn.commit()
+            conn.close()
+            return nid
+        except Exception as e:
+            app.logger.exception("save_notification_for_endpoint failed: %s", e)
+            return None
+
+    def fetch_pending_notifications_for_endpoint(endpoint):
+        """Return list of undelivered notifications for endpoint ordered by created_at asc."""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint,))
+            rows = c.fetchall()
+            conn.close()
+            out = []
+            for r in rows:
+                nid, subj, title, body, data_text, created_at = r
+                try:
+                    data_obj = json.loads(data_text) if data_text else {}
+                except Exception:
+                    data_obj = {}
+                out.append({"id": nid, "subject": subj, "title": title, "body": body, "data": data_obj, "created_at": created_at})
+            return out
+        except Exception as e:
+            app.logger.exception("fetch_pending_notifications_for_endpoint failed: %s", e)
+            return []
+
+    def ack_notifications_by_ids(endpoint, ids):
+        """Mark provided notification IDs (for that endpoint) as delivered."""
+        if not ids:
+            return 0
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            now = datetime.utcnow().replace(microsecond=0).isoformat()
+            placeholders = ",".join(["?"] * len(ids))
+            params = ids + [endpoint]
+            # Use UPDATE with IN list
+            sql = f"UPDATE notifications SET delivered=1, delivered_at=? WHERE id IN ({placeholders}) AND endpoint=?"
+            # rearrange params: delivered_at first, then ids, then endpoint
+            params = [now] + ids + [endpoint]
+            c.execute(sql, params[1:])  # adjust because sqlite3 parameter handling; simpler to do loop below
+            # fallback update per id to be safe
+            for nid in ids:
+                try:
+                    c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint))
+                except Exception:
+                    continue
+            conn.commit()
+            changed = c.rowcount if hasattr(c, "rowcount") else len(ids)
+            conn.close()
+            return changed
+        except Exception as e:
+            app.logger.exception("ack_notifications_by_ids failed: %s", e)
+            return 0
+
+    def mark_notifications_delivered_for_endpoint(endpoint):
+        """Mark all undelivered notifications for this endpoint as delivered."""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            now = datetime.utcnow().replace(microsecond=0).isoformat()
+            c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            app.logger.exception("mark_notifications_delivered_for_endpoint failed: %s", e)
+    # --- END FALLBACK block ---
 
 try:
     from drive import from_google_drive, folders_and_images, download_file, update_file, create_file_in_folder
@@ -597,6 +798,21 @@ def send_push_to_subject(subject, question_text, attempt_text):
 
     if not PYWEBPUSH_AVAILABLE or not VAPID_PRIVATE_KEY:
         app.logger.warning("pywebpush or VAPID private key not available — cannot send push. Payload: %s", payload)
+        # Even if we cannot send the webpush, persist notifications so clients can fetch them later
+        try:
+            for sub in subs:
+                try:
+                    if isinstance(sub, str):
+                        try:
+                            sub = json.loads(sub)
+                        except Exception:
+                            continue
+                    endpoint = sub.get("endpoint")
+                    save_notification_for_endpoint(endpoint, subject, payload["title"], payload["body"], payload.get("preview"))
+                except Exception:
+                    continue
+        except Exception:
+            app.logger.exception("Failed to persist notifications when pywebpush unavailable")
         return {"sent": 0, "errors": ["pywebpush/VAPID not available"]}
 
     sent = 0
@@ -614,6 +830,13 @@ def send_push_to_subject(subject, question_text, attempt_text):
                 errors.append("invalid subscription object")
                 continue
 
+            endpoint = sub.get("endpoint")
+            # persist notification (ensures client can fetch later if push fails/delayed)
+            try:
+                save_notification_for_endpoint(endpoint, subject, payload["title"], payload["body"], payload.get("preview"))
+            except Exception:
+                app.logger.debug("Failed to persist notification for endpoint %s; continuing", endpoint)
+
             try:
                 webpush(
                     subscription_info=sub,
@@ -622,6 +845,11 @@ def send_push_to_subject(subject, question_text, attempt_text):
                     vapid_claims={"sub": VAPID_SUBJECT}
                 )
                 sent += 1
+                # mark persisted notifications delivered for this endpoint
+                try:
+                    mark_notifications_delivered_for_endpoint(endpoint)
+                except Exception:
+                    app.logger.debug("Failed to mark notifications delivered for %s", endpoint)
             except WebPushException as ex:
                 app.logger.warning("WebPushException for subject %s: %s", subject, ex)
                 errors.append(str(ex))
@@ -632,11 +860,22 @@ def send_push_to_subject(subject, question_text, attempt_text):
                     if resp and hasattr(resp, 'status_code'):
                         status = resp.status_code
                     if status in (404, 410):
-                        endpoint = sub.get('endpoint') if isinstance(sub, dict) else None
                         if endpoint:
                             app.logger.info("Subscription endpoint %s returned %s: deleting subscription", endpoint, status)
                             try:
-                                delete_subscriptions_by_endpoint(endpoint)
+                                # delete from sheets if possible, else delete from local sqlite
+                                try:
+                                    delete_subscriptions_by_endpoint(endpoint)
+                                except Exception:
+                                    # if other fallback, ensure local sqlite delete
+                                    try:
+                                        conn = sqlite3.connect(str(DB_PATH))
+                                        c = conn.cursor()
+                                        c.execute("DELETE FROM subscriptions WHERE endpoint=?", (endpoint,))
+                                        conn.commit()
+                                        conn.close()
+                                    except Exception:
+                                        app.logger.exception("Failed to delete stale endpoint from fallback DB")
                             except Exception:
                                 app.logger.exception("Failed deleting stale subscription for endpoint %s", endpoint)
                 except Exception:
@@ -904,6 +1143,51 @@ def subscriptions_delete():
     except Exception as e:
         app.logger.exception("subscriptions_delete top-level failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
+
+# -------------------------
+# NEW: Pending + ack endpoints (client fetch)
+# -------------------------
+@app.route('/notifications/pending', methods=['GET'])
+def notifications_pending():
+    """
+    GET /notifications/pending?endpoint=<endpoint>
+    Returns JSON list of pending notifications saved server-side for that endpoint.
+    """
+    try:
+        endpoint = request.args.get('endpoint', '').strip() or request.cookies.get('nn_subscription', '').strip()
+        if not endpoint:
+            return jsonify({'ok': False, 'error': 'endpoint required'}), 400
+        items = []
+        try:
+            items = fetch_pending_notifications_for_endpoint(endpoint)
+        except Exception:
+            app.logger.exception("fetch_pending_notifications_for_endpoint failed")
+        return jsonify({'ok': True, 'items': items}), 200
+    except Exception as e:
+        app.logger.exception('notifications_pending failed: %s', e)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/notifications/ack', methods=['POST'])
+def notifications_ack():
+    """
+    POST { endpoint: '...', ids: [1,2,3] } -> marks notifications as delivered.
+    """
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        endpoint = (payload.get('endpoint') or '').strip() or request.cookies.get('nn_subscription', '').strip()
+        ids = payload.get('ids') or []
+        if not endpoint:
+            return jsonify({'ok': False, 'error': 'endpoint required'}), 400
+        if not isinstance(ids, list):
+            return jsonify({'ok': False, 'error': 'ids must be a list'}), 400
+        try:
+            ack_notifications_by_ids(endpoint, ids)
+        except Exception:
+            app.logger.exception("ack_notifications_by_ids failed")
+        return jsonify({'ok': True, 'count': len(ids)}), 200
+    except Exception as e:
+        app.logger.exception('notifications_ack failed: %s', e)
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 @app.route("/rules")
 def rules_page():

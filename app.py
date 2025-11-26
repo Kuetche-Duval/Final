@@ -321,21 +321,23 @@ except Exception as e:
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             now = datetime.utcnow().replace(microsecond=0).isoformat()
-            placeholders = ",".join(["?"] * len(ids))
-            params = ids + [endpoint]
-            # Use UPDATE with IN list
+            # Ensure ids are a list of ints/strs
+            clean_ids = [int(i) for i in ids if str(i).strip().isdigit()]
+            if not clean_ids:
+                conn.close()
+                return 0
+            placeholders = ",".join(["?"] * len(clean_ids))
             sql = f"UPDATE notifications SET delivered=1, delivered_at=? WHERE id IN ({placeholders}) AND endpoint=?"
-            # rearrange params: delivered_at first, then ids, then endpoint
-            params = [now] + ids + [endpoint]
-            c.execute(sql, params[1:])  # adjust because sqlite3 parameter handling; simpler to do loop below
-            # fallback update per id to be safe
-            for nid in ids:
+            params = [now] + clean_ids + [endpoint]
+            c.execute(sql, params)
+            # fallback: update individually if needed (safe)
+            for nid in clean_ids:
                 try:
                     c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint))
                 except Exception:
                     continue
             conn.commit()
-            changed = c.rowcount if hasattr(c, "rowcount") else len(ids)
+            changed = c.rowcount if hasattr(c, "rowcount") else len(clean_ids)
             conn.close()
             return changed
         except Exception as e:
@@ -420,11 +422,6 @@ def get_timetable_today():
     Each dict contains:
       - row_index: sheet row index (1-based, including header)
       - day, time, subject, facilitator, link, notes (strings)
-
-    Detection strategy:
-      1) exact header equality (case-insensitive)
-      2) alias matching (contains / substring) with priority list
-      3) fallback to conventional positions if header row length suggests it
     """
     try:
         rows = from_google_sheets() or []
@@ -487,7 +484,6 @@ def get_timetable_today():
             if col_notes is None: col_notes = 5
         else:
             # If header length < 6, try to reasonably assign by available columns
-            # Prefer preserving earlier detected indices; otherwise attempt nearby indices
             def fallback_assign(c_idx, preferred_idx):
                 if c_idx is None and preferred_idx < hl:
                     return preferred_idx
@@ -1047,9 +1043,6 @@ def subscriptions_check():
     GET /subscriptions/check?endpoint=<endpoint>
     Returns list of subjects that the server has saved for that subscription endpoint.
     Response: { ok: True, subjects: ["Mathematics", ...] }
-
-    If endpoint is not provided as query param, this endpoint will attempt to read the
-    'nn_subscription' cookie and use that as fallback to query the server.
     """
     try:
         endpoint = request.args.get("endpoint", "").strip()
@@ -1267,10 +1260,27 @@ def admin_questions():
     subjects = sorted({q["subject"] for q in questions if q["subject"]})
     return render_template("admin_questions.html", questions=questions, subjects=subjects, key=provided_key, message=FOOTER_MESSAGE)
 
+# Robust service worker route: serve file if present, else return a minimal no-op SW to avoid client errors
 @app.route('/service-worker.js')
 def service_worker():
-    # serve static/service-worker.js at root so scope covers the whole site
-    return send_from_directory(app.static_folder, 'service-worker.js')
+    try:
+        sw_path = Path(app.static_folder) / 'service-worker.js'
+        if sw_path.exists():
+            return send_from_directory(app.static_folder, 'service-worker.js')
+        # minimal fallback service worker that claims clients and does nothing
+        fallback_js = """
+// Minimal fallback service worker provided by server (auto-generated)
+self.addEventListener('install', function(event) { self.skipWaiting(); });
+self.addEventListener('activate', function(event) { self.clients && self.clients.claim(); });
+self.addEventListener('fetch', function(event) {
+  // no-op: this SW exists only to satisfy browser registration during testing
+});
+"""
+        return Response(fallback_js, mimetype='application/javascript')
+    except Exception as e:
+        app.logger.exception("service-worker route failed: %s", e)
+        # respond with a safe empty JS response
+        return Response("// service worker unavailable", mimetype='application/javascript')
 
 # --- Admin test push endpoint (protected by ADMIN_KEY) ---
 @app.route('/admin/test-push', methods=['POST'])
@@ -1471,10 +1481,11 @@ def quiz_forms():
         app.logger.exception("Forms index failed, %s", e)
         flash("Failed to load Quiz Page.", "danger")
         return redirect(url_for("home_page"))
+
 # -------------------------
 # SQL visualizer helpers & route
 # -------------------------
-def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> sqlite3.Connection | list:
+def _safe_create_and_populate_sqlite(schema_sql: str, sample_data):
     """
     Build an in-memory sqlite DB from admin-provided schema_sql and sample_data.
     Returns (conn, populated_table_names)
@@ -1599,6 +1610,90 @@ def exercise_table_route(exercise_id):
         return jsonify({"ok": True, "html": "".join(html_parts)})
     except Exception as e:
         app.logger.exception("exercise_table_route failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+# -------------------------
+# NEW: Run SQL from editor (in-memory, safe)
+# -------------------------
+@app.route("/run-editor-sql", methods=["POST"])
+def run_editor_sql():
+    """
+    POST JSON:
+    {
+      "schema_sql": "CREATE TABLE ...;",
+      "editor_sql": "SELECT ...; INSERT ...; ...",
+      "sample_data": { "table1": [ {...}, {...} ] }
+    }
+    Returns: { ok: True, html: "<table>...</table>..."}
+    """
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        schema_sql = payload.get("schema_sql") or ""
+        editor_sql = payload.get("editor_sql") or payload.get("query") or ""
+        sample_data = payload.get("sample_data") or {}
+
+        if not editor_sql or not str(editor_sql).strip():
+            return jsonify({"ok": False, "error": "editor_sql required"}), 400
+
+        try:
+            conn, _ = _safe_create_and_populate_sqlite(schema_sql, sample_data)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"Failed preparing DB: {e}"}), 500
+
+        cur = conn.cursor()
+        sql_text = str(editor_sql)
+        # naive split by semicolon; we trim whitespace and ignore empty statements
+        stmts = [s.strip() for s in sql_text.split(";") if s.strip()]
+        out_parts = []
+        for stmt in stmts:
+            try:
+                # decide whether SELECT (we'll fetch rows & render table) or non-SELECT (exec + report)
+                if re.match(r'^\s*SELECT\b', stmt, re.I):
+                    try:
+                        cur.execute(stmt)
+                        rows = cur.fetchmany(SQL_TABLE_ROW_LIMIT)
+                        cols = [d[0] for d in cur.description] if cur.description else []
+                        tbl_html = []
+                        tbl_html.append('<div class="mb-2"><small><strong>Query result</strong></small></div>')
+                        if not cols:
+                            tbl_html.append('<div class="small text-muted">Query returned no columns.</div>')
+                        else:
+                            tbl_html.append('<div class="table-responsive"><table class="table table-sm table-striped"><thead><tr>')
+                            for c in cols:
+                                tbl_html.append(f'<th>{c}</th>')
+                            tbl_html.append('</tr></thead><tbody>')
+                            if not rows:
+                                tbl_html.append('<tr><td colspan="%d"><em>No rows</em></td></tr>' % (len(cols) or 1))
+                            else:
+                                for r in rows:
+                                    tbl_html.append('<tr>')
+                                    for c in cols:
+                                        try:
+                                            val = r[c]
+                                        except Exception:
+                                            val = None
+                                        tbl_html.append('<td>%s</td>' % ("" if val is None else str(val)))
+                                    tbl_html.append('</tr>')
+                            tbl_html.append('</tbody></table></div>')
+                        out_parts.append("".join(tbl_html))
+                    except Exception as e:
+                        out_parts.append(f'<div class="alert alert-warning small">SELECT error: {e}</div>')
+                else:
+                    # non-select: execute and report rowcount if available
+                    try:
+                        cur.execute(stmt)
+                        conn.commit()
+                        rc = getattr(cur, "rowcount", None)
+                        rc_text = f"{rc} rows affected" if rc not in (None, -1) else "Statement executed"
+                        out_parts.append(f'<div class="small text-muted">{rc_text}: <code>{stmt if len(stmt)<200 else (stmt[:200]+"...")}</code></div>')
+                    except Exception as e:
+                        out_parts.append(f'<div class="alert alert-warning small">Statement error: {e} — <code>{stmt if len(stmt)<200 else (stmt[:200]+"...")}</code></div>')
+            except Exception as e:
+                out_parts.append(f'<div class="alert alert-warning small">Processing error: {e}</div>')
+        conn.close()
+        return jsonify({"ok": True, "html": "".join(out_parts)})
+    except Exception as e:
+        app.logger.exception("run_editor_sql failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 # -------------------------

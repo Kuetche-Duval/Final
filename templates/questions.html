@@ -42,6 +42,7 @@
   /* ensure children don't overflow and wrap nicely */
   .meta-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0; }
   .meta-right { min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
+  .meta-right-small { min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
   @media (max-width:992px) { .question-item{flex-direction:column; align-items:stretch} .author { max-width:100%; white-space:normal; } .meta-right { text-align:left; } }
   @media (max-width:576px) { .question-item{padding:10px} .author { max-width:140px; } .message-text { font-size:0.95rem } }
 </style>
@@ -53,7 +54,7 @@
     <div class="d-flex justify-content-between align-items-center mb-3">
       <div><strong>💬 Ask & Answer Questions</strong></div>
       <div class="d-flex gap-2 align-items-center">
-        <button id="theme-toggle" class="btn btn-sm btn-outline-secondary">Toggle theme</button>
+        <button id="theme-toggle" class="btn btn-sm btn-outline-secondary" type="button">Toggle theme</button>
         <div class="small text-muted">Newton's Nerds</div>
       </div>
     </div>
@@ -63,14 +64,14 @@
       <div class="row g-2">
         <div class="col-md-4">
           <label for="name" class="form-label small">Your name (optional)</label>
-          <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous">
+          <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous" autocomplete="name">
         </div>
         <div class="col-md-4">
           <label for="category" class="form-label small">Category</label>
           <select class="form-select" id="category" name="category" required>
             <option value="">-- Select Category --</option>
             {% for c in categories %}
-              <option value="{{ c }}">{{ c }}</option>
+              <option value="{{ c|e }}">{{ c }}</option>
             {% endfor %}
           </select>
         </div>
@@ -97,14 +98,14 @@
     <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
       <div class="d-flex align-items-center gap-2">
         <label class="small mb-0">📂 Filter:</label>
-        <form id="filter-form" method="GET" action="{{ url_for('questions_page') }}">
-          <select class="form-select form-select-sm" id="categoryFilter" name="categoryFilter" onchange="this.form.submit()" style="max-width:220px;">
+        <div>
+          <select class="form-select form-select-sm" id="categoryFilter" name="categoryFilter" style="max-width:220px;">
             <option value="">All</option>
             {% for c in categories %}
               <option value="{{ c }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
             {% endfor %}
           </select>
-        </form>
+        </div>
       </div>
 
       <div class="ms-auto d-flex gap-2 align-items-center">
@@ -147,7 +148,7 @@
               <small>OP's attempt</small>
               <div class="op-attempt-short">{{ attempt[:180] }}{% if attempt|length > 180 %}…{% endif %}</div>
               {% if attempt|length > 180 %}
-                <button class="tiny-link show-full-attempt">Show full attempt</button>
+                <button class="tiny-link show-full-attempt" type="button">Show full attempt</button>
               {% endif %}
               <div class="op-attempt-full" style="display:none; margin-top:8px;">{{ attempt }}</div>
             </div>
@@ -159,17 +160,17 @@
                 <textarea class="form-control answer-text" rows="3" placeholder="Write your short answer here..."></textarea>
               </div>
 
-              <div class="d-flex gap-2">
+              <div class="d-flex gap-2 flex-wrap">
                 {% if community_links.get(cat) %}
                   <a class="btn btn-outline-success btn-sub open-group" href="{{ community_links.get(cat) }}" target="_blank" rel="noopener">Open {{ cat }} Community</a>
                 {% else %}
                   <button class="btn btn-outline-secondary btn-sub" disabled>Community not set</button>
                 {% endif %}
 
-                <button class="btn btn-outline-warning btn-sub subscribe-btn" data-subject="{{ cat }}">🔔 Subscribe</button>
+                <button class="btn btn-outline-warning btn-sub subscribe-btn" data-subject="{{ cat }}" data-state="none" type="button">🔔 Subscribe</button>
 
-                <button class="btn btn-primary btn-sub copy-answer">Copy answer</button>
-                <button class="btn btn-info btn-sub share-whatsapp">Share to WhatsApp</button>
+                <button class="btn btn-primary btn-sub copy-answer" type="button">Copy answer</button>
+                <button class="btn btn-info btn-sub share-whatsapp" type="button">Share to WhatsApp</button>
               </div>
 
               <div class="form-text small text-muted mt-2">Tip: open the community link, paste your answer and send it in the group. The app cannot securely post into WhatsApp groups for you.</div>
@@ -191,6 +192,7 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
+  // Parse server-provided JSON safely
   const communityLinksEl = document.getElementById('communityLinksData');
   const vapidEl = document.getElementById('vapidKeyData');
   let communityLinks = {};
@@ -198,10 +200,10 @@ document.addEventListener('DOMContentLoaded', () => {
   try { communityLinks = communityLinksEl ? JSON.parse(communityLinksEl.textContent || '{}') : {}; } catch(e){ communityLinks = {}; console.error(e); }
   try { vapidPublicKey = vapidEl ? JSON.parse(vapidEl.textContent || '""') : ""; } catch(e){ vapidPublicKey = ""; console.error(e); }
 
-  // cookie helpers (small utility)
+  // Cookie helpers
   function getCookie(name) {
-    const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-    return v ? decodeURIComponent(v.pop()) : null;
+    const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return m ? decodeURIComponent(m.pop()) : null;
   }
   function setCookie(name, value, days=365) {
     const maxAge = days * 24 * 60 * 60;
@@ -216,7 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.cookie = name + '=; path=/; max-age=0; samesite=Lax';
   }
 
-  /* --- Prefill user name from cookie --- */
+  /* --- Prefill user name & category from cookie --- */
   const nameInput = document.getElementById('name');
   const lastCategory = getCookie('nn_last_category');
   if (nameInput) {
@@ -235,15 +237,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* --- Interaction handlers (existing features) --- */
+  /* --- Local UI wiring for questions list --- */
   document.querySelectorAll('.question-item').forEach(item => {
     item.addEventListener('click', (e) => {
-      if (['BUTTON','A','TEXTAREA','INPUT','SELECT','LABEL'].includes(e.target.tagName)) return;
+      // don't toggle when interactive child was clicked
+      const tag = (e.target && e.target.tagName) || '';
+      if (['BUTTON','A','TEXTAREA','INPUT','SELECT','LABEL'].includes(tag)) return;
       const panel = item.querySelector('.answer-panel');
       if (!panel) return;
-      const isVisible = panel.style.display === 'block';
-      panel.style.display = isVisible ? 'none' : 'block';
-      panel.setAttribute('aria-hidden', String(isVisible ? 'true' : 'false'));
+      const currentlyVisible = panel.style.display === 'block';
+      panel.style.display = currentlyVisible ? 'none' : 'block';
+      panel.setAttribute('aria-hidden', currentlyVisible ? 'true' : 'false');
     });
     item.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); item.click(); }
@@ -270,6 +274,21 @@ document.addEventListener('DOMContentLoaded', () => {
       const item = btn.closest('.question-item');
       const answerEl = item.querySelector('.answer-text');
       const answer = (answerEl && (answerEl.value ?? answerEl.textContent ?? '')) || '';
+      if (!navigator.clipboard) {
+        try {
+          // fallback: select and execCommand (best-effort)
+          if (answerEl) {
+            answerEl.select();
+            document.execCommand('copy');
+            alert('Copied (fallback).');
+          } else {
+            alert('Copy failed — please select and copy manually.');
+          }
+        } catch (err) {
+          alert('Copy failed — please select and copy manually.');
+        }
+        return;
+      }
       navigator.clipboard.writeText(answer).then(() => {
         const old = btn.textContent;
         btn.textContent = 'Copied ✓';
@@ -293,7 +312,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  /* --- Theme --- */
+  /* --- Theme toggle --- */
   function applyTheme(theme) {
     if (theme) document.documentElement.setAttribute('data-theme', theme);
     else document.documentElement.removeAttribute('data-theme');
@@ -308,10 +327,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   const saved = localStorage.getItem('site-theme'); if (saved) applyTheme(saved);
 
-  /* --- Search & Sort --- */
+  /* --- Filter & sort (client-side) --- */
+  const categoryFilter = document.getElementById('categoryFilter');
   const searchBox = document.getElementById('searchBox');
   const sortSelect = document.getElementById('sortSelect');
   const list = document.getElementById('questionsList');
+
+  function submitFilterToServer() {
+    // For server-side filtering we navigate with query param
+    const val = (categoryFilter && categoryFilter.value) ? encodeURIComponent(categoryFilter.value) : '';
+    const base = "{{ url_for('questions_page') }}";
+    const url = val ? `${base}?categoryFilter=${val}` : base;
+    window.location.href = url;
+  }
+  if (categoryFilter) categoryFilter.addEventListener('change', submitFilterToServer);
+
   function filterList() {
     if (!searchBox || !list) return;
     const q = (searchBox.value || '').toLowerCase();
@@ -321,6 +351,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   if (searchBox) searchBox.addEventListener('input', filterList);
+
   function sortListBy(option) {
     if (!list) return;
     const nodes = Array.from(list.children).filter(n => n.style.display !== 'none');
@@ -349,7 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Please fill both question and your attempt before submitting.');
         return;
       }
-      // Save name & category to cookie right before submit (so server can also set)
+      // Save name & category to cookie right before submit
       try {
         if (n && n.value) setCookie('nn_user', n.value, 365);
         if (c && c.value) setCookie('nn_last_category', c.value, 365);
@@ -357,7 +388,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /* --- Push helpers + improved cookie usage --- */
+  /* --- Push helpers & service worker subscription management --- */
+  // convert base64 public key to Uint8Array (for subscribe)
   function urlBase64ToUint8Array(base64String) {
     if (!base64String) return null;
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -370,7 +402,9 @@ document.addEventListener('DOMContentLoaded', () => {
     return outputArray;
   }
 
-  // SW registration + subscription management
+  // initially disable subscribe buttons until SW init completes
+  document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Subscription initializing…'; });
+
   let registrationForPush = null;
   let currentSubscription = null;
   let serverSubjectsForEndpoint = []; // subjects saved on server for this endpoint
@@ -379,41 +413,36 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.subscribe-btn').forEach(btn => {
       const subj = btn.dataset.subject || '';
       const subscribed = currentSubscription && serverSubjectsForEndpoint.includes(subj);
+      btn.disabled = false;
+      btn.title = subscribed ? `Unsubscribe from ${subj}` : `Subscribe to ${subj}`;
       if (subscribed) {
         btn.textContent = 'Subscribed ✓';
         btn.classList.add('subscribed');
         btn.dataset.state = 'subscribed';
-        btn.disabled = false;
       } else {
         btn.textContent = '🔔 Subscribe';
         btn.classList.remove('subscribed');
         btn.dataset.state = 'none';
-        btn.disabled = false;
       }
     });
   }
 
   async function initServiceWorkerAndSubscription() {
-    if (!('serviceWorker' in navigator)) {
-      console.warn("Service workers not supported.");
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      // enable buttons but mark unavailable
+      document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Notifications not supported in this browser'; });
+      console.warn("Push/ServiceWorker not available in this browser.");
       return;
     }
     try {
-      // register at root for broadest scope (important for mobile)
       registrationForPush = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
       try { await registrationForPush.update(); } catch(e){ /* ignore */ }
       await navigator.serviceWorker.ready;
 
-      // listen for messages from SW (pushsubscriptionchange notifications)
       navigator.serviceWorker.addEventListener('message', (ev) => {
-        console.log('[page] SW message', ev.data);
+        // optional: respond to SW messages
         if (ev.data && ev.data.type === 'SUBSCRIPTION_LOST') {
-          console.warn('Push subscription possibly lost. Consider re-subscribing.');
-        }
-        if (ev.data && ev.data.type === 'PUSH_RECEIVED') {
-          // application could increment badge counter or show a toast
-          // For now just log and optionally display a small indicator (left to your UI)
-          console.log('Push received (client message):', ev.data.payload);
+          console.warn('Push subscription possibly lost.');
         }
       });
 
@@ -424,14 +453,11 @@ document.addEventListener('DOMContentLoaded', () => {
         currentSubscription = null;
       }
 
-      // if we already have an endpoint stored in cookie/localStorage, prefer verifying that at server
+      // fallback to stored endpoint if browser returns null but cookie exists
       const savedEndpointCookie = getCookie('nn_subscription');
       const savedEndpointLS = localStorage.getItem('subscriptionEndpoint');
-      if (!currentSubscription && savedEndpointCookie) {
-        // browser lost detailed subscription object but we still know endpoint (some mobile browsers)
-        currentSubscription = { endpoint: savedEndpointCookie };
-      } else if (!currentSubscription && savedEndpointLS) {
-        currentSubscription = { endpoint: savedEndpointLS };
+      if (!currentSubscription && (savedEndpointCookie || savedEndpointLS)) {
+        currentSubscription = { endpoint: savedEndpointCookie || savedEndpointLS };
       }
 
       if (currentSubscription && currentSubscription.endpoint) {
@@ -453,6 +479,7 @@ document.addEventListener('DOMContentLoaded', () => {
       console.log("[subscribe] SW ready. subscription:", !!currentSubscription);
     } catch (err) {
       console.error("[subscribe] SW register/getSubscription failed:", err);
+      document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Service worker registration failed'; });
     }
   }
 
@@ -462,7 +489,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // request permission on user gesture
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
       alert('Please allow notifications to subscribe (check browser settings).');
@@ -486,7 +512,6 @@ document.addEventListener('DOMContentLoaded', () => {
       currentSubscription = sub;
       const subObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
 
-      // send to server and wait for successful sheet append BEFORE informing user
       let res, jsonRes;
       try {
         res = await fetch('{{ url_for("save_subscription_route") }}', {
@@ -509,7 +534,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (jsonRes && jsonRes.ok) {
-        // persist endpoint locally so page can remember even if browser gives different sub object later
         try {
           const endpoint = subObj.endpoint || '';
           if (endpoint) {
@@ -518,13 +542,9 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         } catch (e) {}
 
-        // update local serverSubjectsForEndpoint (avoid duplicates)
         if (!serverSubjectsForEndpoint.includes(subject)) serverSubjectsForEndpoint.push(subject);
         updateSubscribeButtonsUI();
         if (btn) { btn.textContent = 'Subscribed ✓'; btn.classList.add('subscribed'); }
-
-        // small feedback AFTER server confirms
-        console.log('[subscribe] subscribed on endpoint', subObj.endpoint);
         alert('Subscribed successfully ✓ (server saved)');
       } else {
         console.error("[subscribe] unexpected server response", jsonRes);
@@ -533,7 +553,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       console.error("pushManager.subscribe failed:", err);
       if (err && err.name === 'NotAllowedError') {
-        alert('Notifications are blocked for this site. Check your phone settings (Site settings → Notifications).');
+        alert('Notifications are blocked for this site. Check your browser/site notification settings.');
       } else if (err && err.name === 'SecurityError') {
         alert('Push subscription failed due to security restrictions (must be HTTPS).');
       } else {
@@ -551,7 +571,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const sub = await registrationForPush.pushManager.getSubscription();
       let endpointToDelete = null;
       if (!sub) {
-        // perhaps cookie holds endpoint
         endpointToDelete = getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint');
         if (!endpointToDelete) {
           alert('No active subscription to unsubscribe.');
@@ -597,7 +616,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // delegated click handler for subscribe buttons
+  // Delegated subscribe button handler
   document.addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('.subscribe-btn');
     if (!btn) return;
@@ -605,14 +624,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const subj = btn.dataset.subject || 'Other';
     const state = btn.dataset.state || 'none';
     if (state === 'subscribed') {
-      // unsubscribe globally for endpoint
       unsubscribeEndpoint(btn);
     } else {
       subscribeForSubject(subj, btn);
     }
   });
 
-  // initialize SW & subscription detection
+  // Kick off service worker / subscription init
   initServiceWorkerAndSubscription();
 });
 </script>

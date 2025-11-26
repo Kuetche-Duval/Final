@@ -147,7 +147,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if(mode === 'html') return ex.solution_html || ex.solutionHTML || ex.solution || '';
     if(mode === 'c') return ex.solution_c || ex.solutionC || ex.solution || '';
     if(mode === 'python') return ex.solution_py || ex.solution_python || ex.solution || '';
-    if(mode === 'sql') return ex.example_query || ex.example_query || ex.exampleQuery || ex.example || '';
+    if(mode === 'sql') return ex.example_query || ex.exampleQuery || ex.example || '';
     return ex.solution_js || ex.solution_html || ex.solution_py || ex.solution_c || ex.example_query || ex.solution || '';
   }
 
@@ -217,10 +217,13 @@ document.addEventListener('DOMContentLoaded', () => {
     current = ex;
     // decide mode: prefer exercise language unless user changed mode explicitly
     const lang = (ex.language || 'js').toLowerCase();
-    // keep existing selection unless it's inconsistent with ex language; if mismatch, set to ex language
     const allowed = ['js','html','c','sql','python'];
-    if(!allowed.includes(editorModeSelect.value) || editorModeSelect.value !== lang) {
-      // set editor mode to exercise language to make solution display consistent by default
+    // If current selection is not allowed or equals default placeholder, set to exercise language.
+    if(!allowed.includes(editorModeSelect.value) || editorModeSelect.value === '') {
+      editorModeSelect.value = lang;
+    } else {
+      // If user has explicitly set a mode that differs, keep it — but if it's inconsistent with exercise
+      // we still prefer to set it so starter/solution map predictably to exercise.
       editorModeSelect.value = lang;
     }
     updateEditorFromCurrent();
@@ -244,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
       serverContainer.style.display = 'none';
     } else {
       sqlPreview.style.display = 'none';
-      showServerBtn.style.display = (['js','html','c','python'].includes(mode) ? 'none' : 'none');
+      showServerBtn.style.display = 'none';
       serverContainer.style.display = 'none';
     }
     // Show or hide preview/console based on mode
@@ -386,11 +389,18 @@ document.addEventListener('DOMContentLoaded', () => {
     serverContainer.innerHTML = '<div class="small-muted">Loading table from server…</div>';
 
     try {
+      // send editor SQL (what user typed) to server. If editor is empty, send current.schema_sql as fallback.
       const sqlText = codeEditor ? codeEditor.value : (current.schema_sql || '');
-      const resp = await fetch('/exercise-table/' + encodeURIComponent(String(current.id)), {
+      const payload = {
+        schema_sql: current.schema_sql || '',
+        editor_sql: sqlText || '',
+        sample_data: current.sample_data || {}
+      };
+
+      const resp = await fetch('/run-editor-sql', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ sql: sqlText })
+        body: JSON.stringify(payload)
       });
 
       let json;
@@ -424,10 +434,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // initial selection: pick first exercise if any
+  // initial selection: prefer first SQL exercise, otherwise first exercise
   if(exercises && exercises.length) {
-    // prefer the first SQL or first item if none — keep UX consistent
-    setExercise(exercises[0].id);
+    const firstSql = exercises.find(e => String((e.language||'')).toLowerCase() === 'sql');
+    if(firstSql) {
+      setExercise(firstSql.id);
+    } else {
+      setExercise(exercises[0].id);
+    }
   }
 });
 </script>

@@ -37,7 +37,7 @@
   .answer-panel { display:none; margin-top:8px; }
   .tiny-link { font-size:.85rem; color:var(--accent-green); text-decoration:underline; cursor:pointer; background:none;border:0;padding:0; }
   .subscribe-btn { background:#fff3cd; border:1px solid #ffeeba; color:#856404; }
-  .subscribe-btn.subscribed { background:#d4edda; border-color:#c3e6cb; color:#155724; }
+  .subscribe-btn.subscribed { background:#d4edda; border-color:#c3e6cb; color:#155724; box-shadow: 0 0 12px rgba(37,211,102,0.16); }
   .status-inline { margin-left:8px; font-size:0.85rem; color:var(--muted); }
   /* ensure children don't overflow and wrap nicely */
   .meta-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0; }
@@ -276,7 +276,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const answer = (answerEl && (answerEl.value ?? answerEl.textContent ?? '')) || '';
       if (!navigator.clipboard) {
         try {
-          // fallback: select and execCommand (best-effort)
           if (answerEl) {
             answerEl.select();
             document.execCommand('copy');
@@ -407,14 +406,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let registrationForPush = null;
   let currentSubscription = null;
-  let serverSubjectsForEndpoint = []; // subjects saved on server for this endpoint
+  // store normalized lower-case subjects for easier case-insensitive matching
+  let serverSubjectsForEndpoint = []; // e.g. ['mathematics','physics']
 
   function updateSubscribeButtonsUI() {
     document.querySelectorAll('.subscribe-btn').forEach(btn => {
-      const subj = btn.dataset.subject || '';
+      const subjRaw = (btn.dataset.subject || '').trim();
+      const subj = subjRaw.toLowerCase();
       const subscribed = currentSubscription && serverSubjectsForEndpoint.includes(subj);
       btn.disabled = false;
-      btn.title = subscribed ? `Unsubscribe from ${subj}` : `Subscribe to ${subj}`;
+      btn.title = subscribed ? `Unsubscribe from ${subjRaw}` : `Subscribe to ${subjRaw}`;
       if (subscribed) {
         btn.textContent = 'Subscribed ✓';
         btn.classList.add('subscribed');
@@ -457,20 +458,27 @@ document.addEventListener('DOMContentLoaded', () => {
       const savedEndpointCookie = getCookie('nn_subscription');
       const savedEndpointLS = localStorage.getItem('subscriptionEndpoint');
       if (!currentSubscription && (savedEndpointCookie || savedEndpointLS)) {
+        // create a lightweight object so UI can still check server state
         currentSubscription = { endpoint: savedEndpointCookie || savedEndpointLS };
       }
 
+      // ask server which subjects are saved for this endpoint
       if (currentSubscription && currentSubscription.endpoint) {
         try {
           const resp = await fetch('/subscriptions/check?endpoint=' + encodeURIComponent(currentSubscription.endpoint));
           if (resp.ok) {
             const j = await resp.json();
             if (j && j.ok && Array.isArray(j.subjects)) {
-              serverSubjectsForEndpoint = j.subjects;
+              serverSubjectsForEndpoint = j.subjects.map(s => (s || '').toString().toLowerCase());
+            } else {
+              serverSubjectsForEndpoint = [];
             }
+          } else {
+            serverSubjectsForEndpoint = [];
           }
         } catch (e) {
           console.error("Error querying server for subscriptions:", e);
+          serverSubjectsForEndpoint = [];
         }
       } else {
         serverSubjectsForEndpoint = [];
@@ -489,6 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    // request permission on user gesture
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
       alert('Please allow notifications to subscribe (check browser settings).');
@@ -512,6 +521,7 @@ document.addEventListener('DOMContentLoaded', () => {
       currentSubscription = sub;
       const subObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
 
+      // send to server and wait for successful sheet append BEFORE informing user
       let res, jsonRes;
       try {
         res = await fetch('{{ url_for("save_subscription_route") }}', {
@@ -534,6 +544,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (jsonRes && jsonRes.ok) {
+        // normalize server subjects for easier matching
+        if (Array.isArray(jsonRes.subjects)) {
+          serverSubjectsForEndpoint = jsonRes.subjects.map(s => (s || '').toString().toLowerCase());
+        } else if (!serverSubjectsForEndpoint.includes(subject.toLowerCase())) {
+          serverSubjectsForEndpoint.push(subject.toLowerCase());
+        }
+
+        // persist endpoint locally so page can remember even if browser gives different sub object later
         try {
           const endpoint = subObj.endpoint || '';
           if (endpoint) {
@@ -542,10 +560,9 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         } catch (e) {}
 
-        if (!serverSubjectsForEndpoint.includes(subject)) serverSubjectsForEndpoint.push(subject);
         updateSubscribeButtonsUI();
         if (btn) { btn.textContent = 'Subscribed ✓'; btn.classList.add('subscribed'); }
-        alert('Subscribed successfully ✓ (server saved)');
+        alert('Subscribed successfully ✓ (server confirmed).');
       } else {
         console.error("[subscribe] unexpected server response", jsonRes);
         alert('Subscription saved? server response: ' + JSON.stringify(jsonRes));
@@ -594,11 +611,17 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       try {
-        await fetch('/subscriptions/delete', {
+        const resp = await fetch('/subscriptions/delete', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ endpoint: endpointToDelete })
         });
+        if (resp.ok) {
+          serverSubjectsForEndpoint = [];
+          updateSubscribeButtonsUI();
+        } else {
+          console.warn("Server delete returned non-ok", resp.status);
+        }
       } catch (e) {
         console.error("Failed to request server-side deletion:", e);
       }

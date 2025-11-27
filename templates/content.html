@@ -154,7 +154,7 @@
           <div class="card-header bg-warning fw-bold">📂 Notes & Resources (Drive)</div>
           <div class="card-body">
             <p class="mb-2">All PDFs and notes are in the shared Drive:</p>
-            <a class="btn btn-warning" target="_blank" rel="noopener noreferrer" href="https://drive.google.com/drive/folders/16iL3bG1KHn3l-RDtrgof2kkA3DAILgbo">Open Shared Drive</a>
+            <a class="btn btn-warning" target="_blank" rel="noopener noreferrer" href="https://drive.google.com/drive/folders/1gDSrOwCuBhL72MgyNpSOxZV6EzJodONV?usp=sharing">Open Shared Drive</a>
             <p class="mt-3 small text-muted">Tip: keep folders by subject → Math / Physics / Chemistry…</p>
           </div>
         </div>
@@ -164,9 +164,9 @@
         <div class="card shadow">
           <div class="card-header bg-secondary text-white fw-bold">📝 Google Forms (Quizzes)</div>
           <div class="card-body">
-            {% if form_list %}
+            {% if form_list[:3] %}
               <ul class="list-group">
-                {% for f in form_list %}
+                {% for fl in form_list %}
                   {% set fname = f.get('name') or f.get('title') or 'Untitled Form' %}
                   {% set fid = f.get('id') or (f.get('fileId') if f.get('fileId') else '') %}
                   {% set link = f.get('webViewLink') or ('https://docs.google.com/forms/d/' ~ fid ~ '/viewform') %}

@@ -184,6 +184,7 @@
 <script type="application/json" id="communityLinksData">{{ community_links|tojson }}</script>
 <script type="application/json" id="vapidKeyData">{{ vapid_public_key|tojson }}</script>
 
+{% endblock %}
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', () => {

@@ -23,8 +23,6 @@
   }
   body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
   .card { background: var(--card-bg); border-radius: var(--card-radius); box-shadow: 0 6px 20px rgba(3,3,3,0.06); padding: 14px; }
-  .page-header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
-  .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .question-list { list-style:none; padding:0; margin:0; display:grid; gap:10px; }
   .question-item { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; padding:12px 14px; border-radius:12px; background: rgba(0,0,0,0.02); cursor: pointer; min-width:0; }
   .question-item .left { min-width:0; flex:1 1 auto; }
@@ -32,14 +30,11 @@
   .author { color: var(--muted); font-weight:700; font-size:.88rem; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .message-text { color: var(--text); font-size: .97rem; white-space:pre-wrap; word-break:break-word; overflow-wrap:break-word; hyphens:auto; }
   .op-attempt { margin-top:8px; padding:8px; background:rgba(0,0,0,0.02); border-radius:8px; color:var(--muted); font-size:.92rem; }
-  .op-attempt small { color:var(--muted); display:block; margin-bottom:6px; font-weight:700; }
   .btn-sub { font-size: .85rem; padding:6px 8px; border-radius:8px; }
   .answer-panel { display:none; margin-top:8px; }
   .tiny-link { font-size:.85rem; color:var(--accent-green); text-decoration:underline; cursor:pointer; background:none;border:0;padding:0; }
   .subscribe-btn { background:#fff3cd; border:1px solid #ffeeba; color:#856404; }
   .subscribe-btn.subscribed { background:#d4edda; border-color:#c3e6cb; color:#155724; box-shadow: 0 0 12px rgba(37,211,102,0.16); }
-  .status-inline { margin-left:8px; font-size:0.85rem; color:var(--muted); }
-  /* ensure children don't overflow and wrap nicely */
   .meta-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0; }
   .meta-right { min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
   .meta-right-small { min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
@@ -186,13 +181,12 @@
   </div>
 </div>
 
-<!-- Community JSON & vapid key -->
 <script type="application/json" id="communityLinksData">{{ community_links|tojson }}</script>
 <script type="application/json" id="vapidKeyData">{{ vapid_public_key|tojson }}</script>
 
+{% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-  // Parse server-provided JSON safely
   const communityLinksEl = document.getElementById('communityLinksData');
   const vapidEl = document.getElementById('vapidKeyData');
   let communityLinks = {};
@@ -200,7 +194,6 @@ document.addEventListener('DOMContentLoaded', () => {
   try { communityLinks = communityLinksEl ? JSON.parse(communityLinksEl.textContent || '{}') : {}; } catch(e){ communityLinks = {}; console.error(e); }
   try { vapidPublicKey = vapidEl ? JSON.parse(vapidEl.textContent || '""') : ""; } catch(e){ vapidPublicKey = ""; console.error(e); }
 
-  // Cookie helpers
   function getCookie(name) {
     const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
     return m ? decodeURIComponent(m.pop()) : null;
@@ -218,7 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.cookie = name + '=; path=/; max-age=0; samesite=Lax';
   }
 
-  /* --- Prefill user name & category from cookie --- */
+  // Prefill
   const nameInput = document.getElementById('name');
   const lastCategory = getCookie('nn_last_category');
   if (nameInput) {
@@ -229,31 +222,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const sel = document.getElementById('category');
     if (sel) {
       for (const opt of sel.options) {
-        if (opt.value === lastCategory) {
-          opt.selected = true;
-          break;
-        }
+        if (opt.value === lastCategory) { opt.selected = true; break; }
       }
     }
   }
 
-  /* --- Local UI wiring for questions list --- */
+  // Toggle answer panel
   document.querySelectorAll('.question-item').forEach(item => {
     item.addEventListener('click', (e) => {
-      // don't toggle when interactive child was clicked
       const tag = (e.target && e.target.tagName) || '';
       if (['BUTTON','A','TEXTAREA','INPUT','SELECT','LABEL'].includes(tag)) return;
       const panel = item.querySelector('.answer-panel');
       if (!panel) return;
-      const currentlyVisible = panel.style.display === 'block';
-      panel.style.display = currentlyVisible ? 'none' : 'block';
-      panel.setAttribute('aria-hidden', currentlyVisible ? 'true' : 'false');
+      const isVisible = panel.style.display === 'block';
+      panel.style.display = isVisible ? 'none' : 'block';
+      panel.setAttribute('aria-hidden', String(isVisible));
     });
-    item.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); item.click(); }
-    });
+    item.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); item.click(); }});
   });
 
+  // Expand attempt
   document.querySelectorAll('.show-full-attempt').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -269,38 +257,34 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Copy answer
   document.querySelectorAll('.copy-answer').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       const item = btn.closest('.question-item');
       const answerEl = item.querySelector('.answer-text');
       const answer = (answerEl && (answerEl.value ?? answerEl.textContent ?? '')) || '';
       if (!navigator.clipboard) {
         try {
-          if (answerEl) {
-            answerEl.select();
-            document.execCommand('copy');
-            alert('Copied (fallback).');
-          } else {
-            alert('Copy failed — please select and copy manually.');
-          }
-        } catch (err) {
-          alert('Copy failed — please select and copy manually.');
-        }
+          if (answerEl) { answerEl.select(); document.execCommand('copy'); alert('Copied (fallback).'); } else alert('Copy failed — select manually.');
+        } catch (err) { alert('Copy failed — select manually.'); }
         return;
       }
-      navigator.clipboard.writeText(answer).then(() => {
+      try {
+        await navigator.clipboard.writeText(answer);
         const old = btn.textContent;
         btn.textContent = 'Copied ✓';
         setTimeout(() => btn.textContent = old, 1500);
-      }).catch(() => alert('Copy failed — please select and copy manually.'));
+      } catch {
+        alert('Copy failed — please select and copy manually.');
+      }
     });
   });
 
+  // WhatsApp share
   document.querySelectorAll('.share-whatsapp').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
-      const item = btn.closest('.question-item');
-      if(!item) return;
+      const item = btn.closest('.question-item'); if(!item) return;
       const answer = (item.querySelector('.answer-text')?.value || '').trim();
       const subject = item.dataset?.category || '';
       const group = communityLinks[subject] || '';
@@ -311,7 +295,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  /* --- Theme toggle --- */
+  // Theme
   function applyTheme(theme) {
     if (theme) document.documentElement.setAttribute('data-theme', theme);
     else document.documentElement.removeAttribute('data-theme');
@@ -326,14 +310,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   const saved = localStorage.getItem('site-theme'); if (saved) applyTheme(saved);
 
-  /* --- Filter & sort (client-side) --- */
+  // Filter & sort (client-side + server filter)
   const categoryFilter = document.getElementById('categoryFilter');
   const searchBox = document.getElementById('searchBox');
   const sortSelect = document.getElementById('sortSelect');
   const list = document.getElementById('questionsList');
 
   function submitFilterToServer() {
-    // For server-side filtering we navigate with query param
     const val = (categoryFilter && categoryFilter.value) ? encodeURIComponent(categoryFilter.value) : '';
     const base = "{{ url_for('questions_page') }}";
     const url = val ? `${base}?categoryFilter=${val}` : base;
@@ -366,7 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sortSelect.value && sortSelect.value !== 'none') sortListBy(sortSelect.value);
   }
 
-  /* --- Form validation + cookie saving --- */
+  // Form submit: validation + save cookies
   const newQForm = document.getElementById('new-question-form');
   if (newQForm) {
     newQForm.addEventListener('submit', (ev) => {
@@ -379,7 +362,6 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Please fill both question and your attempt before submitting.');
         return;
       }
-      // Save name & category to cookie right before submit
       try {
         if (n && n.value) setCookie('nn_user', n.value, 365);
         if (c && c.value) setCookie('nn_last_category', c.value, 365);
@@ -387,8 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /* --- Push helpers & service worker subscription management --- */
-  // convert base64 public key to Uint8Array (for subscribe)
+  /* --- Push / subscribe management --- */
   function urlBase64ToUint8Array(base64String) {
     if (!base64String) return null;
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -401,13 +382,12 @@ document.addEventListener('DOMContentLoaded', () => {
     return outputArray;
   }
 
-  // initially disable subscribe buttons until SW init completes
+  // disable subscribe buttons until SW init completes
   document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Subscription initializing…'; });
 
   let registrationForPush = null;
   let currentSubscription = null;
-  // store normalized lower-case subjects for easier case-insensitive matching
-  let serverSubjectsForEndpoint = []; // e.g. ['mathematics','physics']
+  let serverSubjectsForEndpoint = [];
 
   function updateSubscribeButtonsUI() {
     document.querySelectorAll('.subscribe-btn').forEach(btn => {
@@ -430,7 +410,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function initServiceWorkerAndSubscription() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      // enable buttons but mark unavailable
       document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Notifications not supported in this browser'; });
       console.warn("Push/ServiceWorker not available in this browser.");
       return;
@@ -441,7 +420,6 @@ document.addEventListener('DOMContentLoaded', () => {
       await navigator.serviceWorker.ready;
 
       navigator.serviceWorker.addEventListener('message', (ev) => {
-        // optional: respond to SW messages
         if (ev.data && ev.data.type === 'SUBSCRIPTION_LOST') {
           console.warn('Push subscription possibly lost.');
         }
@@ -454,15 +432,12 @@ document.addEventListener('DOMContentLoaded', () => {
         currentSubscription = null;
       }
 
-      // fallback to stored endpoint if browser returns null but cookie exists
       const savedEndpointCookie = getCookie('nn_subscription');
       const savedEndpointLS = localStorage.getItem('subscriptionEndpoint');
       if (!currentSubscription && (savedEndpointCookie || savedEndpointLS)) {
-        // create a lightweight object so UI can still check server state
         currentSubscription = { endpoint: savedEndpointCookie || savedEndpointLS };
       }
 
-      // ask server which subjects are saved for this endpoint
       if (currentSubscription && currentSubscription.endpoint) {
         try {
           const resp = await fetch('/subscriptions/check?endpoint=' + encodeURIComponent(currentSubscription.endpoint));
@@ -497,7 +472,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // request permission on user gesture
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
       alert('Please allow notifications to subscribe (check browser settings).');
@@ -521,7 +495,6 @@ document.addEventListener('DOMContentLoaded', () => {
       currentSubscription = sub;
       const subObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
 
-      // send to server and wait for successful sheet append BEFORE informing user
       let res, jsonRes;
       try {
         res = await fetch('{{ url_for("save_subscription_route") }}', {
@@ -544,20 +517,15 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (jsonRes && jsonRes.ok) {
-        // normalize server subjects for easier matching
         if (Array.isArray(jsonRes.subjects)) {
           serverSubjectsForEndpoint = jsonRes.subjects.map(s => (s || '').toString().toLowerCase());
         } else if (!serverSubjectsForEndpoint.includes(subject.toLowerCase())) {
           serverSubjectsForEndpoint.push(subject.toLowerCase());
         }
 
-        // persist endpoint locally so page can remember even if browser gives different sub object later
         try {
           const endpoint = subObj.endpoint || '';
-          if (endpoint) {
-            try { setCookie('nn_subscription', endpoint, 365); } catch (e) {}
-            try { localStorage.setItem('subscriptionEndpoint', endpoint); } catch (e) {}
-          }
+          if (endpoint) { setCookie('nn_subscription', endpoint, 365); localStorage.setItem('subscriptionEndpoint', endpoint); }
         } catch (e) {}
 
         updateSubscribeButtonsUI();
@@ -602,44 +570,20 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (sub) {
-        try {
-          const ok = await sub.unsubscribe();
-          if (!ok) console.warn("sub.unsubscribe returned false");
-        } catch (e) {
-          console.warn("Error while calling sub.unsubscribe()", e);
-        }
+        try { const ok = await sub.unsubscribe(); if (!ok) console.warn("sub.unsubscribe returned false"); } catch (e) { console.warn("Error while calling sub.unsubscribe()", e); }
       }
 
       try {
-        const resp = await fetch('/subscriptions/delete', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ endpoint: endpointToDelete })
-        });
-        if (resp.ok) {
-          serverSubjectsForEndpoint = [];
-          updateSubscribeButtonsUI();
-        } else {
-          console.warn("Server delete returned non-ok", resp.status);
-        }
-      } catch (e) {
-        console.error("Failed to request server-side deletion:", e);
-      }
+        const resp = await fetch('/subscriptions/delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ endpoint: endpointToDelete }) });
+        if (resp.ok) { serverSubjectsForEndpoint = []; updateSubscribeButtonsUI(); } else console.warn("Server delete returned non-ok", resp.status);
+      } catch (e) { console.error("Failed to request server-side deletion:", e); }
 
-      try { deleteCookie('nn_subscription'); } catch(e){}
-      try { localStorage.removeItem('subscriptionEndpoint'); } catch(e){}
-
-      currentSubscription = null;
-      serverSubjectsForEndpoint = [];
-      updateSubscribeButtonsUI();
+      deleteCookie('nn_subscription'); localStorage.removeItem('subscriptionEndpoint');
+      currentSubscription = null; serverSubjectsForEndpoint = []; updateSubscribeButtonsUI();
       alert('Unsubscribed locally and requested server cleanup.');
-    } catch (e) {
-      console.error("Unsubscribe failed", e);
-      alert('Unsubscribe failed (see console).');
-    }
+    } catch (e) { console.error("Unsubscribe failed", e); alert('Unsubscribe failed (see console).'); }
   }
 
-  // Delegated subscribe button handler
   document.addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('.subscribe-btn');
     if (!btn) return;

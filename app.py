@@ -1,4 +1,4 @@
-# app.py  -- full application (drop-in)
+# app.py  -- upgraded drop-in (replace your existing app.py)
 import os
 import base64
 import json
@@ -16,6 +16,7 @@ from flask import (
     Flask, render_template, url_for, redirect, send_file,
     request, flash, Response, jsonify, send_from_directory, make_response
 )
+from flask import url_for as flask_url_for
 from dotenv import load_dotenv
 
 # optional requests for fetching Drive files server-side
@@ -55,7 +56,7 @@ if SERVICE_ACCOUNT_B64:
 else:
     if not os.path.exists(SERVICE_ACCOUNT_PATH):
         logging.getLogger(__name__).warning(
-            "Service account file not found at %s — Sheets/Drive will likely fail.", SERVICE_ACCOUNT_PATH
+            "Service account file not found at %s — Sheets/Drive may fail.", SERVICE_ACCOUNT_PATH
         )
 
 # --- Flask setup ---
@@ -76,7 +77,7 @@ MOTIVATION_VERSES = [
     ("Trust in the Lord with all your heart and lean not on your own understanding.", "Proverbs 3:5"),
 ]
 
-# community links (json string in env: {"Mathematics":"https://...", ...})
+# community links (json env)
 try:
     COMMUNITY_LINKS = json.loads(os.environ.get("COMMUNITY_LINKS_JSON", "{}") or "{}")
 except Exception:
@@ -101,32 +102,27 @@ SQL_TABLE_ROW_LIMIT = int(os.environ.get("SQL_TABLE_ROW_LIMIT", "500"))
 # cookie lifetime for remembering user & endpoint (1 year)
 COOKIE_MAX_AGE = 365 * 24 * 60 * 60
 
-
-# --- simple VAPID public key validator (warn early) ---
+# --- simple VAPID public key validator ---
 def _is_likely_valid_vapid_public_key(s):
     if not s:
         return False
     key = s.strip()
-    # normalize urlsafe base64 into normal base64
     key = key.replace('-', '+').replace('_', '/')
     padding = '=' * ((4 - (len(key) % 4)) % 4)
     try:
         b = base64.b64decode(key + padding)
-    except (binascii.Error, Exception) as e:
+    except Exception as e:
         app.logger.warning("VAPID_PUBLIC_KEY appears not to be valid base64: %s", e)
         return False
-    # typical uncompressed EC public key is 65 bytes (0x04 + 32 + 32)
     if len(b) in (65, 64):
         return True
-    # still accept but warn
-    app.logger.warning("VAPID_PUBLIC_KEY decoded length is %d bytes (expected ~65). It might still work but double-check.", len(b))
+    app.logger.warning("VAPID_PUBLIC_KEY decoded length is %d bytes (expected ~65).", len(b))
     return True
 
 if VAPID_PUBLIC_KEY:
     ok = _is_likely_valid_vapid_public_key(VAPID_PUBLIC_KEY)
     if not ok:
-        app.logger.warning("VAPID_PUBLIC_KEY looks invalid; push subscriptions will likely fail. Generate a proper VAPID keypair (e.g. `npx web-push generate-vapid-keys`) and set VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY.")
-
+        app.logger.warning("VAPID_PUBLIC_KEY looks invalid; push subscriptions may fail.")
 
 # --- Sheets/Drive helpers (import if available) ---
 try:
@@ -140,7 +136,6 @@ except Exception as e:
     app.logger.warning("sheets.py import failed: %s — using fallbacks", e)
     SHEETS_AVAILABLE = False
 
-    # minimal fallbacks to keep the app running (no sheets)
     def from_google_sheets(*a, **k): return []
     def check_date(*a, **k): return ""
     def append_row(row, key=None):
@@ -150,8 +145,8 @@ except Exception as e:
     def clear_sheet(*a, **k): app.logger.warning("clear_sheet fallback")
     def delete_rows_by_indices(*a, **k): app.logger.warning("delete_rows_by_indices fallback")
     def delete_rows_by_subject(*a, **k): app.logger.warning("delete_rows_by_subject fallback")
-    # --- BEGIN FALLBACK: sqlite-backed subscriptions & notifications ---
-    # Local DB path (file)
+
+    # fallback sqlite for subscriptions & notifications
     NN_LOCAL_DB = os.environ.get("NN_LOCAL_DB", "nn_local.db")
     DB_PATH = Path(NN_LOCAL_DB)
 
@@ -191,35 +186,29 @@ except Exception as e:
     _init_local_db()
 
     def save_subscription(subject, client_id, subscription):
-        """Persist subscription into local sqlite DB (fallback).
-        subscription can be dict or JSON string.
-        Returns True on success, False on failure.
-        """
         try:
             if isinstance(subscription, str):
                 try:
                     subscription = json.loads(subscription)
                 except Exception:
-                    app.logger.debug("save_subscription: received non-json string")
+                    app.logger.debug("save_subscription: invalid string")
                     return False
             if not isinstance(subscription, dict):
-                app.logger.debug("save_subscription: invalid subscription type")
                 return False
             endpoint = subscription.get('endpoint')
             if not endpoint:
-                app.logger.debug("save_subscription: subscription has no endpoint")
                 return False
             keys = subscription.get('keys') or {}
             p256dh = keys.get('p256dh') or ''
             auth = keys.get('auth') or ''
             subject_norm = (subject or 'Other').strip()
             now = datetime.utcnow().replace(microsecond=0).isoformat()
+            endpoint_norm = (endpoint or '').strip().rstrip('/')
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             raw = json.dumps(subscription)
-            # REPLACE ensures upsert by primary key endpoint & subject stored in subject column (we store last subject - duplicates handled by queries)
             c.execute("""REPLACE INTO subscriptions(endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
-                         VALUES(?,?,?,?,?,?,?)""", (endpoint, subject_norm, client_id or '', p256dh, auth, raw, now))
+                         VALUES(?,?,?,?,?,?,?)""", (endpoint_norm, subject_norm, client_id or '', p256dh, auth, raw, now))
             conn.commit()
             conn.close()
             return True
@@ -228,11 +217,6 @@ except Exception as e:
             return False
 
     def list_subscriptions(subject=None):
-        """Return a list of subscription sentinel rows for given subject (case-insensitive).
-        Each row mirrors the sentinel format your code already expects:
-        ['__subscription__', subject, client_id, raw_json, created_at]
-        If subject is None, return all subscriptions.
-        """
         try:
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
@@ -253,37 +237,24 @@ except Exception as e:
             return []
 
     def delete_subscriptions_by_endpoint(endpoint):
-        """Delete all subscription rows matching given endpoint."""
         try:
+            endpoint_norm = (endpoint or '').strip().rstrip('/')
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
-            c.execute("DELETE FROM subscriptions WHERE endpoint=?", (endpoint,))
+            c.execute("DELETE FROM subscriptions WHERE endpoint=?", (endpoint_norm,))
             conn.commit()
             conn.close()
         except Exception as e:
             app.logger.exception("delete_subscriptions_by_endpoint failed: %s", e)
 
-    def get_subjects_for_endpoint(endpoint):
-        """Return list of subjects a given endpoint is subscribed to (fallback helper)."""
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("SELECT subject FROM subscriptions WHERE endpoint=?", (endpoint,))
-            rows = c.fetchall()
-            conn.close()
-            return [r[0] for r in rows]
-        except Exception as e:
-            app.logger.exception("get_subjects_for_endpoint failed: %s", e)
-            return []
-
     def save_notification_for_endpoint(endpoint, subject, title, body, data_obj):
-        """Persist a notification row for the endpoint. Returns inserted id or None."""
         try:
+            endpoint_norm = (endpoint or '').strip().rstrip('/')
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             now = datetime.utcnow().replace(microsecond=0).isoformat()
             c.execute("""INSERT INTO notifications(endpoint, subject, title, body, data, created_at, delivered)
-                         VALUES (?,?,?,?,?,?,0)""", (endpoint, subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
+                         VALUES (?,?,?,?,?,?,0)""", (endpoint_norm, subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
             nid = c.lastrowid
             conn.commit()
             conn.close()
@@ -293,11 +264,11 @@ except Exception as e:
             return None
 
     def fetch_pending_notifications_for_endpoint(endpoint):
-        """Return list of undelivered notifications for endpoint ordered by created_at asc."""
         try:
+            endpoint_norm = (endpoint or '').strip().rstrip('/')
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
-            c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint,))
+            c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint_norm,))
             rows = c.fetchall()
             conn.close()
             out = []
@@ -314,23 +285,16 @@ except Exception as e:
             return []
 
     def ack_notifications_by_ids(endpoint, ids):
-        """Mark provided notification IDs (for that endpoint) as delivered."""
         if not ids:
             return 0
         try:
+            endpoint_norm = (endpoint or '').strip().rstrip('/')
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             now = datetime.utcnow().replace(microsecond=0).isoformat()
-            placeholders = ",".join(["?"] * len(ids))
-            params = ids + [endpoint]
-            # Use UPDATE with IN list
-            sql = f"UPDATE notifications SET delivered=1, delivered_at=? WHERE id IN ({placeholders}) AND endpoint=?"
-            # rearrange params: delivered_at first, then ids, then endpoint
-            params = [now] + ids + [endpoint]
-            # SQLite binding - use loop safe method
             for nid in ids:
                 try:
-                    c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint))
+                    c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint_norm))
                 except Exception:
                     continue
             conn.commit()
@@ -342,17 +306,16 @@ except Exception as e:
             return 0
 
     def mark_notifications_delivered_for_endpoint(endpoint):
-        """Mark all undelivered notifications for this endpoint as delivered."""
         try:
+            endpoint_norm = (endpoint or '').strip().rstrip('/')
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             now = datetime.utcnow().replace(microsecond=0).isoformat()
-            c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint))
+            c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint_norm))
             conn.commit()
             conn.close()
         except Exception as e:
             app.logger.exception("mark_notifications_delivered_for_endpoint failed: %s", e)
-    # --- END FALLBACK block ---
 
 try:
     from drive import from_google_drive, folders_and_images, download_file, update_file, create_file_in_folder
@@ -366,21 +329,37 @@ except Exception:
     def update_file(*a, **k): return False
     def create_file_in_folder(*a, **k): return None
 
-# lock for writing exercises locally
 _coding_lock = Lock()
 
-# Inject common context into templates
+# Helpers
+def _normalize_subject(s):
+    return (s or "Other").strip()
+
+def _normalize_endpoint(ep):
+    try:
+        return (ep or "").strip().rstrip('/')
+    except Exception:
+        return ep
+
+# Safe url_for wrapper for templates (still allows original names)
+def _safe_url_for(endpoint, **values):
+    try:
+        return flask_url_for(endpoint, **values)
+    except Exception as e:
+        app.logger.debug("safe_url_for could not build %s: %s", endpoint, e)
+        return "#"
+
 @app.context_processor
 def inject_globals():
     return {
         "community_links": COMMUNITY_LINKS,
         "message": FOOTER_MESSAGE,
-        "vapid_public_key": VAPID_PUBLIC_KEY or ""
+        "vapid_public_key": VAPID_PUBLIC_KEY or "",
+        "url_for": _safe_url_for,
+        "safe_url_for": _safe_url_for
     }
 
-# -------------------------
-# Jinja filter: format_time
-# -------------------------
+# Time formatting filter
 def _try_parse_time(s):
     if not s:
         return None
@@ -409,31 +388,14 @@ def format_time(value):
 
 app.jinja_env.filters["format_time"] = format_time
 
-# -------------------------
-# Helper: timetable for today (improved, deterministic column detection)
-# -------------------------
+# Timetable detection (improved)
 def get_timetable_today():
-    """
-    Return a list of dicts representing today's timetable rows.
-
-    Each dict contains:
-      - row_index: sheet row index (1-based, including header)
-      - day, time, subject, facilitator, link, notes (strings)
-
-    Detection strategy:
-      1) exact header equality (case-insensitive)
-      2) alias matching (contains / substring) with priority list
-      3) fallback to conventional positions if header row length suggests it
-    """
     try:
         rows = from_google_sheets() or []
         if not rows or len(rows) < 2:
             return []
-
         header = [str(h).strip() for h in rows[0]]
         header_lower = [h.lower() for h in header]
-
-        # prioritized alias lists for each logical column
         aliases = {
             "day": ["day", "weekday"],
             "time": ["time", "hour", "period"],
@@ -442,40 +404,30 @@ def get_timetable_today():
             "link": ["link", "location", "link/location", "meeting", "url", "meet"],
             "notes": ["notes", "note", "remarks", "comments"]
         }
-
-        def find_col_for_alias_list(alias_list):
-            # 1) exact equality (highest priority)
+        def find_col(alias_list):
             for a in alias_list:
                 a_norm = a.lower().strip()
                 for i, h in enumerate(header_lower):
                     if h == a_norm:
                         return i
-            # 2) substring contains (header contains alias)
             for a in alias_list:
                 a_norm = a.lower().strip()
                 for i, h in enumerate(header_lower):
                     if a_norm in h:
                         return i
-            # 3) header contains alias tokens (looser)
             for a in alias_list:
                 toks = [t for t in a.lower().split() if t]
-                if not toks:
-                    continue
+                if not toks: continue
                 for i, h in enumerate(header_lower):
                     if all(tok in h for tok in toks):
                         return i
             return None
-
-        # Detect columns
-        col_day = find_col_for_alias_list(aliases["day"])
-        col_time = find_col_for_alias_list(aliases["time"])
-        col_subject = find_col_for_alias_list(aliases["subject"])
-        col_facilitator = find_col_for_alias_list(aliases["facilitator"])
-        col_link = find_col_for_alias_list(aliases["link"])
-        col_notes = find_col_for_alias_list(aliases["notes"])
-
-        # If some columns still None, and header length is at least 6, use conventional positions:
-        # Day(0), Time(1), Subject(2), Facilitator(3), Link/Location(4), Notes(5)
+        col_day = find_col(aliases["day"])
+        col_time = find_col(aliases["time"])
+        col_subject = find_col(aliases["subject"])
+        col_facilitator = find_col(aliases["facilitator"])
+        col_link = find_col(aliases["link"])
+        col_notes = find_col(aliases["notes"])
         hl = len(header)
         if hl >= 6:
             if col_day is None: col_day = 0
@@ -485,53 +437,38 @@ def get_timetable_today():
             if col_link is None: col_link = 4
             if col_notes is None: col_notes = 5
         else:
-            # If header length < 6, try to reasonably assign by available columns
-            # Prefer preserving earlier detected indices; otherwise attempt nearby indices
-            def fallback_assign(c_idx, preferred_idx):
-                if c_idx is None and preferred_idx < hl:
-                    return preferred_idx
+            def fallback(c_idx, pref):
+                if c_idx is None and pref < hl: return pref
                 return c_idx
+            col_day = fallback(col_day, 0)
+            col_time = fallback(col_time, 1 if hl > 1 else 0)
+            col_subject = fallback(col_subject, 2 if hl > 2 else (hl-1))
+            col_facilitator = fallback(col_facilitator, 3 if hl > 3 else (hl-1))
+            col_link = fallback(col_link, 4 if hl > 4 else (hl-1))
+            col_notes = fallback(col_notes, 5 if hl > 5 else (hl-1))
 
-            col_day = fallback_assign(col_day, 0)
-            col_time = fallback_assign(col_time, 1 if hl > 1 else 0)
-            col_subject = fallback_assign(col_subject, 2 if hl > 2 else (hl-1))
-            col_facilitator = fallback_assign(col_facilitator, 3 if hl > 3 else (hl-1))
-            col_link = fallback_assign(col_link, 4 if hl > 4 else (hl-1))
-            col_notes = fallback_assign(col_notes, 5 if hl > 5 else (hl-1))
+        app.logger.info("Timetable columns detected: day=%s time=%s subject=%s facilitator=%s link=%s notes=%s (header=%s)",
+                        col_day, col_time, col_subject, col_facilitator, col_link, col_notes, header)
 
-        # log mapping so you can inspect what's been detected (helps debug)
-        try:
-            app.logger.info("Timetable columns detected: day=%s time=%s subject=%s facilitator=%s link=%s notes=%s (header=%s)",
-                            col_day, col_time, col_subject, col_facilitator, col_link, col_notes, header)
-        except Exception:
-            pass
-
-        # compute today's string variants
-        today_short = datetime.now().strftime("%a").upper()    # e.g. 'Mon'
-        today_full = datetime.now().strftime("%A").upper()     # 'MONDAY'
-
+        today_short = datetime.now().strftime("%a").upper()
+        today_full = datetime.now().strftime("%A").upper()
         matches = []
         for idx, r in enumerate(rows[1:], start=2):
             try:
                 rlist = list(r)
-                # read day cell (use detected column if present, else fallback to first column)
                 day_cell = ""
                 if col_day is not None and col_day < len(rlist):
                     day_cell = str(rlist[col_day]).strip()
                 elif len(rlist) > 0:
                     day_cell = str(rlist[0]).strip()
-
                 if not day_cell:
                     continue
-
                 first = day_cell.upper()
                 if first.startswith(today_short) or first.startswith(today_full[:3]) or today_full in first:
                     def get_cell(ci):
-                        if ci is None or ci >= len(rlist):
-                            return ""
+                        if ci is None or ci >= len(rlist): return ""
                         return rlist[ci] or ""
-
-                    entry = {
+                    matches.append({
                         "row_index": idx,
                         "day": str(get_cell(col_day)).strip(),
                         "time": str(get_cell(col_time)).strip(),
@@ -539,24 +476,18 @@ def get_timetable_today():
                         "facilitator": str(get_cell(col_facilitator)).strip(),
                         "link": str(get_cell(col_link)).strip(),
                         "notes": str(get_cell(col_notes)).strip()
-                    }
-                    matches.append(entry)
+                    })
             except Exception:
                 continue
-
         return matches
     except Exception:
         app.logger.exception("get_timetable_today failed")
         return []
 
-
-# -------------------------
 # Coding exercises loader
-# -------------------------
 def load_coding_exercises(drive_id: str = None, local_path: str = None):
     drive_id = (drive_id or CODING_DRIVE_FILE_ID or "").strip() or None
     local_path = (local_path or CODING_LOCAL_PATH or "").strip() or None
-
     if drive_id and DRIVE_AVAILABLE:
         try:
             raw = download_file(drive_id)
@@ -569,7 +500,6 @@ def load_coding_exercises(drive_id: str = None, local_path: str = None):
                     app.logger.exception("Failed to parse coding exercises JSON from Drive file %s", drive_id)
         except Exception:
             app.logger.exception("Failed to download coding exercises from Drive id %s", drive_id)
-
     if local_path:
         try:
             p = Path(local_path)
@@ -580,7 +510,6 @@ def load_coding_exercises(drive_id: str = None, local_path: str = None):
                         return data
         except Exception:
             app.logger.exception("Failed to read local coding exercises file: %s", local_path)
-
     app.logger.info("Using fallback coding exercises")
     return [
         {
@@ -594,9 +523,7 @@ def load_coding_exercises(drive_id: str = None, local_path: str = None):
         }
     ]
 
-# -------------------------
 # Drive image route (robust)
-# -------------------------
 @app.route("/drive-image/<path:file_id>")
 def drive_image(file_id):
     try:
@@ -630,50 +557,29 @@ def drive_image(file_id):
             small_png.seek(0)
             return send_file(small_png, mimetype="image/png")
 
-
-# -------------------------
-# Subscriptions helpers (improved)
-# -------------------------
+# Subscriptions helpers
 def _is_valid_subscription_obj(sub):
-    """Return True if `sub` looks like a PushSubscription dict with an endpoint."""
     if not sub or not isinstance(sub, dict):
         return False
     endpoint = sub.get("endpoint") or sub.get("url")
     if not endpoint or not isinstance(endpoint, str):
         return False
-    # optional structure check: many browsers include 'keys' dict
-    if sub.get("keys") and isinstance(sub.get("keys"), dict):
-        return True
-    # allow looser objects that still have endpoint
     return True
 
-def _normalize_subject(s):
-    return (s or "Other").strip()
-
 def _save_subscription_to_sheet(subject, client_id, subscription_obj):
-    """
-    Persist subscription. Prefer `save_subscription` (sheets helper) but fall back to
-    appending a sentinel row to the questions sheet. Ensures we don't duplicate the
-    same endpoint+subject.
-    Returns True on success, False on failure.
-    """
     try:
         if not _is_valid_subscription_obj(subscription_obj):
-            app.logger.warning("Attempted to save invalid subscription object: %r", subscription_obj)
+            app.logger.warning("Invalid subscription object: %r", subscription_obj)
             return False
-
         subject = _normalize_subject(subject)
         endpoint = subscription_obj.get("endpoint")
-
-        # prefer dedicated sheets helper
+        endpoint_norm = _normalize_endpoint(endpoint)
         if SHEETS_AVAILABLE:
             try:
                 save_subscription(subject, client_id or "", subscription_obj)
                 return True
             except Exception as e:
-                app.logger.debug("sheets.save_subscription failed (will fallback): %s", e)
-
-        # fallback: scan existing rows to avoid dupes
+                app.logger.debug("sheets.save_subscription failed (fallback): %s", e)
         timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
         try:
             rows = []
@@ -681,7 +587,6 @@ def _save_subscription_to_sheet(subject, client_id, subscription_obj):
                 rows = get_questions() or []
             except Exception:
                 app.logger.debug("get_questions not available for dedupe fallback")
-
             found = False
             for r in rows:
                 try:
@@ -694,15 +599,15 @@ def _save_subscription_to_sheet(subject, client_id, subscription_obj):
                             parsed = json.loads(sub_json)
                         except Exception:
                             parsed = None
-                        if parsed and parsed.get("endpoint") == endpoint and _normalize_subject(subj) == subject:
-                            found = True
-                            break
+                        if parsed:
+                            parsed_ep = _normalize_endpoint(parsed.get("endpoint"))
+                            if parsed_ep == endpoint_norm and _normalize_subject(subj) == subject:
+                                found = True
+                                break
                 except Exception:
                     continue
-
             if not found:
-                # store a minimal sanitized copy
-                safe_sub = {"endpoint": endpoint, "keys": subscription_obj.get("keys", {})}
+                safe_sub = {"endpoint": endpoint_norm, "keys": subscription_obj.get("keys", {})}
                 append_row(["__subscription__", subject, client_id or "", json.dumps(safe_sub), timestamp])
             return True
         except Exception:
@@ -712,104 +617,13 @@ def _save_subscription_to_sheet(subject, client_id, subscription_obj):
         app.logger.exception("Unexpected error in _save_subscription_to_sheet")
         return False
 
-def _get_subjects_for_endpoint(endpoint):
-    """
-    Return authoritative list of subjects for the endpoint (case-normalized).
-    Uses sheets.list_subscriptions if available; otherwise falls back to sqlite or questions sheet scan.
-    """
-    out = []
-    try:
-        if not endpoint:
-            return []
-        # prefer sheets.list_subscriptions if present and returns helpful structure
-        if SHEETS_AVAILABLE:
-            try:
-                raw = list_subscriptions() or []
-                for r in raw:
-                    try:
-                        if isinstance(r, dict):
-                            sub = r.get("subscription") or r.get("sub") or r
-                            subj = _normalize_subject(r.get("subject") or "")
-                            if isinstance(sub, dict) and sub.get("endpoint") == endpoint:
-                                out.append(subj)
-                        elif isinstance(r, (list, tuple)) and len(r) > 3 and r[0] == "__subscription__":
-                            try:
-                                parsed = json.loads(r[3])
-                            except Exception:
-                                parsed = None
-                            if parsed and parsed.get("endpoint") == endpoint:
-                                out.append(_normalize_subject(r[1] if r[1] else "Other"))
-                    except Exception:
-                        continue
-                # dedupe preserving order
-                seen = set(); uniq = []
-                for s in out:
-                    sn = s.lower()
-                    if sn not in seen:
-                        seen.add(sn); uniq.append(s)
-                return uniq
-            except Exception as e:
-                app.logger.debug("sheets.list_subscriptions failed inside _get_subjects_for_endpoint: %s", e)
-        # fallback: try get_subjects_for_endpoint (sqlite helper)
-        try:
-            subj_list = get_subjects_for_endpoint(endpoint)
-            if subj_list:
-                # normalize
-                subj_norm = [_normalize_subject(s) for s in subj_list if s]
-                seen = set(); uniq = []
-                for s in subj_norm:
-                    sn = s.lower()
-                    if sn not in seen:
-                        seen.add(sn); uniq.append(s)
-                return uniq
-        except Exception:
-            pass
-
-        # last fallback: scan questions sheet sentinel rows
-        try:
-            rows = get_questions() or []
-            for r in rows:
-                try:
-                    if len(r) >= 1 and str(r[0]) == "__subscription__":
-                        subj = _normalize_subject(r[1] if len(r) > 1 else "Other")
-                        sub_json = r[3] if len(r) > 3 else None
-                        if not sub_json:
-                            continue
-                        parsed = None
-                        try:
-                            parsed = json.loads(sub_json)
-                        except Exception:
-                            continue
-                        if parsed and parsed.get("endpoint") == endpoint:
-                            out.append(subj)
-                except Exception:
-                    continue
-            # dedupe
-            seen = set(); uniq = []
-            for s in out:
-                sn = s.lower()
-                if sn not in seen:
-                    seen.add(sn); uniq.append(s)
-            return uniq
-        except Exception as e:
-            app.logger.exception("_get_subjects_for_endpoint fallback scan failed: %s", e)
-            return []
-    except Exception as e:
-        app.logger.exception("_get_subjects_for_endpoint failed: %s", e)
-        return []
-
 def _load_subscriptions_for_subject(subject):
-    """
-    Return list of subscription dicts for a subject. Uses `list_subscriptions` when available
-    otherwise scans the questions sheet sentinel rows. Subject comparison is case-insensitive.
-    """
     subs = []
     try:
         subject_norm = _normalize_subject(subject)
         if SHEETS_AVAILABLE:
             try:
                 raw = list_subscriptions(subject_norm) or []
-                # allow list_subscriptions to return either list of dicts or rows
                 for r in raw:
                     if isinstance(r, dict):
                         sub = r.get("subscription") or r.get("sub") or r.get("push") or r
@@ -831,16 +645,13 @@ def _load_subscriptions_for_subject(subject):
                     return subs
             except Exception as e:
                 app.logger.debug("sheets.list_subscriptions failed: %s", e)
-
-        # fallback scan
         rows = get_questions() or []
         for row in rows:
             try:
                 if len(row) >= 1 and str(row[0]) == "__subscription__":
                     subj = _normalize_subject(row[1] if len(row) > 1 else "Other")
                     sub_json = row[3] if len(row) > 3 else None
-                    if not sub_json:
-                        continue
+                    if not sub_json: continue
                     parsed = None
                     try:
                         parsed = json.loads(sub_json)
@@ -855,22 +666,16 @@ def _load_subscriptions_for_subject(subject):
     return subs
 
 def send_push_to_subject(subject, question_text, attempt_text):
-    """
-    Send push notifications to all subscriptions for subject.
-    Returns dict {sent: int, errors: list}
-    """
     subs = _load_subscriptions_for_subject(subject)
     if not subs:
         app.logger.debug("No subscribers for subject %s", subject)
         return {"sent": 0, "errors": ["no subscribers"]}
-
     title = f"New question in {subject}"
     q_preview = (question_text or "").strip()
     a_preview = (attempt_text or "").strip()
     if len(q_preview) > 140: q_preview = q_preview[:137] + "…"
     if len(a_preview) > 180: a_preview = a_preview[:177] + "…"
     body = f"Q: {q_preview}\nA: {a_preview}"
-
     payload = {
         "title": title,
         "body": body,
@@ -880,10 +685,8 @@ def send_push_to_subject(subject, question_text, attempt_text):
         "subject": subject,
         "preview": {"question": q_preview, "attempt": a_preview}
     }
-
     if not PYWEBPUSH_AVAILABLE or not VAPID_PRIVATE_KEY:
-        app.logger.warning("pywebpush or VAPID private key not available — cannot send push. Payload: %s", payload)
-        # Even if we cannot send the webpush, persist notifications so clients can fetch them later
+        app.logger.warning("pywebpush or VAPID private key not available — cannot send push. Persisting notifications.")
         try:
             for sub in subs:
                 try:
@@ -892,14 +695,13 @@ def send_push_to_subject(subject, question_text, attempt_text):
                             sub = json.loads(sub)
                         except Exception:
                             continue
-                    endpoint = sub.get("endpoint")
+                    endpoint = _normalize_endpoint(sub.get("endpoint"))
                     save_notification_for_endpoint(endpoint, subject, payload["title"], payload["body"], payload.get("preview"))
                 except Exception:
                     continue
         except Exception:
             app.logger.exception("Failed to persist notifications when pywebpush unavailable")
         return {"sent": 0, "errors": ["pywebpush/VAPID not available"]}
-
     sent = 0
     errors = []
     for sub in subs:
@@ -914,14 +716,11 @@ def send_push_to_subject(subject, question_text, attempt_text):
             if not _is_valid_subscription_obj(sub):
                 errors.append("invalid subscription object")
                 continue
-
-            endpoint = sub.get("endpoint")
-            # persist notification (ensures client can fetch later if push fails/delayed)
+            endpoint = _normalize_endpoint(sub.get("endpoint"))
             try:
                 save_notification_for_endpoint(endpoint, subject, payload["title"], payload["body"], payload.get("preview"))
             except Exception:
                 app.logger.debug("Failed to persist notification for endpoint %s; continuing", endpoint)
-
             try:
                 webpush(
                     subscription_info=sub,
@@ -930,7 +729,6 @@ def send_push_to_subject(subject, question_text, attempt_text):
                     vapid_claims={"sub": VAPID_SUBJECT}
                 )
                 sent += 1
-                # mark persisted notifications delivered for this endpoint
                 try:
                     mark_notifications_delivered_for_endpoint(endpoint)
                 except Exception:
@@ -938,7 +736,6 @@ def send_push_to_subject(subject, question_text, attempt_text):
             except WebPushException as ex:
                 app.logger.warning("WebPushException for subject %s: %s", subject, ex)
                 errors.append(str(ex))
-                # attempt cleanup if stale
                 try:
                     resp = getattr(ex, 'response', None)
                     status = None
@@ -948,21 +745,16 @@ def send_push_to_subject(subject, question_text, attempt_text):
                         if endpoint:
                             app.logger.info("Subscription endpoint %s returned %s: deleting subscription", endpoint, status)
                             try:
-                                # delete from sheets if possible, else delete from local sqlite
-                                try:
-                                    delete_subscriptions_by_endpoint(endpoint)
-                                except Exception:
-                                    # if other fallback, ensure local sqlite delete
-                                    try:
-                                        conn = sqlite3.connect(str(DB_PATH))
-                                        c = conn.cursor()
-                                        c.execute("DELETE FROM subscriptions WHERE endpoint=?", (endpoint,))
-                                        conn.commit()
-                                        conn.close()
-                                    except Exception:
-                                        app.logger.exception("Failed to delete stale endpoint from fallback DB")
+                                delete_subscriptions_by_endpoint(endpoint)
                             except Exception:
-                                app.logger.exception("Failed deleting stale subscription for endpoint %s", endpoint)
+                                try:
+                                    conn = sqlite3.connect(str(DB_PATH))
+                                    c = conn.cursor()
+                                    c.execute("DELETE FROM subscriptions WHERE endpoint=?", (endpoint,))
+                                    conn.commit()
+                                    conn.close()
+                                except Exception:
+                                    app.logger.exception("Failed to delete stale endpoint from fallback DB")
                 except Exception:
                     app.logger.exception("Exception while handling WebPushException cleanup")
             except Exception as ex:
@@ -973,184 +765,7 @@ def send_push_to_subject(subject, question_text, attempt_text):
             errors.append("processing error")
     return {"sent": sent, "errors": errors}
 
-# -------------------------
-# SQL helpers (fix + run editor SQL safely)
-# -------------------------
-
-def _fix_misordered_if_not_exists(sql_text: str) -> str:
-    """
-    Detect patterns like:
-       CREATE TABLE authors IF NOT EXISTS (...)
-    and rewrite to:
-       CREATE TABLE IF NOT EXISTS authors (...)
-    This fixes a common user mistake. Operates robustly and only changes occurrences
-    where 'IF NOT EXISTS' appears *after* the table name.
-    """
-    if not sql_text or not isinstance(sql_text, str):
-        return sql_text
-
-    # regex: capture CREATE TABLE <maybe quoted name> followed by IF NOT EXISTS
-    # We accept quoting with ` or " or [ ]
-    pattern = re.compile(r'(?i)\bCREATE\s+TABLE\s+((?:`|"|\[)?\w+(?:`|"|\])?)\s+IF\s+NOT\s+EXISTS\b')
-    def _repl(m):
-        tbl = m.group(1)
-        return f'CREATE TABLE IF NOT EXISTS {tbl}'
-    new = pattern.sub(_repl, sql_text)
-    return new
-
-def _split_sql_statements(script_text: str):
-    """
-    Very small statement splitter: splits on semicolons and yields trimmed statements.
-    Note: this is not a full SQL parser (so semicolons inside strings may confuse it), but
-    it's sufficient for interactive use with simple SQL.
-    """
-    if not script_text:
-        return []
-    parts = [p.strip() for p in script_text.split(';')]
-    return [p for p in parts if p]
-
-def _execute_editor_sql_and_render(schema_sql: str, editor_sql: str, sample_data, row_limit=SQL_TABLE_ROW_LIMIT):
-    """
-    Create an in-memory DB, apply schema_sql (if any), load sample_data (if any),
-    then run editor_sql statements. Returns dict {ok, html, tables, queries, error}
-    where html is an HTML snippet of table previews and query results.
-    """
-    try:
-        # First, fix common syntax mistakes in provided SQL
-        if schema_sql and isinstance(schema_sql, str):
-            schema_sql = _fix_misordered_if_not_exists(schema_sql)
-        if editor_sql and isinstance(editor_sql, str):
-            editor_sql = _fix_misordered_if_not_exists(editor_sql)
-
-        # create and populate DB using existing helper logic
-        conn, populated = _safe_create_and_populate_sqlite(schema_sql, sample_data)
-        cur = conn.cursor()
-
-        # run DDL / non-SELECT with executescript for speed, but we want to capture SELECT results
-        # Split editor_sql into statements; execute non-select with executescript, select with execute+fetch
-        queries_output = []
-        if editor_sql and editor_sql.strip():
-            stmts = _split_sql_statements(editor_sql)
-            for st in stmts:
-                st_strip = st.strip()
-                if not st_strip:
-                    continue
-                try:
-                    # detect SELECT (starts with select or with "WITH" for CTEs)
-                    if re.match(r'(?i)^\s*(SELECT|WITH)\b', st_strip):
-                        # run and capture results
-                        cur.execute(st_strip)
-                        rows = cur.fetchall()
-                        cols = [d[0] for d in cur.description] if cur.description else []
-                        # convert rows into list of lists for JSON/HTML
-                        row_list = []
-                        for r in rows:
-                            if isinstance(r, sqlite3.Row):
-                                row_list.append([r[c] for c in cols])
-                            else:
-                                row_list.append(list(r))
-                        queries_output.append({"sql": st_strip, "type": "select", "cols": cols, "rows": row_list})
-                    else:
-                        # non-select: try executescript (allows multiple statements too)
-                        try:
-                            cur.executescript(st_strip)
-                            conn.commit()
-                            queries_output.append({"sql": st_strip, "type": "non-select", "result": "ok"})
-                        except Exception as e:
-                            # try simple execute as fallback
-                            try:
-                                cur.execute(st_strip)
-                                conn.commit()
-                                queries_output.append({"sql": st_strip, "type": "non-select", "result": "ok"})
-                            except Exception as e2:
-                                queries_output.append({"sql": st_strip, "type": "non-select", "error": str(e2)})
-                except Exception as e:
-                    queries_output.append({"sql": st_strip, "type": "error", "error": str(e)})
-
-        # After running user SQL, list tables
-        try:
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;")
-            tables = [r[0] for r in cur.fetchall()]
-        except Exception:
-            tables = []
-
-        # build HTML similar to exercise_table_route
-        html_parts = []
-        for tbl in tables:
-            try:
-                cur.execute(f'SELECT * FROM "{tbl}" LIMIT {row_limit}')
-                rows = cur.fetchall()
-                cols = [d[0] for d in cur.description] if cur.description else []
-                tbl_html = []
-                tbl_html.append(f'<div class="mb-2"><strong>Table: {tbl}</strong></div>')
-                tbl_html.append('<div class="table-responsive"><table class="table table-sm table-striped"><thead><tr>')
-                for c in cols:
-                    tbl_html.append(f'<th>{c}</th>')
-                tbl_html.append('</tr></thead><tbody>')
-                if not rows:
-                    tbl_html.append('<tr><td colspan="%d"><em>No rows</em></td></tr>' % (len(cols) or 1))
-                else:
-                    for r in rows:
-                        tbl_html.append('<tr>')
-                        for c in cols:
-                            try:
-                                val = r[c]
-                            except Exception:
-                                # r might be a tuple -> fallback by index
-                                try:
-                                    idx = cols.index(c)
-                                    val = r[idx]
-                                except Exception:
-                                    val = None
-                            tbl_html.append('<td>%s</td>' % ("" if val is None else str(val)))
-                        tbl_html.append('</tr>')
-                tbl_html.append('</tbody></table></div>')
-                html_parts.append("".join(tbl_html))
-            except Exception as e:
-                html_parts.append(f'<div class="alert alert-warning small">Could not read table {tbl}: {e}</div>')
-
-        # show results from explicit SELECT queries (if any)
-        if queries_output:
-            qparts = []
-            for q in queries_output:
-                if q.get("type") == "select":
-                    qparts.append(f'<div class="mt-3"><div class="small-muted">Query:</div><div class="mb-1"><code>{q.get("sql")}</code></div>')
-                    cols = q.get("cols") or []
-                    rows = q.get("rows") or []
-                    qparts.append('<div class="table-responsive"><table class="table table-sm table-striped"><thead><tr>')
-                    for c in cols:
-                        qparts.append(f'<th>{c}</th>')
-                    qparts.append('</tr></thead><tbody>')
-                    if not rows:
-                        qparts.append('<tr><td colspan="%d"><em>No rows</em></td></tr>' % (len(cols) or 1))
-                    else:
-                        for r in rows:
-                            qparts.append('<tr>')
-                            for v in r:
-                                qparts.append('<td>%s</td>' % ("" if v is None else str(v)))
-                            qparts.append('</tr>')
-                    qparts.append('</tbody></table></div></div>')
-                elif q.get("type") == "non-select":
-                    if q.get("error"):
-                        qparts.append(f'<div class="alert alert-warning small">Statement error: {q.get("error")}</div>')
-                else:
-                    qparts.append(f'<div class="alert alert-warning small">Statement error: {q.get("error")}</div>')
-            if qparts:
-                html_parts.insert(0, "<div class='mb-2'><strong>Query results</strong></div>" + "".join(qparts))
-
-        conn.close()
-        return {"ok": True, "html": "".join(html_parts), "tables": tables, "queries": queries_output}
-    except Exception as e:
-        app.logger.exception("_execute_editor_sql_and_render failed: %s", e)
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return {"ok": False, "error": str(e)}
-
-# -------------------------
 # Routes
-# -------------------------
 @app.route("/")
 @app.route("/home")
 def home_page():
@@ -1159,26 +774,76 @@ def home_page():
 
 @app.route("/content")
 def content_page():
+    sheet_content = []
+    sheet_title = []
+    dr_values = []
+    form_list = []
+    timetable_today = []
+    sheet_status = {"ok": False, "reason": None}
+    drive_status = {"ok": False, "reason": None}
+    forms_status = {"ok": False, "reason": None}
     try:
         ws_values = from_google_sheets() or []
-        ws_title = ws_values[0] if ws_values else []
-        ws_content = ws_values[1:] if len(ws_values) > 1 else []
-        dr_values = folders_and_images()
-        form_list = from_google_drive(os.environ.get("FORMS_FOLDER_ID", ""), "application/vnd.google-apps.form")
-        timetable_today = get_timetable_today()
+        if ws_values:
+            sheet_status["ok"] = True
+            sheet_title = ws_values[0] if ws_values else []
+            sheet_content = ws_values[1:] if len(ws_values) > 1 else []
+        else:
+            sheet_status["ok"] = False
+            sheet_status["reason"] = "no rows returned or sheet empty"
+    except Exception as e:
+        sheet_status["ok"] = False
+        sheet_status["reason"] = f"exception: {e}"
+        app.logger.exception("from_google_sheets failed in content_page: %s", e)
+    try:
+        dr_values = folders_and_images() or []
+        drive_status["ok"] = True
+    except Exception as e:
+        drive_status["ok"] = False
+        drive_status["reason"] = f"exception: {e}"
+        app.logger.exception("folders_and_images failed in content_page: %s", e)
+    try:
+        forms_folder = os.environ.get("FORMS_FOLDER_ID", "") or None
+        if forms_folder and DRIVE_AVAILABLE:
+            try:
+                form_list = from_google_drive(forms_folder, "application/vnd.google-apps.form") or []
+                if form_list:
+                    forms_status["ok"] = True
+                else:
+                    forms_status["ok"] = False
+                    forms_status["reason"] = "no forms found"
+            except Exception as e:
+                forms_status["ok"] = False
+                forms_status["reason"] = f"drive fetch exception: {e}"
+                app.logger.exception("from_google_drive(forms) failed: %s", e)
+        else:
+            forms_status["ok"] = False
+            forms_status["reason"] = "FORMS_FOLDER_ID not set or DRIVE_AVAILABLE is False"
+    except Exception as e:
+        forms_status["ok"] = False
+        forms_status["reason"] = f"exception: {e}"
+        app.logger.exception("forms listing failed in content_page: %s", e)
+    try:
+        timetable_today = get_timetable_today() or []
+    except Exception as e:
+        app.logger.exception("get_timetable_today failed in content_page: %s", e)
+    try:
         return render_template(
             "content.html",
             message=FOOTER_MESSAGE,
-            sheet_content=ws_content,
-            sheet_title=ws_title,
-            today_date=check_date(),
+            sheet_content=sheet_content,
+            sheet_title=sheet_title,
+            today_date=check_date() if 'check_date' in globals() else "",
             form_list=form_list,
             dr_values=dr_values,
-            timetable_today=timetable_today
+            timetable_today=timetable_today,
+            sheet_status=sheet_status,
+            drive_status=drive_status,
+            forms_status=forms_status
         )
     except Exception as e:
         app.logger.exception("Content page error: %s", e)
-        return render_template("content.html", message=FOOTER_MESSAGE, sheet_content=[], sheet_title=[], today_date="", form_list=[], dr_values=[], timetable_today=[], error=str(e))
+        return render_template("content.html", message=FOOTER_MESSAGE, sheet_content=[], sheet_title=[], today_date="", form_list=[], dr_values=[], timetable_today=[], error=str(e), sheet_status=sheet_status, drive_status=drive_status, forms_status=forms_status)
 
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
@@ -1188,17 +853,16 @@ def questions_page():
             attempt = (request.form.get("attempt") or "").strip()
             if not submitted_question:
                 flash("⚠️ Please enter a question.", "warning")
-                return redirect(url_for("questions_page"))
+                return redirect(flask_url_for("questions_page"))
             if not attempt:
                 flash("⚠️ Please enter your solution attempt before submitting.", "warning")
-                return redirect(url_for("questions_page"))
+                return redirect(flask_url_for("questions_page"))
             username = (request.form.get("name") or "").strip() or "Anonymous"
             choice_selected = (request.form.get("category") or "Other").strip()
             timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
             try:
                 append_row([choice_selected, username, submitted_question, attempt, timestamp])
                 flash("✅ Question + attempt submitted!", "success")
-                # send pushes (best-effort)
                 try:
                     result = send_push_to_subject(choice_selected, submitted_question, attempt)
                     app.logger.info("send_push_to_subject result: %s", result)
@@ -1207,10 +871,8 @@ def questions_page():
             except Exception as e:
                 app.logger.exception("Failed append_row: %s", e)
                 flash("❌ Could not submit question. Try later.", "danger")
-                return redirect(url_for("questions_page"))
-
-            # redirect and set cookies so the browser remembers the user's name & last category
-            resp = redirect(url_for("questions_page"))
+                return redirect(flask_url_for("questions_page"))
+            resp = redirect(flask_url_for("questions_page"))
             try:
                 resp.set_cookie('nn_user', username, max_age=COOKIE_MAX_AGE, samesite='Lax')
                 resp.set_cookie('nn_last_category', choice_selected, max_age=COOKIE_MAX_AGE, samesite='Lax')
@@ -1224,7 +886,6 @@ def questions_page():
         except Exception as e:
             app.logger.error("get_questions failed: %s", e)
             all_questions = []
-
         normalized_questions = []
         for row in all_questions:
             try:
@@ -1234,18 +895,13 @@ def questions_page():
                 normalized_questions.append(r)
             except Exception:
                 continue
-
-        # Exclude sentinel subscription rows from questions listing
         normalized_questions = [r for r in normalized_questions if not (len(r) >= 1 and str(r[0]) == "__subscription__")]
-
         derived_set = {str(q[0]).strip() for q in normalized_questions if q and len(q) > 0 and q[0]}
         categories_for_ui = STATIC_CATEGORIES + [c for c in sorted(derived_set) if c not in STATIC_CATEGORIES]
-
         if selected_category:
             questions = [q for q in normalized_questions if len(q) > 0 and str(q[0]).strip() == selected_category]
         else:
             questions = normalized_questions
-
         return render_template(
             "questions.html",
             questions=questions,
@@ -1255,7 +911,6 @@ def questions_page():
             community_links=COMMUNITY_LINKS,
             vapid_public_key=VAPID_PUBLIC_KEY
         )
-
     except Exception as e:
         app.logger.exception("Questions page error: %s\n%s", e, traceback.format_exc())
         flash("❌ Failed to load questions. Try again later.", "danger")
@@ -1263,39 +918,27 @@ def questions_page():
 
 @app.route("/save-subscription", methods=["POST"])
 def save_subscription_route():
-    """
-    Expects JSON: {subscription: {...}, subject: "Mathematics", client_id: "optional"}
-    Saves via sheets.save_subscription if available else fallback to append row.
-    On success sets a cookie 'nn_subscription' to the endpoint and returns updated subjects list.
-    """
     try:
         payload = request.get_json(force=True, silent=True) or {}
-        # Some clients POST the subscription directly without wrapper
         subscription = payload.get("subscription") if isinstance(payload, dict) and payload.get("subscription") else payload.get("push") if isinstance(payload, dict) and payload.get("push") else payload
-        # normalize if browser sent as string
         if isinstance(subscription, str):
             try:
                 subscription = json.loads(subscription)
             except Exception:
                 pass
-
         subject = _normalize_subject((payload.get("subject") if isinstance(payload, dict) else None) or request.args.get("subject") or "Other")
         client_id = payload.get("client_id") if isinstance(payload, dict) else None
-
         if not subscription or not _is_valid_subscription_obj(subscription):
             return jsonify({"ok": False, "error": "subscription required and must include endpoint"}), 400
-
+        try:
+            if isinstance(subscription, dict) and subscription.get("endpoint"):
+                subscription["endpoint"] = _normalize_endpoint(subscription.get("endpoint"))
+        except Exception:
+            pass
         ok = _save_subscription_to_sheet(subject, client_id, subscription)
         if ok:
             endpoint = subscription.get("endpoint") if isinstance(subscription, dict) else None
-            # return updated subjects list for this endpoint (so client can trust server state)
-            subjects = []
-            if endpoint:
-                try:
-                    subjects = _get_subjects_for_endpoint(endpoint)
-                except Exception:
-                    subjects = []
-            resp = jsonify({"ok": True, "subjects": subjects})
+            resp = jsonify({"ok": True})
             try:
                 if endpoint:
                     resp.set_cookie('nn_subscription', endpoint, max_age=COOKIE_MAX_AGE, samesite='Lax')
@@ -1310,49 +953,61 @@ def save_subscription_route():
 
 @app.route("/subscriptions/check", methods=["GET"])
 def subscriptions_check():
-    """
-    GET /subscriptions/check?endpoint=<endpoint>
-    Returns list of subjects that the server has saved for that subscription endpoint.
-    Response: { ok: True, subjects: ["Mathematics", ...] }
-
-    If endpoint is not provided as query param, this endpoint will attempt to read the
-    'nn_subscription' cookie and use that as fallback to query the server.
-    """
     try:
         endpoint = request.args.get("endpoint", "").strip()
         if not endpoint:
             endpoint = (request.cookies.get('nn_subscription') or "").strip()
         if not endpoint:
             return jsonify({"ok": False, "error": "endpoint required"}), 400
-        subjects = _get_subjects_for_endpoint(endpoint) or []
-        return jsonify({"ok": True, "subjects": subjects})
+        endpoint_norm = _normalize_endpoint(endpoint)
+        out_subjects = []
+        try:
+            raw = list_subscriptions() or []
+        except Exception:
+            raw = []
+        for r in raw:
+            try:
+                subj = None
+                sub = None
+                if isinstance(r, dict):
+                    subj = r.get("subject")
+                    sub = r.get("subscription")
+                elif isinstance(r, (list, tuple)) and len(r) >= 4 and r[0] == "__subscription__":
+                    subj = r[1]
+                    try:
+                        sub = json.loads(r[3])
+                    except Exception:
+                        sub = None
+                if not sub:
+                    continue
+                ep = _normalize_endpoint(sub.get("endpoint"))
+                if ep and endpoint_norm and (ep == endpoint_norm):
+                    if subj and subj not in out_subjects:
+                        out_subjects.append(subj)
+            except Exception:
+                continue
+        return jsonify({"ok": True, "subjects": out_subjects})
     except Exception as e:
         app.logger.exception("subscriptions_check failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/subscriptions/delete", methods=["POST"])
 def subscriptions_delete():
-    """
-    POST { endpoint: "..." } -> deletes subscription rows matching endpoint (either in dedicated sheet or fallback questions sheet)
-    On success clears the nn_subscription cookie so the browser no longer holds the endpoint.
-    """
     try:
         data = request.get_json(force=True, silent=True) or {}
         endpoint = (data.get("endpoint") or "").strip() if isinstance(data, dict) else ""
-        # fallback to cookie if endpoint not supplied
         if not endpoint:
             endpoint = (request.cookies.get('nn_subscription') or "").strip()
-
         if not endpoint:
             return jsonify({"ok": False, "error": "endpoint required"}), 400
+        endpoint_norm = _normalize_endpoint(endpoint)
         deleted = False
         try:
             try:
-                delete_subscriptions_by_endpoint(endpoint)
+                delete_subscriptions_by_endpoint(endpoint_norm)
                 deleted = True
             except Exception as e:
-                app.logger.debug("delete_subscriptions_by_endpoint failed (will try fallback): %s", e)
-            # fallback: scan questions sheet and remove matching rows
+                app.logger.debug("delete_subscriptions_by_endpoint failed (fallback): %s", e)
             try:
                 rows = get_questions() or []
                 indices = []
@@ -1363,8 +1018,10 @@ def subscriptions_delete():
                                 sub = json.loads(row[3])
                             except Exception:
                                 sub = None
-                            if sub and sub.get("endpoint") == endpoint:
-                                indices.append(i)
+                            if sub:
+                                sub_ep = _normalize_endpoint(sub.get("endpoint"))
+                                if sub_ep == endpoint_norm:
+                                    indices.append(i)
                     except Exception:
                         continue
                 if indices:
@@ -1374,7 +1031,6 @@ def subscriptions_delete():
                 app.logger.exception("Fallback deletion also failed")
         except Exception as e:
             app.logger.exception("subscriptions_delete inner failed: %s", e)
-
         resp = jsonify({"ok": True, "deleted": deleted})
         if deleted:
             try:
@@ -1386,22 +1042,16 @@ def subscriptions_delete():
         app.logger.exception("subscriptions_delete top-level failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
 
-# -------------------------
-# NEW: Pending + ack endpoints (client fetch)
-# -------------------------
 @app.route('/notifications/pending', methods=['GET'])
 def notifications_pending():
-    """
-    GET /notifications/pending?endpoint=<endpoint>
-    Returns JSON list of pending notifications saved server-side for that endpoint.
-    """
     try:
         endpoint = request.args.get('endpoint', '').strip() or request.cookies.get('nn_subscription', '').strip()
         if not endpoint:
             return jsonify({'ok': False, 'error': 'endpoint required'}), 400
+        endpoint_norm = _normalize_endpoint(endpoint)
         items = []
         try:
-            items = fetch_pending_notifications_for_endpoint(endpoint)
+            items = fetch_pending_notifications_for_endpoint(endpoint_norm)
         except Exception:
             app.logger.exception("fetch_pending_notifications_for_endpoint failed")
         return jsonify({'ok': True, 'items': items}), 200
@@ -1411,9 +1061,6 @@ def notifications_pending():
 
 @app.route('/notifications/ack', methods=['POST'])
 def notifications_ack():
-    """
-    POST { endpoint: '...', ids: [1,2,3] } -> marks notifications as delivered.
-    """
     try:
         payload = request.get_json(force=True, silent=True) or {}
         endpoint = (payload.get('endpoint') or '').strip() or request.cookies.get('nn_subscription', '').strip()
@@ -1422,8 +1069,9 @@ def notifications_ack():
             return jsonify({'ok': False, 'error': 'endpoint required'}), 400
         if not isinstance(ids, list):
             return jsonify({'ok': False, 'error': 'ids must be a list'}), 400
+        endpoint_norm = _normalize_endpoint(endpoint)
         try:
-            ack_notifications_by_ids(endpoint, ids)
+            ack_notifications_by_ids(endpoint_norm, ids)
         except Exception:
             app.logger.exception("ack_notifications_by_ids failed")
         return jsonify({'ok': True, 'count': len(ids)}), 200
@@ -1458,17 +1106,13 @@ def admin_page():
 @app.route("/admin/questions", methods=["GET", "POST"])
 def admin_questions():
     provided_key = (request.args.get("key") or request.form.get("admin_key") or request.form.get("key") or "").strip()
-    # For GET: show the form even without key
     if request.method == "GET" and not provided_key:
         return render_template("admin_questions.html", questions=[], subjects=[], key="", message=FOOTER_MESSAGE)
-    # if key provided, validate
     if provided_key != ADMIN_KEY:
         if request.method == "GET":
             flash("Unauthorized admin key. Please enter a valid admin key.", "warning")
             return render_template("admin_questions.html", questions=[], subjects=[], key="", message=FOOTER_MESSAGE)
         return "Unauthorized - include ?key=ADMIN_KEY or enter it into the Admin Key box on the page.", 401
-
-    # authorized: load questions
     raw = get_questions() or []
     questions = []
     for idx, row in enumerate(raw, start=1):
@@ -1479,7 +1123,6 @@ def admin_questions():
             questions.append({"index": idx, "subject": r[0], "user": r[1], "text": r[2], "attempt": r[3], "time": r[4]})
         except Exception:
             continue
-
     if request.method == "POST":
         action = request.form.get("action")
         if action == "delete_selected":
@@ -1504,17 +1147,14 @@ def admin_questions():
                     flash(f"✅ Deleted questions for subject {subject}.", "success")
                 except Exception:
                     flash("⚠️ delete_rows_by_subject failed on server.", "warning")
-        return redirect(url_for("admin_questions") + f"?key={provided_key}")
-
+        return redirect(flask_url_for("admin_questions") + f"?key={provided_key}")
     subjects = sorted({q["subject"] for q in questions if q["subject"]})
     return render_template("admin_questions.html", questions=questions, subjects=subjects, key=provided_key, message=FOOTER_MESSAGE)
 
 @app.route('/service-worker.js')
 def service_worker():
-    # serve static/service-worker.js at root so scope covers the whole site
     return send_from_directory(app.static_folder, 'service-worker.js')
 
-# --- Admin test push endpoint (protected by ADMIN_KEY) ---
 @app.route('/admin/test-push', methods=['POST'])
 def admin_test_push():
     key = (request.args.get('key') or request.form.get('key') or request.headers.get('X-ADMIN-KEY') or '').strip()
@@ -1528,27 +1168,215 @@ def admin_test_push():
     return jsonify({"ok": True, "result": result})
 
 # -------------------------
-# SQL visualizer helpers & route (kept from previous version)
+# Important: keep original endpoint "coding_page" so your templates are unchanged
 # -------------------------
-def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> sqlite3.Connection | list:
-    """
-    Build an in-memory sqlite DB from admin-provided schema_sql and sample_data.
-    Returns (conn, populated_table_names)
-    """
+@app.route("/coding")
+def coding_page():
+    drive_id = request.args.get("drive_id")
+    local_file = request.args.get("file")
+    try:
+        exercises = load_coding_exercises(drive_id=drive_id, local_path=local_file)
+        return render_template("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
+    except Exception as e:
+        app.logger.exception("coding_page render failed: %s", e)
+        flash("Failed to load coding page resources. Check server logs.", "warning")
+        return render_template("coding.html", exercises=[], message=FOOTER_MESSAGE)
+
+@app.route("/admin/exercises", methods=["GET", "POST"])
+def admin_exercises():
+    provided_key = (request.args.get("key") or request.form.get("admin_key") or request.form.get("key") or "").strip()
+    if request.method == "GET" and not provided_key:
+        return render_template("admin_exercises.html", key="", message=FOOTER_MESSAGE, drive_file_id=CODING_DRIVE_FILE_ID)
+    if provided_key != EXERCISES_ADMIN_KEY:
+        if request.method == "GET":
+            flash("Unauthorized admin key. Please enter a valid admin key.", "warning")
+            return render_template("admin_exercises.html", key="", message=FOOTER_MESSAGE, drive_file_id=CODING_DRIVE_FILE_ID)
+        return "Unauthorized - provide valid exercises admin key via ?key=... or the form field.", 401
+    if request.method == "POST":
+        ex = {
+            "id": (request.form.get("id") or "").strip(),
+            "title": (request.form.get("title") or "").strip(),
+            "language": (request.form.get("language") or "js").strip(),
+            "difficulty": (request.form.get("difficulty") or "").strip(),
+            "description": (request.form.get("description") or "").strip()
+        }
+        starter = request.form.get("starter_code") or ""
+        solution = request.form.get("solution_code") or ""
+        if ex["language"] == "js":
+            ex["starter_js"] = starter
+            ex["solution_js"] = solution
+        elif ex["language"] == "html":
+            ex["starter_html"] = starter
+            ex["solution_html"] = solution
+        elif ex["language"] == "c":
+            ex["starter_c"] = starter
+            ex["solution_c"] = solution
+        elif ex["language"] == "sql":
+            ex["schema_sql"] = starter
+            ex["example_query"] = solution
+            sample_json = request.form.get("sample_data") or ""
+            try:
+                ex["sample_data"] = json.loads(sample_json) if sample_json.strip() else {}
+            except Exception:
+                flash("Sample data JSON was invalid — saved without sample_data.", "warning")
+                ex["sample_data"] = {}
+        if not ex["id"]:
+            flash("Exercise id is required (unique short id)", "warning")
+            return redirect(flask_url_for("admin_exercises") + f"?key={provided_key}")
+        target = request.form.get("target") or "local"
+        drive_override = (request.form.get("drive_file_id") or "").strip() or None
+        drive_file_to_use = drive_override or CODING_DRIVE_FILE_ID
+        with _coding_lock:
+            local_list = []
+            p = Path(CODING_LOCAL_PATH)
+            if p.exists():
+                try:
+                    with p.open("r", encoding="utf-8") as fh:
+                        local_list = json.load(fh)
+                except Exception:
+                    app.logger.exception("Failed to read existing local coding_exercises.json")
+            ids = [e.get("id") for e in local_list if isinstance(e, dict)]
+            if ex["id"] in ids:
+                for i, e in enumerate(local_list):
+                    if e.get("id") == ex["id"]:
+                        local_list[i] = {**e, **ex}
+                        break
+                op = "updated"
+            else:
+                local_list.append(ex)
+                op = "created"
+            saved_local = False
+            saved_drive = False
+            try:
+                tmp = p.with_suffix(".tmp")
+                with tmp.open("w", encoding="utf-8") as fh:
+                    json.dump(local_list, fh, ensure_ascii=False, indent=2)
+                tmp.replace(p)
+                saved_local = True
+            except Exception:
+                app.logger.exception("Failed to write local coding_exercises.json")
+            if target == "drive" and drive_file_to_use and DRIVE_AVAILABLE:
+                try:
+                    raw = download_file(drive_file_to_use)
+                    if raw:
+                        try:
+                            drive_list = json.loads(raw.decode("utf-8"))
+                        except Exception:
+                            drive_list = local_list
+                    else:
+                        drive_list = local_list
+                    ids_drive = {e.get("id"): e for e in drive_list if isinstance(e, dict)}
+                    ids_drive[ex["id"]] = {**ids_drive.get(ex["id"], {}), **ex}
+                    merged = list(ids_drive.values())
+                    if update_file(drive_file_to_use, json.dumps(merged, ensure_ascii=False, indent=2).encode("utf-8")):
+                        saved_drive = True
+                except Exception:
+                    app.logger.exception("Drive update failed")
+            if target == "drive" and saved_drive:
+                flash(f"✅ Exercise {ex['id']} {op} and pushed to Drive.", "success")
+            elif saved_local:
+                flash(f"✅ Exercise {ex['id']} {op} and saved locally.", "success")
+            else:
+                flash("❌ Could not save exercise (check server logs & permissions).", "danger")
+        return redirect(flask_url_for("admin_exercises") + f"?key={provided_key}")
+    return render_template("admin_exercises.html", key=provided_key, message=FOOTER_MESSAGE, drive_file_id=CODING_DRIVE_FILE_ID)
+
+# Health pages
+def _load_health_data():
+    try:
+        path = Path("data/health_data.json")
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                return json.load(fh)
+    except Exception:
+        app.logger.debug("health_data.json load failed, using defaults")
+    return [
+        {"slug": "aloe-vera", "name": "Aloe vera", "virtues": ["skin-soothing"], "uses": "Topical", "notes": ""},
+        {"slug": "ginger", "name": "Ginger", "virtues": ["antiemetic"], "uses": "Tea", "notes": ""}
+    ]
+
+@app.route("/health")
+def health_index():
+    try:
+        items = _load_health_data()
+        return render_template("health.html", plants=items, message=FOOTER_MESSAGE)
+    except Exception as e:
+        app.logger.exception("health_index failed: %s", e)
+        flash("Failed to load health advice page.", "danger")
+        return redirect(flask_url_for("home_page"))
+
+@app.route("/health/<slug>")
+def health_detail(slug):
+    try:
+        items = _load_health_data()
+        for p in items:
+            if p.get("slug") == slug:
+                return render_template("health_detail.html", plant=p, message=FOOTER_MESSAGE)
+        flash("Item not found.", "warning")
+        return redirect(flask_url_for("health_index"))
+    except Exception as e:
+        app.logger.exception("health_detail failed: %s", e)
+        flash("Failed to load detail.", "danger")
+        return redirect(flask_url_for("health_index"))
+
+def _load_forms_data():
+    try:
+        path = Path("data/quiz_forms.json")
+        if path.exists():
+            with path.open("r", encoding="utf-8") as qf:
+                return json.load(qf)
+    except Exception:
+        app.logger.debug("quiz_forms.json load failed, using defaults")
+    return []
+
+@app.route("/quizzes")
+def quiz_forms():
+    try:
+        forms = _load_forms_data()
+        return render_template("quiz_forms.html", forms=forms, message=FOOTER_MESSAGE)
+    except Exception as e:
+        app.logger.exception("Forms index failed, %s", e)
+        flash("Failed to load Quiz Page.", "danger")
+        return redirect(flask_url_for("home_page"))
+
+# -------------------------
+# SQL visualizer helpers & route
+# -------------------------
+def _normalize_schema_sql(schema_sql: str) -> str:
+    if not schema_sql:
+        return schema_sql or ""
+    s = str(schema_sql)
+    # Move misplaced IF NOT EXISTS into canonical position
+    s = re.sub(r'(?i)\bCREATE\s+TABLE\s+([`"\[]?[\w\-:]+[`"\]]?)\s+IF\s+NOT\s+EXISTS\b', r'CREATE TABLE IF NOT EXISTS \1', s)
+    s = re.sub(r';\s*;', ';', s)
+    return s
+
+def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> (sqlite3.Connection, list):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    if schema_sql:
-        try:
-            cur.executescript(schema_sql)
-        except Exception as e:
-            raise RuntimeError(f"Schema execution error: {e}")
     populated = []
+    if schema_sql:
+        normalized = _normalize_schema_sql(schema_sql)
+        try:
+            cur.executescript(normalized)
+        except Exception as e:
+            app.logger.warning("Schema execution error (attempt salvage): %s", e)
+            try:
+                names = re.findall(r'(?i)\bCREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+[`"\[]?([\w\-:]+)[`"\]]?', normalized)
+                if names:
+                    for name in names:
+                        try:
+                            cur.execute(f'CREATE TABLE IF NOT EXISTS "{name}" (id TEXT);')
+                            if name not in populated: populated.append(name)
+                        except Exception:
+                            continue
+            except Exception:
+                app.logger.exception("Failed salvage parsing of schema_sql")
     if sample_data and isinstance(sample_data, dict):
         for table, rows in sample_data.items():
             if not isinstance(rows, list):
                 continue
-            # infer columns union
             cols = []
             for r in rows:
                 if isinstance(r, dict):
@@ -1556,7 +1384,6 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> sqlite3.Co
                         if k not in cols:
                             cols.append(k)
             if not cols:
-                # if table exists because of schema, still mark it
                 try:
                     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
                     if cur.fetchone():
@@ -1564,7 +1391,6 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> sqlite3.Co
                     continue
                 except Exception:
                     continue
-            # create table if not exists (all text)
             try:
                 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
                 if not cur.fetchone():
@@ -1589,13 +1415,23 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> sqlite3.Co
                     continue
             populated.append(table)
     conn.commit()
+    try:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+        tables = [r[0] for r in cur.fetchall()]
+        for t in tables:
+            if t not in populated:
+                populated.append(t)
+    except Exception:
+        pass
     return conn, populated
 
 @app.route("/exercise-table/<exercise_id>", methods=["GET", "POST"])
 def exercise_table_route(exercise_id):
     """
-    Build an in-memory DB from the exercise's schema_sql and sample_data,
-    then return HTML snippet with SELECT * outputs for each table.
+    POST logic:
+      - If JSON body contains { "sql": "<query>" }, attempt to execute that query against the exercise sample DB.
+        * Only allowed: SELECT / PRAGMA / EXPLAIN / WITH (case-insensitive).
+      - Otherwise returns server-rendered sample tables (SELECT * FROM each).
     """
     try:
         exercises = load_coding_exercises()
@@ -1608,11 +1444,58 @@ def exercise_table_route(exercise_id):
         schema_sql = ex.get("schema_sql") or ""
         sample_data = ex.get("sample_data") or {}
 
-        try:
-            conn, tables = _safe_create_and_populate_sqlite(schema_sql, sample_data)
-        except Exception as e:
-            return jsonify({"ok": False, "error": f"Failed preparing sample DB: {e}"}), 500
+        conn, tables = _safe_create_and_populate_sqlite(schema_sql, sample_data)
         cur = conn.cursor()
+
+        # Check if user provided SQL in the POST body to execute
+        try:
+            payload = {}
+            if request.method == "POST":
+                try:
+                    payload = request.get_json(force=True, silent=True) or {}
+                except Exception:
+                    payload = {}
+            sql_text = (payload.get("sql") or "").strip()
+        except Exception:
+            sql_text = ""
+
+        if sql_text:
+            # allow only read/inspection queries
+            allowed_prefixes = ("select", "pragma", "explain", "with")
+            first = sql_text.lstrip().split(None, 1)
+            first_word = first[0].lower() if first else ""
+            if not any(first_word.startswith(p) for p in allowed_prefixes):
+                conn.close()
+                return jsonify({"ok": False, "error": "Only SELECT/PRAGMA/EXPLAIN/WITH queries are allowed for execution."}), 400
+            try:
+                cur.execute(sql_text)
+                rows = cur.fetchall()
+                cols = [d[0] for d in cur.description] if cur.description else []
+                tbl_html = []
+                tbl_html.append('<div class="table-responsive"><table class="table table-sm table-striped"><thead><tr>')
+                for c in cols:
+                    tbl_html.append(f'<th>{c}</th>')
+                tbl_html.append('</tr></thead><tbody>')
+                if not rows:
+                    tbl_html.append('<tr><td colspan="%d"><em>No rows</em></td></tr>' % (len(cols) or 1))
+                else:
+                    for r in rows:
+                        tbl_html.append('<tr>')
+                        for c in cols:
+                            try:
+                                val = r[c]
+                            except Exception:
+                                val = None
+                            tbl_html.append('<td>%s</td>' % ("" if val is None else str(val)))
+                        tbl_html.append('</tr>')
+                tbl_html.append('</tbody></table></div>')
+                conn.close()
+                return jsonify({"ok": True, "html": "".join(tbl_html)})
+            except Exception as e:
+                conn.close()
+                return jsonify({"ok": False, "error": f"Query execution failed: {e}"}), 400
+
+        # No SQL provided -> render sample tables as before
         if not tables:
             try:
                 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
@@ -1657,80 +1540,12 @@ def exercise_table_route(exercise_id):
         app.logger.exception("exercise_table_route failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
 
-# -------------------------
-# Health pages
-# -------------------------
-def _load_health_data():
-    try:
-        path = Path("data/health_data.json")
-        if path.exists():
-            with path.open("r", encoding="utf-8") as fh:
-                return json.load(fh)
-    except Exception:
-        app.logger.debug("health_data.json load failed, using defaults")
-
-    return [
-        {"slug": "aloe-vera", "name": "Aloe vera", "virtues": ["skin-soothing"], "uses": "Topical", "notes": ""},
-        {"slug": "ginger", "name": "Ginger", "virtues": ["antiemetic"], "uses": "Tea", "notes": ""}
-    ]
-
-@app.route("/health")
-def health_index():
-    try:
-        items = _load_health_data()
-        return render_template("health.html", plants=items, message=FOOTER_MESSAGE)
-    except Exception as e:
-        app.logger.exception("health_index failed: %s", e)
-        flash("Failed to load health advice page.", "danger")
-        return redirect(url_for("home_page"))
-
-@app.route("/health/<slug>")
-def health_detail(slug):
-    try:
-        items = _load_health_data()
-        for p in items:
-            if p.get("slug") == slug:
-                return render_template("health_detail.html", plant=p, message=FOOTER_MESSAGE)
-        flash("Item not found.", "warning")
-        return redirect(url_for("health_index"))
-    except Exception as e:
-        app.logger.exception("health_detail failed: %s", e)
-        flash("Failed to load detail.", "danger")
-        return redirect(url_for("health_index"))
-
-def _load_forms_data():
-    try:
-        path = Path("data/quiz_forms.json")
-        if path.exists():
-            with path.open("r", encoding="utf-8") as qf:
-                return json.load(qf)
-    except Exception:
-        app.logger.debug("quiz_forms.json load failed, using defaults")
-    
-    return []
-
-@app.route("/quizzes")
-def quiz_forms():
-    try:
-        forms = _load_forms_data()
-        return render_template("quiz_forms.html", forms=forms, message=FOOTER_MESSAGE)
-    except Exception as e:
-        app.logger.exception("Forms index failed, %s", e)
-        flash("Failed to load Quiz Page.", "danger")
-        return redirect(url_for("home_page"))
-# -------------------------
-# Global error handler
-# -------------------------
 @app.errorhandler(Exception)
 def handle_exception(e):
     app.logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
     return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 500
 
-# -------------------------
-# App entry
-# -------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # debug controlled by environment FLASK_DEBUG if you want
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
     app.run(host="0.0.0.0", port=port, debug=debug_mode)

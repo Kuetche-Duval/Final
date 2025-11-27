@@ -60,7 +60,7 @@
                       </tr>
                     {% endfor %}
                   {% else %}
-                    <tr><td colspan="6" class="text-muted">No timetable entries for today.</td></tr>
+                    <tr><td colspan="4" class="text-muted">No timetable entries for today.</td></tr>
                   {% endif %}
                 </tbody>
               </table>
@@ -76,7 +76,6 @@
           <div class="card-header bg-success text-white fw-bold">💡 Daily Motivation</div>
           <div class="card-body text-center">
             <div class="aspect-16-9 mb-3">
-              {# Example: if you store a Drive id, pass it to drive_image. Else you can put a full URL. #}
               {% set hero_id = '1tTyhT4O_LoCaU8OL0DcCjuVm3o1z9gzY' %}
               <img class="hero-img" src="{{ url_for('drive_image', file_id=hero_id) }}" alt="Motivational artwork" loading="lazy" data-fit="cover" data-bs-toggle="modal" data-bs-target="#imageModal" data-imgsrc="{{ url_for('drive_image', file_id=hero_id) }}" />
             </div>
@@ -94,9 +93,20 @@
           {% if dr_values %}
             {% for item in dr_values %}
               {% set title = item[0] if item|length>0 else 'Image' %}
-              {% set meta = item[1] if item|length>1 else [] %}
-              {% set caption = (meta[0] if meta|length>0 else '') %}
-              {% set img_id = (meta[1] if meta|length>1 else meta if meta is string else '') %}
+              {% set meta = item[1] if item|length>1 else (item[1] if item|length>1 else (item[1] if item|length>1 else (item[1] if item|length>1 else ''))) %}
+              {# safe extraction: meta could be a list [caption, id] or a single string id #}
+              {% set img_id = '' %}
+              {% if meta %}
+                {% if meta is iterable and not meta is string %}
+                  {% if meta|length > 1 %}
+                    {% set img_id = meta[1] %}
+                  {% elif meta|length == 1 %}
+                    {% set img_id = meta[0] %}
+                  {% endif %}
+                {% else %}
+                  {% set img_id = meta %}
+                {% endif %}
+              {% endif %}
               <div class="col-6 col-md-4 col-lg-3">
                 <div class="card shadow-sm h-100">
                   <div class="aspect-1-1">
@@ -108,7 +118,7 @@
                   </div>
                   <div class="card-body">
                     <div class="fw-bold small text-truncate" title="{{ title }}">{{ title }}</div>
-                    <div class="text-muted small text-truncate" title="{{ caption }}">{{ caption }}</div>
+                    <div class="text-muted small text-truncate" title="{{ (meta[0] if meta is iterable and meta|length>0 else '') }}">{{ (meta[0] if meta is iterable and meta|length>0 else '') }}</div>
                   </div>
                 </div>
               </div>
@@ -164,13 +174,13 @@
         <div class="card shadow">
           <div class="card-header bg-secondary text-white fw-bold">📝 Google Forms (Quizzes)</div>
           <div class="card-body">
-            {% if form_list[:3] %}
+            {% if form_list %}
               <ul class="list-group">
-                {% for fl in form_list %}
-                  {% set fname = f.get('name') or f.get('title') or 'Untitled Form' %}
-                  {% set fid = f.get('id') or (f.get('fileId') if f.get('fileId') else '') %}
-                  {% set link = f.get('webViewLink') or ('https://docs.google.com/forms/d/' ~ fid ~ '/viewform') %}
-                  <li class="list-group-item">
+                {% for f in form_list %}
+                  {% set fname = (f.get('name') if f is mapping else (f.get('title') if f is mapping else 'Untitled Form')) %}
+                  {% set fid = (f.get('id') if f is mapping else (f.get('fileId') if f is mapping and f.get('fileId') else '')) %}
+                  {% set link = (f.get('webViewLink') if f is mapping and f.get('webViewLink') else ( 'https://docs.google.com/forms/d/' ~ (fid or '') ~ '/viewform' )) %}
+                  <li class="list-group-item d-flex justify-content-between align-items-center">
                     <div>
                       <div class="fw-bold">{{ fname }}</div>
                       {% if f.get('description') %}<div class="small text-muted">{{ f.get('description') }}</div>{% endif %}
@@ -189,7 +199,7 @@
   </section>
 </div>
 
-{# Simple Bootstrap modal for viewing images full-size (works without extra libs) #}
+<!-- Image modal -->
 <div class="modal fade" id="imageModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered modal-xl">
     <div class="modal-content bg-transparent border-0">
@@ -202,21 +212,18 @@
     </div>
   </div>
 </div>
-
 {% endblock %}
 
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-  // lightbox: set modal image src from data-imgsrc attributes
   const imageModal = document.getElementById('imageModal');
   const modalImg = document.getElementById('modalImage');
-  const bsModal = imageModal ? new bootstrap.Modal(imageModal) : null;
+  const bsModal = (typeof bootstrap !== 'undefined' && imageModal) ? new bootstrap.Modal(imageModal) : null;
 
   document.body.addEventListener('click', function (ev) {
     const target = ev.target;
     if (!target) return;
-    // use dataset.imgsrc to populate modal (applies to hero-img and thumb)
     if (target.dataset && target.dataset.imgsrc) {
       const src = target.dataset.imgsrc;
       modalImg.src = src;
@@ -224,7 +231,6 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
 
-  // graceful fallback if modal closed: clear src to release memory
   if (imageModal) {
     imageModal.addEventListener('hidden.bs.modal', function () { modalImg.src = ''; });
   }

@@ -1,5 +1,11 @@
-// service-worker.js (improved)
-'use strict';
+/* static/service-worker.js */
+self.addEventListener('install', (ev) => {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (ev) => {
+  self.clients.claim();
+});
 
 self.addEventListener('push', function(event) {
   let payload = {};
@@ -7,52 +13,47 @@ self.addEventListener('push', function(event) {
     payload = event.data ? event.data.json() : {};
   } catch (e) {
     try {
-      payload = { title: "Newton's Nerds", body: event.data ? event.data.text() : 'You have a new notification' };
-    } catch (e2) {
-      payload = { title: "Newton's Nerds", body: 'You have a new notification' };
+      payload = { title: 'Notification', body: event.data ? event.data.text() : 'New message' };
+    } catch (err) {
+      payload = { title: 'Notification', body: 'New message' };
     }
   }
 
-  const title = payload.title || "Newton's Nerds";
+  const title = payload.title || 'Notification';
   const options = {
     body: payload.body || '',
-    data: payload.data || { url: payload.url || '/' },
-    tag: payload.tag || 'nn-notification',
-    renotify: payload.renotify === true,
-    timestamp: Date.now()
+    tag: payload.tag || undefined,
+    data: payload,
+    renotify: !!payload.renotify,
+    requireInteraction: false
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    self.registration.showNotification(title, options).then(() => {
+      return self.clients.matchAll({ includeUncontrolled: true, type: 'window' }).then(clients => {
+        for (const c of clients) {
+          try { c.postMessage({ type: 'PUSH_RECEIVED', payload }); } catch(e) {}
+        }
+      });
+    })
+  );
 });
 
-// When notification clicked, try to focus an existing client or open root
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
-  const urlToOpen = (event.notification.data && event.notification.data.url) ? event.notification.data.url : '/';
-  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
-    for (var i = 0; i < clientList.length; i++) {
-      var client = clientList[i];
-      if (client.url && 'focus' in client) {
-        // focus if same origin and path is same root
-        client.focus();
-        client.postMessage({ type: 'NOTIFICATION_CLICKED', payload: event.notification.data || {} });
-        return client.focus();
+  let url = '/questions';
+  if (event.notification.data && event.notification.data.url) url = event.notification.data.url;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window' }).then(function(clientList) {
+      for (let i = 0; i < clientList.length; i++) {
+        const client = clientList[i];
+        if ('focus' in client) {
+          client.focus();
+          try { client.postMessage({ type: 'NOTIFICATION_CLICKED', payload: event.notification.data || {} }); } catch(e){}
+          return client.navigate(url);
+        }
       }
-    }
-    if (clients.openWindow) {
-      return clients.openWindow(urlToOpen);
-    }
-  }));
-});
-
-// If subscription changes, notify pages so they may re-subscribe or save new endpoint
-self.addEventListener('pushsubscriptionchange', function(event) {
-  console.warn('[sw] pushsubscriptionchange event', event);
-  event.waitUntil((async () => {
-    // Notify clients to handle resubscribe (page will fetch /vapid_public_key to resubscribe)
-    const allClients = await clients.matchAll({ includeUncontrolled: true });
-    for (const client of allClients) {
-      client.postMessage({ type: 'SUBSCRIPTION_LOST' });
-    }
-  })());
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
+  );
 });

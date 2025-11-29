@@ -702,11 +702,16 @@ def _load_subscriptions_for_subject(subject):
         app.logger.exception("Failed loading subscriptions fallback")
     return subs
 
+# paste/replace send_push_to_subject in app.py with this improved version
 def send_push_to_subject(subject, question_text, attempt_text):
+    """
+    Send push notifications to all subscriptions for subject.
+    Returns dict with summary and per-endpoint details.
+    """
     subs = _load_subscriptions_for_subject(subject)
     if not subs:
         app.logger.debug("No subscribers for subject %s", subject)
-        return {"sent": 0, "errors": ["no subscribers"]}
+        return {"sent": 0, "errors": ["no subscribers"], "detail": []}
 
     title = f"New question in {subject}"
     q_preview = (question_text or "").strip()
@@ -725,87 +730,100 @@ def send_push_to_subject(subject, question_text, attempt_text):
         "preview": {"question": q_preview, "attempt": a_preview}
     }
 
-    persisted_endpoints = []
-    for sub in subs:
-        try:
-            sub_obj = sub
-            if isinstance(sub, str):
-                try:
-                    sub_obj = json.loads(sub)
-                except Exception:
-                    sub_obj = None
-            if not sub_obj or not isinstance(sub_obj, dict):
-                continue
-            ep = sub_obj.get("endpoint")
-            if not ep:
-                continue
-            try:
-                save_notification_for_endpoint(ep, subject, payload["title"], payload["body"], payload.get("preview"))
-                persisted_endpoints.append(ep)
-            except Exception:
-                app.logger.debug("Failed to persist notification for endpoint %s", ep)
-        except Exception:
-            continue
-
-    if not PYWEBPUSH_AVAILABLE or not VAPID_PRIVATE_KEY:
-        app.logger.warning("pywebpush or VAPID private key not available — cannot send web push. Persisted notifications for endpoints: %d", len(persisted_endpoints))
-        return {"sent": 0, "errors": ["pywebpush/VAPID not available"]}
-
+    results = []
     sent = 0
     errors = []
+
+    # If we cannot send webpush, just persist and return
+    if not PYWEBPUSH_AVAILABLE or not VAPID_PRIVATE_KEY:
+        app.logger.warning("pywebpush or VAPID private key not available — persisting notifications only")
+        for sub in subs:
+            try:
+                endpoint = sub.get("endpoint") if isinstance(sub, dict) else None
+                save_notification_for_endpoint(endpoint, subject, payload["title"], payload["body"], payload.get("preview"))
+                results.append({"endpoint": endpoint, "ok": False, "error": "pywebpush/not-configured"})
+            except Exception:
+                results.append({"endpoint": None, "ok": False, "error": "persist-failed"})
+        return {"sent": 0, "errors": ["pywebpush/VAPID not available"], "detail": results}
+
+    # send with basic retry for transient network errors
     for sub in subs:
+        endpoint = None
         try:
             if isinstance(sub, str):
-                try:
-                    sub = json.loads(sub)
-                except Exception:
-                    errors.append("invalid subscription format")
-                    continue
+                sub = json.loads(sub)
             if not _is_valid_subscription_obj(sub):
-                errors.append("invalid subscription object")
+                results.append({"endpoint": None, "ok": False, "error": "invalid-subscription-object"})
                 continue
             endpoint = sub.get("endpoint")
+            # persist first so client can fetch if push fails
             try:
-                webpush(
-                    subscription_info=sub,
-                    data=json.dumps(payload),
-                    vapid_private_key=VAPID_PRIVATE_KEY,
-                    vapid_claims={"sub": VAPID_SUBJECT}
-                )
-                sent += 1
+                save_notification_for_endpoint(endpoint, subject, payload["title"], payload["body"], payload.get("preview"))
+            except Exception:
+                app.logger.debug("Failed to persist notification for %s", endpoint)
+
+            # attempt send, with one retry for network errors
+            attempt = 0
+            last_exc = None
+            while attempt < 2:
+                attempt += 1
                 try:
-                    mark_notifications_delivered_for_endpoint(endpoint)
-                except Exception:
-                    app.logger.debug("Failed to mark persisted notifications delivered for %s", endpoint)
-            except WebPushException as ex:
-                app.logger.warning("WebPushException for subject %s: %s", subject, ex)
-                errors.append(str(ex))
-                try:
+                    webpush(
+                        subscription_info=sub,
+                        data=json.dumps(payload),
+                        vapid_private_key=VAPID_PRIVATE_KEY,
+                        vapid_claims={"sub": VAPID_SUBJECT}
+                    )
+                    sent += 1
+                    results.append({"endpoint": endpoint, "ok": True})
+                    # mark persisted rows delivered for endpoint (best-effort)
+                    try:
+                        mark_notifications_delivered_for_endpoint(endpoint)
+                    except Exception:
+                        pass
+                    last_exc = None
+                    break
+                except WebPushException as ex:
+                    last_exc = ex
                     resp = getattr(ex, 'response', None)
-                    status = None
-                    if resp and hasattr(resp, 'status_code'):
-                        status = resp.status_code
-                    if status in (404, 410) and endpoint:
+                    status = getattr(resp, 'status_code', None) if resp else None
+                    body = None
+                    try:
+                        if resp and hasattr(resp, 'content'):
+                            body = resp.content.decode('utf-8', errors='ignore')
+                    except Exception:
+                        body = None
+                    err_info = {"endpoint": endpoint, "ok": False, "status": status, "error": str(ex), "body": body}
+                    app.logger.warning("WebPushException: %s", err_info)
+                    # If the subscription is gone or invalid (404/410), delete it
+                    if status in (404, 410):
                         try:
                             delete_subscriptions_by_endpoint(endpoint)
+                            app.logger.info("Deleted stale subscription endpoint %s due to %s", endpoint, status)
                         except Exception:
-                            try:
-                                conn = sqlite3.connect(str(DB_PATH))
-                                c = conn.cursor()
-                                c.execute("DELETE FROM subscriptions WHERE endpoint=?", (endpoint,))
-                                conn.commit()
-                                conn.close()
-                            except Exception:
-                                app.logger.exception("Failed to delete stale endpoint from fallback DB")
-                except Exception:
-                    app.logger.exception("Exception while handling WebPushException cleanup")
-            except Exception as ex:
-                app.logger.exception("webpush failed: %s", ex)
-                errors.append(str(ex))
+                            app.logger.exception("Failed deleting stale subscription %s", endpoint)
+                        results.append({**err_info, "deleted": True})
+                        last_exc = None
+                        break
+                    else:
+                        # transient: allow one retry after a short pause
+                        if attempt < 2:
+                            import time; time.sleep(0.2)
+                            continue
+                        results.append(err_info)
+                        break
+                except Exception as ex:
+                    app.logger.exception("Unexpected webpush error for endpoint %s: %s", endpoint, ex)
+                    last_exc = ex
+                    results.append({"endpoint": endpoint, "ok": False, "error": str(ex)})
+                    break
+            # end retry loop
+
         except Exception:
-            app.logger.exception("Error while processing subscription record")
-            errors.append("processing error")
-    return {"sent": sent, "errors": errors}
+            app.logger.exception("Error processing subscription for endpoint %s", endpoint)
+            results.append({"endpoint": endpoint, "ok": False, "error": "processing error"})
+
+    return {"sent": sent, "errors": [r for r in results if not r.get("ok")], "detail": results}
 
 # -------------------------
 # Routes

@@ -1,59 +1,63 @@
-/* static/service-worker.js */
+/* service-worker.js - robust push + fallback logic */
 self.addEventListener('install', (ev) => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (ev) => {
-  self.clients.claim();
+  // take control asap
+  ev.waitUntil(self.clients.claim());
 });
 
-self.addEventListener('push', function(event) {
-  let payload = {};
+// basic fetch handler (cache strategies can be added)
+self.addEventListener('fetch', (ev) => {
+  // default: let network handle it
+});
+
+// Listen for push events — showNotification with payload if present.
+self.addEventListener('push', async (ev) => {
   try {
-    payload = event.data ? event.data.json() : {};
-  } catch (e) {
-    try {
-      payload = { title: 'Notification', body: event.data ? event.data.text() : 'New message' };
-    } catch (err) {
-      payload = { title: 'Notification', body: 'New message' };
+    let data = {};
+    if (ev.data) {
+      try { data = ev.data.json(); } catch (e) { data = { body: ev.data.text() }; }
     }
+    const title = data.title || 'Newton\'s Nerds';
+    const body = data.body || (data.preview && (data.preview.question || data.preview.attempt)) || 'New activity';
+    const tag = data.tag || undefined;
+    const url = (data.url && (typeof data.url === 'string')) ? data.url : '/questions';
+
+    const options = {
+      body: body,
+      tag: tag,
+      renotify: data.renotify === true,
+      data: { url: url, payload: data },
+      // add icon/badge if you have them in /static/img/
+      icon: '/static/img/icon-192.png',
+      badge: '/static/img/icon-192.png'
+    };
+
+    ev.waitUntil(self.registration.showNotification(title, options));
+  } catch (err) {
+    console.error('SW push handler error', err);
   }
-
-  const title = payload.title || 'Notification';
-  const options = {
-    body: payload.body || '',
-    tag: payload.tag || undefined,
-    data: payload,
-    renotify: !!payload.renotify,
-    requireInteraction: false
-  };
-
-  event.waitUntil(
-    self.registration.showNotification(title, options).then(() => {
-      return self.clients.matchAll({ includeUncontrolled: true, type: 'window' }).then(clients => {
-        for (const c of clients) {
-          try { c.postMessage({ type: 'PUSH_RECEIVED', payload }); } catch(e) {}
-        }
-      });
-    })
-  );
 });
 
-self.addEventListener('notificationclick', function(event) {
-  event.notification.close();
-  let url = '/questions';
-  if (event.notification.data && event.notification.data.url) url = event.notification.data.url;
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window' }).then(function(clientList) {
-      for (let i = 0; i < clientList.length; i++) {
-        const client = clientList[i];
-        if ('focus' in client) {
-          client.focus();
-          try { client.postMessage({ type: 'NOTIFICATION_CLICKED', payload: event.notification.data || {} }); } catch(e){}
-          return client.navigate(url);
-        }
-      }
-      if (self.clients.openWindow) return self.clients.openWindow(url);
-    })
-  );
+// notification click
+self.addEventListener('notificationclick', (ev) => {
+  ev.notification.close();
+  const dest = (ev.notification.data && ev.notification.data.url) || '/';
+  ev.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(ws => {
+    const first = ws.find(w => (new URL(w.url)).pathname === (new URL(dest, location).pathname));
+    if (first) return first.focus();
+    return clients.openWindow(dest);
+  }));
+});
+
+// handle subscription change (best-effort)
+self.addEventListener('pushsubscriptionchange', (ev) => {
+  // Best effort: notify client pages to re-subscribe
+  ev.waitUntil(clients.matchAll({ includeUncontrolled: true }).then(clients => {
+    clients.forEach(c => {
+      try { c.postMessage({ type: 'SUBSCRIPTION_LOST' }); } catch(e) {}
+    });
+  }));
 });

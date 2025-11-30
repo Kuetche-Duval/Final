@@ -254,6 +254,41 @@ except Exception as e:
             app.logger.exception("list_subscriptions failed: %s", e)
             return []
 # -------------------------
+# -------------------------
+# PART 2 + PART 3 (REGENERATED)
+# Subscriptions / notifications persistence helpers (sqlite fallback),
+# plus coding loader, drive-image route, and improved push helpers.
+# Paste this to replace the corresponding sections of app.py
+# -------------------------
+
+# safe imports / fallbacks used in this block
+import os
+import sqlite3
+import json
+import re
+import time
+import io
+from pathlib import Path
+from urllib.parse import urlparse
+
+# Ensure normalize_endpoint exists (define fallback if missing)
+if "normalize_endpoint" not in globals():
+    def normalize_endpoint(endpoint: str) -> str:
+        if not endpoint:
+            return ""
+        try:
+            p = urlparse(endpoint)
+            base = f"{p.scheme}://{p.netloc}{p.path}"
+            return base.rstrip('/')
+        except Exception:
+            return endpoint
+
+# Ensure DB_PATH exists (fallback to ./app.db)
+if "DB_PATH" not in globals():
+    # prefer environment override if present
+    DB_PATH = Path(os.environ.get("DB_PATH", "app.db"))
+
+# -------------------------
 # Subscriptions / notifications persistence helpers (sqlite fallback)
 # -------------------------
 def delete_subscriptions_by_endpoint(endpoint):
@@ -267,21 +302,25 @@ def delete_subscriptions_by_endpoint(endpoint):
         norm = normalize_endpoint(endpoint) or ""
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
-            # Prefer an exact match, then normalized column if exists, otherwise try a loose normalized match
             try:
-                # if endpoint_normalized column exists, use it
+                # Preferred: match exact endpoint or endpoint_normalized if present
                 c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint_normalized=?", (endpoint, norm))
             except sqlite3.OperationalError:
-                # fallback: try deleting rows where endpoint exactly equals or where normalized forms match via simple replace
+                # Fallbacks if schema doesn't include endpoint_normalized
                 try:
                     c.execute("DELETE FROM subscriptions WHERE endpoint=? OR replace(endpoint,'/','')=?", (endpoint, norm.replace("/", "")))
                 except Exception:
-                    # last-resort: delete exact endpoint match only
                     c.execute("DELETE FROM subscriptions WHERE endpoint=?", (endpoint,))
             conn.commit()
-        app.logger.info("delete_subscriptions_by_endpoint: removed possible rows for endpoint=%s normalized=%s", endpoint, norm)
+        try:
+            app.logger.info("delete_subscriptions_by_endpoint removed rows for endpoint=%s normalized=%s", endpoint, norm)
+        except Exception:
+            pass
     except Exception:
-        app.logger.exception("delete_subscriptions_by_endpoint failed for %s", endpoint)
+        try:
+            app.logger.exception("delete_subscriptions_by_endpoint failed for %s", endpoint)
+        except Exception:
+            pass
 
 
 def get_subjects_for_endpoint(endpoint):
@@ -295,7 +334,10 @@ def get_subjects_for_endpoint(endpoint):
             rows = c.fetchall()
         return [r[0] for r in rows]
     except Exception:
-        app.logger.exception("get_subjects_for_endpoint failed for %s", endpoint)
+        try:
+            app.logger.exception("get_subjects_for_endpoint failed for %s", endpoint)
+        except Exception:
+            pass
         return []
 
 
@@ -313,7 +355,10 @@ def save_notification_for_endpoint(endpoint, subject, title, body, data_obj):
             conn.commit()
         return nid
     except Exception:
-        app.logger.exception("save_notification_for_endpoint failed for %s", endpoint)
+        try:
+            app.logger.exception("save_notification_for_endpoint failed for %s", endpoint)
+        except Exception:
+            pass
         return None
 
 
@@ -336,7 +381,10 @@ def fetch_pending_notifications_for_endpoint(endpoint):
             out.append({"id": nid, "subject": subj, "title": title, "body": body, "data": data_obj, "created_at": created_at})
         return out
     except Exception:
-        app.logger.exception("fetch_pending_notifications_for_endpoint failed for %s", endpoint)
+        try:
+            app.logger.exception("fetch_pending_notifications_for_endpoint failed for %s", endpoint)
+        except Exception:
+            pass
         return []
 
 
@@ -362,7 +410,10 @@ def ack_notifications_by_ids(endpoint, ids):
             conn.commit()
         return changed
     except Exception:
-        app.logger.exception("ack_notifications_by_ids failed for %s ids=%s", endpoint, ids)
+        try:
+            app.logger.exception("ack_notifications_by_ids failed for %s ids=%s", endpoint, ids)
+        except Exception:
+            pass
         return 0
 
 
@@ -384,9 +435,15 @@ def mark_notifications_delivered_for_endpoint(endpoint):
                 # fallback to endpoint only
                 c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint))
             conn.commit()
-        app.logger.debug("mark_notifications_delivered_for_endpoint marked pending notifications for %s", endpoint)
+        try:
+            app.logger.debug("mark_notifications_delivered_for_endpoint marked pending notifications for %s", endpoint)
+        except Exception:
+            pass
     except Exception:
-        app.logger.exception("mark_notifications_delivered_for_endpoint failed for %s", endpoint)
+        try:
+            app.logger.exception("mark_notifications_delivered_for_endpoint failed for %s", endpoint)
+        except Exception:
+            pass
 
 
 # --- END FALLBACK block (sqlite helpers) ---
@@ -396,7 +453,10 @@ try:
     from drive import from_google_drive, folders_and_images, download_file, update_file, create_file_in_folder
     DRIVE_AVAILABLE = True
 except Exception:
-    app.logger.warning("drive.py import failed — using fallbacks")
+    try:
+        app.logger.warning("drive.py import failed — using fallbacks")
+    except Exception:
+        pass
     DRIVE_AVAILABLE = False
     def from_google_drive(*a, **k): return []
     def folders_and_images(*a, **k): return []
@@ -556,7 +616,10 @@ def get_timetable_today():
 
         return matches
     except Exception:
-        app.logger.exception("get_timetable_today failed")
+        try:
+            app.logger.exception("get_timetable_today failed")
+        except Exception:
+            pass
         return []
 
 # -------------------------
@@ -602,7 +665,6 @@ def load_coding_exercises(drive_id: str = None, local_path: str = None):
             "solution_js": "for (let i=1;i<=100;i++){let out=''; if(i%3===0) out+='Fizz'; if(i%5===0) out+='Buzz'; console.log(out||i);}"
         }
     ]
-
 
 # -------------------------
 # Drive image route (robust)
@@ -848,6 +910,12 @@ def send_push_to_subject(subject, question_text, attempt_text):
                 results.append({"endpoint": None, "ok": False, "error": "no-endpoint"})
                 continue
 
+            # compute normalized once
+            try:
+                norm = normalize_endpoint(endpoint)
+            except Exception:
+                norm = endpoint
+
             # persist first so client can fetch if push fails
             try:
                 save_notification_for_endpoint(endpoint, subject, payload_template["title"], payload_template["body"], payload_template.get("preview"))
@@ -903,7 +971,7 @@ def send_push_to_subject(subject, question_text, attempt_text):
                     if status in (404, 410) or (body_text and "unsubscribed" in body_text.lower()) or ("unsubscribed" in err_text.lower()):
                         try:
                             delete_subscriptions_by_endpoint(endpoint)
-                            app.logger.info("Deleted stale subscription endpoint %s", normalize_endpoint(endpoint))
+                            app.logger.info("Deleted stale subscription endpoint %s (normalized=%s)", endpoint, norm)
                         except Exception:
                             app.logger.exception("Failed deleting stale subscription %s", endpoint)
                         results.append({"endpoint": endpoint, "ok": False, "status": status, "error": err_text, "body": body_text, "deleted": True})
@@ -972,6 +1040,7 @@ def content_page():
     except Exception as e:
         app.logger.exception("Content page error: %s", e)
         return render_template("content.html", message=FOOTER_MESSAGE, sheet_content=[], sheet_title=[], today_date="", form_list=[], dr_values=[], timetable_today=[], error=str(e))
+
 # PART 4 of 5
 # app.py — part 4/5 (continues)
 

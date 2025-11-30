@@ -152,40 +152,100 @@ except Exception as e:
     NN_LOCAL_DB = os.environ.get("NN_LOCAL_DB", "nn_local.db")
     DB_PATH = Path(NN_LOCAL_DB)
 
-    def _init_local_db():
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS subscriptions (
-                    endpoint TEXT PRIMARY KEY,
-                    subject TEXT,
-                    client_id TEXT,
-                    p256dh TEXT,
-                    auth TEXT,
-                    raw_json TEXT,
-                    created_at TEXT
-                )
-            """)
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS notifications (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    endpoint TEXT,
-                    subject TEXT,
-                    title TEXT,
-                    body TEXT,
-                    data TEXT,
-                    created_at TEXT,
-                    delivered INTEGER DEFAULT 0,
-                    delivered_at TEXT
-                )
-            """)
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            app.logger.exception("Failed initializing local subscription DB: %s", e)
+# --- Robust local sqlite initialization for fallback storage ---
+def _init_local_db():
+    """
+    Create the local sqlite DB file and the required tables if they don't exist.
+    This is safe to call repeatedly.
+    """
+    try:
+        # ensure parent dir exists
+        dbp = Path(DB_PATH)
+        if not dbp.parent.exists():
+            try:
+                dbp.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
 
+        conn = sqlite3.connect(str(DB_PATH))
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                endpoint TEXT PRIMARY KEY,
+                subject TEXT,
+                client_id TEXT,
+                p256dh TEXT,
+                auth TEXT,
+                raw_json TEXT,
+                created_at TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT,
+                subject TEXT,
+                title TEXT,
+                body TEXT,
+                data TEXT,
+                created_at TEXT,
+                delivered INTEGER DEFAULT 0,
+                delivered_at TEXT
+            )
+        """)
+        # helpful index for lookups/cleanup
+        try:
+            c.execute("CREATE INDEX IF NOT EXISTS idx_notifications_endpoint_delivered ON notifications(endpoint, delivered)")
+        except Exception:
+            pass
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        app.logger.exception("Failed initializing local subscription DB: %s", e)
+
+# Ensure DB/tables exist at import time
+try:
     _init_local_db()
+except Exception:
+    app.logger.exception("_init_local_db initial call failed")
+
+def _ensure_local_db_tables():
+    """Idempotent check that creates tables if they are missing. Call this before any DB operation."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                endpoint TEXT PRIMARY KEY,
+                subject TEXT,
+                client_id TEXT,
+                p256dh TEXT,
+                auth TEXT,
+                raw_json TEXT,
+                created_at TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT,
+                subject TEXT,
+                title TEXT,
+                body TEXT,
+                data TEXT,
+                created_at TEXT,
+                delivered INTEGER DEFAULT 0,
+                delivered_at TEXT
+            )
+        """)
+        try:
+            c.execute("CREATE INDEX IF NOT EXISTS idx_notifications_endpoint_delivered ON notifications(endpoint, delivered)")
+        except Exception:
+            pass
+        conn.commit()
+        conn.close()
+    except Exception:
+        app.logger.exception("_ensure_local_db_tables failed to ensure sqlite tables")
 
     def normalize_endpoint(endpoint):
         """Normalize endpoint string for matching / deduplication."""
@@ -203,40 +263,38 @@ except Exception as e:
             # fallback: remove trailing slashes and whitespace
             return endpoint.strip().rstrip("/")
     def save_subscription(subject, client_id, subscription):
+        """Save subscription to sqlite (REPLACE by endpoint)."""
         try:
+            _ensure_local_db_tables()
             if isinstance(subscription, str):
-                try:
-                    subscription = json.loads(subscription)
-                except Exception:
-                    app.logger.debug("save_subscription: received non-json string")
-                    return False
+                subscription = json.loads(subscription)
             if not isinstance(subscription, dict):
-                app.logger.debug("save_subscription: invalid subscription type")
                 return False
-            endpoint = subscription.get('endpoint')
+            endpoint = subscription.get("endpoint")
             if not endpoint:
-                app.logger.debug("save_subscription: subscription has no endpoint")
                 return False
-            keys = subscription.get('keys') or {}
-            p256dh = keys.get('p256dh') or ''
-            auth = keys.get('auth') or ''
-            subject_norm = (subject or 'Other').strip()
+            keys = subscription.get("keys") or {}
+            p256dh = keys.get("p256dh") or ""
+            auth = keys.get("auth") or ""
+            subject_norm = (subject or "Other").strip()
             now = datetime.utcnow().replace(microsecond=0).isoformat()
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            raw = json.dumps(subscription)
-            c.execute("""REPLACE INTO subscriptions(endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
-                         VALUES(?,?,?,?,?,?,?)""", (endpoint, subject_norm, client_id or '', p256dh, auth, raw, now))
-            conn.commit()
-            conn.close()
+            with sqlite3.connect(str(DB_PATH)) as conn:
+                c = conn.cursor()
+                raw = json.dumps(subscription)
+                c.execute("""REPLACE INTO subscriptions(endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
+                            VALUES(?,?,?,?,?,?,?)""", (endpoint, subject_norm, client_id or '', p256dh, auth, raw, now))
+                conn.commit()
             return True
-        except Exception as e:
-            app.logger.exception("save_subscription failed: %s", e)
+        except Exception:
+            app.logger.exception("save_subscription failed")
             return False
 
-    def list_subscriptions(subject=None):
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
+def list_subscriptions(subject=None):
+    """Return list of subscription rows as simplified rows similar to earlier get_questions fallback."""
+    try:
+        _ensure_local_db_tables()
+        out = []
+        with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
             if subject:
                 subj = subject.strip().lower()
@@ -244,15 +302,13 @@ except Exception as e:
             else:
                 c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions")
             rows = c.fetchall()
-            conn.close()
-            out = []
-            for r in rows:
-                subj, client_id, raw_json, created_at = r
-                out.append(["__subscription__", subj, client_id or "", raw_json or "{}", created_at or ""])
-            return out
-        except Exception as e:
-            app.logger.exception("list_subscriptions failed: %s", e)
-            return []
+        for r in rows:
+            subj, client_id, raw_json, created_at = r
+            out.append(["__subscription__", subj, client_id or "", raw_json or "{}", created_at or ""])
+        return out
+    except Exception:
+        app.logger.exception("list_subscriptions failed")
+        return []
 # -------------------------
 # -------------------------
 # PART 2 + PART 3 (REGENERATED)

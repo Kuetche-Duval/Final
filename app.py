@@ -187,6 +187,21 @@ except Exception as e:
 
     _init_local_db()
 
+    def normalize_endpoint(endpoint):
+        """Normalize endpoint string for matching / deduplication."""
+        if not endpoint:
+            return ""
+        try:
+            u = urlparse(endpoint)
+            # strip query params and fragments — keep path + host
+            scheme = u.scheme or "https"
+            netloc = u.netloc or u.path.split("/")[0]
+            path = u.path or ""
+            normalized = f"{scheme}://{netloc}{path}".rstrip("/")
+            return normalized
+        except Exception:
+            # fallback: remove trailing slashes and whitespace
+            return endpoint.strip().rstrip("/")
     def save_subscription(subject, client_id, subscription):
         try:
             if isinstance(subscription, str):

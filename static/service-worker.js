@@ -1,63 +1,65 @@
-/* service-worker.js - robust push + fallback logic */
-self.addEventListener('install', (ev) => {
-  self.skipWaiting();
-});
+// static/service-worker.js
+self.addEventListener('install', event => self.skipWaiting());
+self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
 
-self.addEventListener('activate', (ev) => {
-  // take control asap
-  ev.waitUntil(self.clients.claim());
-});
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(ch => ch.charCodeAt(0)));
+}
 
-// basic fetch handler (cache strategies can be added)
-self.addEventListener('fetch', (ev) => {
-  // default: let network handle it
-});
-
-// Listen for push events — showNotification with payload if present.
-self.addEventListener('push', async (ev) => {
+self.addEventListener('push', event => {
+  let data = {};
   try {
-    let data = {};
-    if (ev.data) {
-      try { data = ev.data.json(); } catch (e) { data = { body: ev.data.text() }; }
-    }
-    const title = data.title || 'Newton\'s Nerds';
-    const body = data.body || (data.preview && (data.preview.question || data.preview.attempt)) || 'New activity';
-    const tag = data.tag || undefined;
-    const url = (data.url && (typeof data.url === 'string')) ? data.url : '/questions';
-
-    const options = {
-      body: body,
-      tag: tag,
-      renotify: data.renotify === true,
-      data: { url: url, payload: data },
-      // add icon/badge if you have them in /static/img/
-      icon: '/static/img/icon-192.png',
-      badge: '/static/img/icon-192.png'
-    };
-
-    ev.waitUntil(self.registration.showNotification(title, options));
-  } catch (err) {
-    console.error('SW push handler error', err);
+    data = event.data ? event.data.json() : {};
+  } catch (e) {
+    try { data = { body: event.data ? event.data.text() : '' }; } catch (e2) { data = { title: 'Notification', body: 'You have a message' }; }
   }
+  const title = data.title || 'New notification';
+  const options = {
+    body: data.body || '',
+    icon: '/static/img/icon-192.png',
+    badge: '/static/img/icon-192.png',
+    data: data.url || '/',
+    tag: data.tag || undefined,
+    renotify: !!data.renotify
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// notification click
-self.addEventListener('notificationclick', (ev) => {
-  ev.notification.close();
-  const dest = (ev.notification.data && ev.notification.data.url) || '/';
-  ev.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(ws => {
-    const first = ws.find(w => (new URL(w.url)).pathname === (new URL(dest, location).pathname));
-    if (first) return first.focus();
-    return clients.openWindow(dest);
-  }));
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const url = event.notification.data || '/';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
+      for (let client of windowClients) {
+        if (client.url === url && 'focus' in client) return client.focus();
+      }
+      if (clients.openWindow) return clients.openWindow(url);
+    })
+  );
 });
 
-// handle subscription change (best-effort)
-self.addEventListener('pushsubscriptionchange', (ev) => {
-  // Best effort: notify client pages to re-subscribe
-  ev.waitUntil(clients.matchAll({ includeUncontrolled: true }).then(clients => {
-    clients.forEach(c => {
-      try { c.postMessage({ type: 'SUBSCRIPTION_LOST' }); } catch(e) {}
-    });
-  }));
+self.addEventListener('pushsubscriptionchange', event => {
+  event.waitUntil((async () => {
+    try {
+      const r = await fetch('/api/vapid');
+      const j = await r.json();
+      const publicKey = j && j.publicKey;
+      if (!publicKey) return console.warn('No public key returned, cannot re-subscribe');
+      const applicationServerKey = urlBase64ToUint8Array(publicKey);
+      const newSub = await self.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey
+      });
+      await fetch('/save-subscription', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject: 'Other', subscription: newSub.toJSON() })
+      }).catch(e => console.error('Failed to post new subscription to server', e));
+    } catch (e) {
+      console.error('pushsubscriptionchange handler failed', e);
+    }
+  })());
 });

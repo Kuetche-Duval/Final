@@ -10,6 +10,8 @@ import re
 import io
 import binascii
 import sqlite3
+import time
+from urllib.parse import urlparse
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -1198,6 +1200,10 @@ def subscriptions_delete():
     except Exception as e:
         app.logger.exception("subscriptions_delete top-level failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/vapid", methods=["GET"])
+def api_vapid():
+    return jsonify({"publicKey": VAPID_PUBLIC_KEY or ""}), 200
 
 # -------------------------
 # Pending + ack endpoints (client fetch)

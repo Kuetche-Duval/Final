@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# app.py — Newton's Nerds (complete, consolidated app)
-# Place at project root (same folder as templates/ static/ data/ etc.)
+# -*- coding: utf-8 -*-
+# app.py — Newton's Nerds (complete, multi-part delivery)
+# Paste parts 1 → 5 sequentially to form the final app.py
 
 import os
 import io
@@ -52,7 +53,7 @@ QUIZ_FORMS_FILE = DATA_DIR / "quiz_forms.json"
 HEALTH_FILE = DATA_DIR / "health_data.json"
 NOTIFICATIONS_STORE = DATA_DIR / "pending_notifications.json"
 
-# ensure defaults exist
+# create default files if missing
 defaults = {
     CODING_JSON: "[]",
     SUBSCRIPTIONS_FILE: "{}",
@@ -74,6 +75,7 @@ MAX_PAYLOAD_BYTES = int(os.environ.get("MAX_PUSH_PAYLOAD_BYTES", 3000))
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com")
+FOOTER_MESSAGE = "© 2025 Newton's Nerds"
 
 # -------------------------
 # JSON file helpers
@@ -218,7 +220,6 @@ def save_question_item(item):
     q = load_questions()
     q.append(item)
     _write_json_file(QUESTIONS_FILE, q)
-
 # -------------------------
 # SQL helpers (fix & populate)
 # -------------------------
@@ -226,12 +227,19 @@ def fix_common_sql_errors(sql: str) -> str:
     if not sql:
         return sql
     s = sql
-    s = re.sub(r'CREATE\s+TABLE\s+([`"\[]?[\w-]+[`"\]]?)\s+IF\s+NOT\s+EXISTS', r'CREATE TABLE IF NOT EXISTS \1', s, flags=re.IGNORECASE)
+    # fix variant mistakes like: CREATE TABLE authors IF NOT EXISTS -> CREATE TABLE IF NOT EXISTS authors
+    s = re.sub(r'CREATE\s+TABLE\s+([`"\[]?[\w-]+\]?[`"\]]?)\s+IF\s+NOT\s+EXISTS', r'CREATE TABLE IF NOT EXISTS \1', s, flags=re.IGNORECASE)
+    # replace curly quotes from copy-paste
     s = s.replace("“", '"').replace("”", '"').replace("’", "'")
+    # strip odd BOM/extra spaces
     s = s.strip()
     return s
 
 def safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> Tuple[sqlite3.Connection, List[str]]:
+    """
+    Build an in-memory sqlite DB from admin-provided schema_sql and sample_data.
+    Returns (conn, populated_table_names)
+    """
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -241,7 +249,7 @@ def safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> Tuple[sqlit
             schema_sql = fix_common_sql_errors(schema_sql)
             cur.executescript(schema_sql)
         except Exception as e:
-            # try to execute statements individually with fixes
+            # attempt to execute statements individually with some fixes
             try:
                 for stmt in [s.strip() for s in schema_sql.split(';') if s.strip()]:
                     try:
@@ -259,6 +267,7 @@ def safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> Tuple[sqlit
         for table, rows in sample_data.items():
             if not isinstance(rows, list):
                 continue
+            # infer columns union
             cols = []
             for r in rows:
                 if isinstance(r, dict):
@@ -266,6 +275,7 @@ def safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> Tuple[sqlit
                         if k not in cols:
                             cols.append(k)
             if not cols:
+                # if table exists because of schema, still mark it
                 try:
                     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
                     if cur.fetchone():
@@ -273,6 +283,7 @@ def safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> Tuple[sqlit
                     continue
                 except Exception:
                     continue
+            # create table if not exists (all text)
             try:
                 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
                 if not cur.fetchone():
@@ -405,6 +416,7 @@ def send_push_to_subject(subject: str, question_text: str = "", attempt_text: st
         parsed = urlparse(endpoint or "")
         domain = parsed.netloc.lower() if parsed.netloc else ""
 
+        # For some providers (e.g. WNS) reduce payload to avoid provider errors
         if "notify.windows.com" in domain or "wns" in domain or "windows" in domain:
             payload = {"title": payload_template["title"], "body": (q_preview or a_preview)[:80], "url": "/questions"}
 
@@ -428,6 +440,7 @@ def send_push_to_subject(subject: str, question_text: str = "", attempt_text: st
                 results.append({"endpoint": endpoint, "ok": True})
                 break
             except WebPushException as ex:
+                # analyze response to decide whether to delete subscription
                 try:
                     resp = getattr(ex, "response", None)
                     status = getattr(resp, "status_code", None) if resp else None
@@ -443,6 +456,7 @@ def send_push_to_subject(subject: str, question_text: str = "", attempt_text: st
                 err_text = str(ex)
                 logger.warning("WebPushException endpoint=%s status=%s body=%s err=%s", endpoint, status, body_text, err_text)
 
+                # If subscription expired/unsubscribed -> delete it
                 if status in (404, 410) or (body_text and "unsubscribed" in body_text.lower()) or ("unsubscribed" in err_text.lower()):
                     try:
                         delete_subscriptions_by_endpoint(endpoint)
@@ -452,6 +466,7 @@ def send_push_to_subject(subject: str, question_text: str = "", attempt_text: st
                     results.append({"endpoint": endpoint, "ok": False, "status": status, "error": err_text, "deleted": True})
                     break
 
+                # Retry for 400 once with smaller payload
                 if status == 400 or ("400 Bad Request" in err_text):
                     if attempt < 2:
                         time.sleep(0.12)
@@ -474,13 +489,12 @@ def send_push_to_subject(subject: str, question_text: str = "", attempt_text: st
 
     logger.info("send_push_to_subject result: %s", {"sent": sent, "errors": [r for r in results if not r.get("ok")], "detail": results})
     return {"sent": sent, "errors": [r for r in results if not r.get("ok")], "detail": results}
-
 # -------------------------
 # Routes
 # -------------------------
 @app.route("/")
 def home_page():
-    return render_template("index.html", message="Welcome to Newton's Nerds", FOOTER_MESSAGE="© 2025 Newton's Nerds")
+    return render_template("index.html", message="Welcome to Newton's Nerds", FOOTER_MESSAGE=FOOTER_MESSAGE)
 
 # Content page (timetable/drive/forms)
 @app.route("/content")
@@ -493,8 +507,9 @@ def content_page():
         today_date = datetime.utcnow().date().isoformat()
         timetable_today = []
 
+        # attempt to import sheets module if present
         try:
-            import sheets  # optional
+            import sheets  # optional module in project
             if hasattr(sheets, "get_timetable"):
                 sheet_title, sheet_content = sheets.get_timetable()
                 timetable_today = []
@@ -510,6 +525,7 @@ def content_page():
         except Exception:
             logger.debug("sheets.py not available or failed")
 
+        # attempt to import drive helpers
         try:
             import drive
             if hasattr(drive, "list_forms"):
@@ -532,7 +548,7 @@ def content_page():
                                form_list=form_list,
                                dr_values=dr_values,
                                timetable_today=timetable_today,
-                               FOOTER_MESSAGE="© 2025 Newton's Nerds")
+                               FOOTER_MESSAGE=FOOTER_MESSAGE)
     except Exception as e:
         logger.exception("Content page error: %s", e)
         return render_template("content.html",
@@ -544,9 +560,9 @@ def content_page():
                                dr_values=[],
                                timetable_today=[],
                                error=str(e),
-                               FOOTER_MESSAGE="© 2025 Newton's Nerds"), 500
+                               FOOTER_MESSAGE=FOOTER_MESSAGE), 500
 
-# Drive image proxy
+# Drive image proxy (works if drive.get_file_stream is implemented)
 @app.route("/drive-image/<file_id>")
 def drive_image(file_id):
     try:
@@ -572,20 +588,26 @@ def coding_page():
     try:
         exercises = load_coding_exercises()
         forms = _load_forms_data()
-        return render_template("coding.html", exercises=exercises, forms=forms, FOOTER_MESSAGE="© 2025 Newton's Nerds", vapid_public_key=VAPID_PUBLIC_KEY)
+        return render_template("coding.html", exercises=exercises, forms=forms, message="Coding Practice", FOOTER_MESSAGE=FOOTER_MESSAGE, vapid_public_key=VAPID_PUBLIC_KEY)
     except Exception as e:
         logger.exception("coding_page failed: %s", e)
         flash("Failed to load coding page.", "danger")
         return redirect(url_for("home_page"))
 
+# Build & run SQL from an exercise (returns HTML of tables)
 @app.route("/exercise-table/<exercise_id>", methods=["GET", "POST"])
 def exercise_table_route(exercise_id):
+    """
+    Build an in-memory DB from the exercise's schema_sql and sample_data,
+    then apply the SQL from editor (POST body) and return HTML snippet with SELECT * outputs for each table.
+    """
     try:
         exercises = load_coding_exercises()
         ex = next((e for e in exercises if str(e.get("id")) == str(exercise_id)), None)
         if not ex:
             return jsonify({"ok": False, "error": "exercise not found"}), 404
 
+        # prefer canonical field names with fallbacks
         schema_sql = ex.get("schema_sql") or ex.get("schema") or ""
         sample_data = ex.get("sample_data") or ex.get("sampleData") or {}
 
@@ -596,6 +618,7 @@ def exercise_table_route(exercise_id):
                 req_sql = (payload.get("sql") or "").strip()
             except Exception:
                 req_sql = ""
+        # fallback to example query if editor empty
         if not req_sql:
             req_sql = ex.get("example_query") or ex.get("exampleQuery") or ex.get("starter") or ex.get("starter_sql") or ""
 
@@ -604,8 +627,10 @@ def exercise_table_route(exercise_id):
         except Exception as e:
             return jsonify({"ok": False, "error": f"Failed preparing sample DB: {e}"}), 500
 
+        # If there's SQL from the editor, execute it. Keep it permissive but safe by using in-memory DB.
         if req_sql:
             try:
+                # We execute as script to allow CREATE/INSERT/UPDATE/SELECT multiple statements
                 req_sql_fixed = fix_common_sql_errors(req_sql)
                 conn.executescript(req_sql_fixed)
                 conn.commit()
@@ -624,8 +649,9 @@ def exercise_table_route(exercise_id):
     except Exception as e:
         logger.exception("exercise_table_route failed: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
-
+# -------------------------
 # Questions page & submission
+# -------------------------
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
     try:
@@ -650,8 +676,9 @@ def questions_page():
             return redirect(url_for("questions_page"))
 
         questions = load_questions()
+        # categories: union of existing plus defaults so UI has choices
         categories = sorted({q[0] for q in questions if q and len(q) > 0} | {"Mathematics", "Physics", "Chemistry", "Biology", "Computer Science", "Other"})
-        community_links = {}
+        community_links = {}  # fill from config if desired
         vapid_public_key = VAPID_PUBLIC_KEY or ""
         selected_category = request.args.get("categoryFilter", "")
         return render_template("questions.html",
@@ -660,13 +687,15 @@ def questions_page():
                                community_links=community_links,
                                vapid_public_key=vapid_public_key,
                                selected_category=selected_category,
-                               FOOTER_MESSAGE="© 2025 Newton's Nerds")
+                               FOOTER_MESSAGE=FOOTER_MESSAGE)
     except Exception as e:
         logger.exception("questions_page failed: %s", e)
         flash("Failed to load questions page.", "danger")
         return redirect(url_for("home_page"))
 
-# Subscription endpoints
+# -------------------------
+# Subscription endpoints used by client JS
+# -------------------------
 @app.route("/subscriptions/save", methods=["POST"])
 def save_subscription_route():
     try:
@@ -752,7 +781,7 @@ def admin_list_pending_notifications():
 def health_index():
     try:
         items = _load_health_data()
-        return render_template("health.html", plants=items, message="Health", FOOTER_MESSAGE="© 2025 Newton's Nerds")
+        return render_template("health.html", plants=items, message="Health", FOOTER_MESSAGE=FOOTER_MESSAGE)
     except Exception as e:
         logger.exception("health_index failed: %s", e)
         flash("Failed to load health advice page.", "danger")
@@ -764,7 +793,7 @@ def health_detail(slug):
         items = _load_health_data()
         for p in items:
             if p.get("slug") == slug:
-                return render_template("health_detail.html", plant=p, message="Health", FOOTER_MESSAGE="© 2025 Newton's Nerds")
+                return render_template("health_detail.html", plant=p, message="Health", FOOTER_MESSAGE=FOOTER_MESSAGE)
         flash("Item not found.", "warning")
         return redirect(url_for("health_index"))
     except Exception as e:
@@ -777,11 +806,18 @@ def health_detail(slug):
 def quiz_forms():
     try:
         forms = _load_forms_data()
-        return render_template("quiz_forms.html", forms=forms, message="Quizzes", FOOTER_MESSAGE="© 2025 Newton's Nerds")
+        return render_template("quiz_forms.html", forms=forms, message="Quizzes", FOOTER_MESSAGE=FOOTER_MESSAGE)
     except Exception as e:
         logger.exception("Forms index failed, %s", e)
         flash("Failed to load Quiz Page.", "danger")
         return redirect(url_for("home_page"))
+# -------------------------
+# Static proxy (optional)
+# -------------------------
+@app.route("/static/<path:filename>")
+def static_proxy(filename):
+    static_dir = ROOT / "static"
+    return send_from_directory(static_dir, filename)
 
 # -------------------------
 # Error handler
@@ -790,15 +826,9 @@ def quiz_forms():
 def handle_exception(e):
     logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
     try:
-        return render_template("error.html", message="An internal error occurred", error=str(e), FOOTER_MESSAGE="© 2025 Newton's Nerds"), 500
+        return render_template("error.html", message="An internal error occurred", error=str(e), FOOTER_MESSAGE=FOOTER_MESSAGE), 500
     except Exception:
         return f"Internal Server Error: {e}", 500
-
-# If you want to explicitly serve static files via a route, this will work; Flask already serves /static
-@app.route("/static/<path:filename>")
-def static_proxy(filename):
-    static_dir = ROOT / "static"
-    return send_from_directory(static_dir, filename)
 
 # -------------------------
 # Run server

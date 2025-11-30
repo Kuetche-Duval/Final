@@ -1,142 +1,341 @@
-// notifications.js
-//
-// Helper: register service worker, subscribe/unsubscribe, fetch pending notifications, ack them.
-// This works with the app endpoints: /save-subscription, /subscriptions/delete, /vapid_public_key, /notifications/pending, /notifications/ack
+/* notifications.js
+   Robust Push Subscription manager for Newton's Nerds.
+   Drop into static/js/ and include from your template:
+     <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
 
-async function urlBase64ToUint8Array(base64String) {
+   Expects on the page:
+   - <script type="application/json" id="vapidKeyData">"BASE64_VAPID"</script>
+   - subscribe buttons with class .subscribe-btn and data-subject attributes
+
+   Server endpoints used:
+   - POST /save-subscription         (body: { subscription, subject, client_id })
+   - GET  /subscriptions/check?endpoint=...
+   - POST /subscriptions/delete      (body: { endpoint })
+*/
+(function () {
+  'use strict';
+
+  // ---- Helpers ----
+  function log(...args) { console.debug('[push]', ...args); }
+  function warn(...args) { console.warn('[push]', ...args); }
+  function err(...args) { console.error('[push]', ...args); }
+
+  function getJsonTextFromEl(id, defaultVal = '') {
+    const el = document.getElementById(id);
+    if (!el) return defaultVal;
+    try { return JSON.parse(el.textContent || el.innerText || '""'); }
+    catch (e) { console.warn('Failed to parse JSON from', id, e); return defaultVal; }
+  }
+
+  function urlBase64ToUint8Array(base64String) {
     if (!base64String) return null;
-    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
     const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-    const raw = window.atob(base64);
-    const out = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; ++i) out[i] = raw.charCodeAt(i);
-    return out;
-  }
-  
-  async function registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) {
-      console.warn('Service workers not supported');
-      return null;
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
     }
-    try {
-      const reg = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
-      await navigator.serviceWorker.ready;
-      return reg;
-    } catch (e) {
-      console.error('Failed to register service worker', e);
-      return null;
-    }
+    return outputArray;
   }
-  
-  async function subscribeForPush(user_id) {
-    const reg = await registerServiceWorker();
-    if (!reg) return null;
-    try {
-      let subscription = await reg.pushManager.getSubscription();
-      if (!subscription) {
-        // fetch VAPID public key from server
-        let vapidKey = null;
-        try {
-          const r = await fetch('/vapid_public_key');
-          if (r.ok) {
-            const j = await r.json();
-            vapidKey = j.vapid_public_key || null;
-          }
-        } catch (e) { console.warn('Could not fetch VAPID key', e); }
-        if (!vapidKey) {
-          console.error('No VAPID key available');
-          return null;
-        }
-        subscription = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: await urlBase64ToUint8Array(vapidKey)
-        });
-      }
-      // Persist to server
-      await fetch('/save-subscription', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscription: subscription.toJSON(), subject: 'Other', client_id: 'web', user_id: user_id })
-      });
-      // Save endpoint cookie + localStorage so UI can recover
-      try {
-        document.cookie = "nn_subscription=" + encodeURIComponent(subscription.endpoint) + "; Max-Age=31536000; Path=/; SameSite=Lax";
-        localStorage.setItem("subscriptionEndpoint", subscription.endpoint);
-      } catch (e) { console.warn('Could not set endpoint cookie/localStorage', e); }
-      return subscription;
-    } catch (e) {
-      console.error('subscribeForPush failed', e);
-      return null;
-    }
+
+  function setCookie(name, value, days = 365) {
+    const maxAge = days * 24 * 60 * 60;
+    const secure = location.protocol === 'https:';
+    document.cookie = name + '=' + encodeURIComponent(value || '') +
+      '; max-age=' + maxAge +
+      '; path=/' +
+      '; samesite=Lax' +
+      (secure ? '; Secure' : '');
   }
-  
-  async function unsubscribePush(user_id) {
-    try {
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.getSubscription();
-      let endpoint = null;
-      if (sub) {
-        endpoint = sub.endpoint;
-        try {
-          await sub.unsubscribe();
-        } catch (e) {
-          console.warn('Error unsubscribing local subscription', e);
-        }
+  function getCookie(name) {
+    const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return m ? decodeURIComponent(m.pop()) : null;
+  }
+  function deleteCookie(name) {
+    document.cookie = name + '=; path=/; max-age=0; samesite=Lax';
+  }
+
+  // ---- State ----
+  let registrationForPush = null;
+  let currentSubscription = null; // PushSubscription or fallback plain object {endpoint: "..."}
+  let serverSubjectsForEndpoint = []; // lowercased subjects that server says this endpoint has
+  const vapidPublicKey = getJsonTextFromEl('vapidKeyData', '');
+
+  // UI selectors
+  const SUB_BTN_SELECTOR = '.subscribe-btn';
+
+  // ---- UI helpers ----
+  function updateSubscribeButtonsUI() {
+    document.querySelectorAll(SUB_BTN_SELECTOR).forEach(btn => {
+      const subjRaw = (btn.dataset.subject || '').trim();
+      const subj = subjRaw.toLowerCase();
+      const subscribed = currentSubscription && currentSubscription.endpoint && serverSubjectsForEndpoint.includes(subj);
+      btn.disabled = false;
+      btn.title = subscribed ? `Unsubscribe from ${subjRaw}` : `Subscribe to ${subjRaw}`;
+      if (subscribed) {
+        btn.textContent = 'Subscribed ✓';
+        btn.classList.add('subscribed');
+        btn.dataset.state = 'subscribed';
       } else {
-        endpoint = decodeURIComponent((document.cookie.split('; ').find(row => row.startsWith('nn_subscription=')) || '').split('=')[1] || '');
-        endpoint = endpoint || localStorage.getItem('subscriptionEndpoint');
+        btn.textContent = '🔔 Subscribe';
+        btn.classList.remove('subscribed');
+        btn.dataset.state = 'none';
       }
-      if (endpoint) {
-        await fetch('/subscriptions/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ endpoint: endpoint })
-        });
-      }
-      // Clear local markers
-      document.cookie = "nn_subscription=; Max-Age=0; Path=/; SameSite=Lax";
-      try { localStorage.removeItem('subscriptionEndpoint'); } catch(e) {}
-      return true;
-    } catch (e) {
-      console.error('unsubscribePush failed', e);
-      return false;
-    }
+    });
   }
-  
-  async function fetchPendingNotifications(endpoint) {
-    if (!endpoint) {
-      const cookie = document.cookie.split('; ').find(row => row.startsWith('nn_subscription='));
-      endpoint = cookie ? decodeURIComponent(cookie.split('=')[1]) : null;
-      if (!endpoint) endpoint = localStorage.getItem('subscriptionEndpoint');
-    }
+
+  function showAlert(message) {
+    try { alert(message); } catch (e) { console.log(message); }
+  }
+
+  // ---- Server APIs ----
+  async function fetchServerSubjectsForEndpoint(endpoint) {
     if (!endpoint) return [];
     try {
-      const res = await fetch('/notifications/pending?endpoint=' + encodeURIComponent(endpoint));
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.ok) return data.items || [];
+      const resp = await fetch('/subscriptions/check?endpoint=' + encodeURIComponent(endpoint));
+      if (!resp.ok) { warn('subscriptions/check failed', resp.status); return []; }
+      const j = await resp.json();
+      if (j && j.ok && Array.isArray(j.subjects)) {
+        return j.subjects.map(s => (s || '').toString().toLowerCase());
       }
+      return [];
     } catch (e) {
-      console.error('fetchPendingNotifications failed', e);
+      warn('Error contacting server for subscriptions/check', e);
+      return [];
     }
-    return [];
   }
-  
-  async function ackNotifications(endpoint, ids) {
-    if (!endpoint || !Array.isArray(ids) || ids.length === 0) return false;
+
+  async function sendSubscriptionToServer(sub, subject) {
     try {
-      const res = await fetch('/notifications/ack', {
+      const sObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
+      const resp = await fetch('/save-subscription', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint: endpoint, ids: ids })
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ subscription: sObj, subject: subject, client_id: 'web' })
       });
-      if (res.ok) {
-        const data = await res.json();
-        return data.ok === true;
+      const body = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        throw new Error((body && body.error) ? body.error : `Status ${resp.status}`);
       }
+      return body;
     } catch (e) {
-      console.error('ackNotifications failed', e);
+      err('Failed to save subscription on server', e);
+      throw e;
     }
-    return false;
   }
-  
+
+  async function requestServerDeleteEndpoint(endpoint) {
+    try {
+      const resp = await fetch('/subscriptions/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ endpoint: endpoint })
+      });
+      if (resp.ok) return await resp.json().catch(() => ({ ok: true }));
+      return { ok: false, status: resp.status };
+    } catch (e) {
+      warn('Failed requesting server to delete subscription', e);
+      return { ok: false, error: e.message || String(e) };
+    }
+  }
+
+  // ---- Subscription logic ----
+  async function initServiceWorkerAndSubscription() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      document.querySelectorAll(SUB_BTN_SELECTOR).forEach(b => { b.disabled = true; b.title = 'Notifications not supported in this browser'; });
+      warn('Push/ServiceWorker not available in this browser.');
+      return;
+    }
+    try {
+      registrationForPush = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+      try { await registrationForPush.update(); } catch (e) { /* ignore */ }
+      await navigator.serviceWorker.ready;
+
+      // Listen for messages from the SW
+      navigator.serviceWorker.addEventListener('message', (ev) => {
+        const d = ev.data || {};
+        if (d && d.type === 'SUBSCRIPTION_LOST') {
+          warn('Service worker reported subscription lost.');
+          // clear local state, ask server for current subjects again
+          currentSubscription = null;
+          serverSubjectsForEndpoint = [];
+          updateSubscribeButtonsUI();
+        }
+      });
+
+      try {
+        currentSubscription = await registrationForPush.pushManager.getSubscription();
+      } catch (e) {
+        warn('pushManager.getSubscription failed', e);
+        currentSubscription = null;
+      }
+
+      // If pushManager returned null, try reading cookie/localStorage fallback
+      if (!currentSubscription || !currentSubscription.endpoint) {
+        const savedEndpoint = getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint');
+        if (savedEndpoint) {
+          currentSubscription = { endpoint: savedEndpoint };
+        }
+      }
+
+      if (currentSubscription && currentSubscription.endpoint) {
+        serverSubjectsForEndpoint = await fetchServerSubjectsForEndpoint(currentSubscription.endpoint);
+      } else {
+        serverSubjectsForEndpoint = [];
+      }
+
+      updateSubscribeButtonsUI();
+      log('[subscribe] SW ready. subscription:', !!currentSubscription);
+    } catch (err) {
+      err('[subscribe] SW register/getSubscription failed:', err);
+      document.querySelectorAll(SUB_BTN_SELECTOR).forEach(b => { b.disabled = true; b.title = 'Service worker registration failed'; });
+    }
+  }
+
+  async function subscribeForSubject(subject, btn = null) {
+    if (!registrationForPush) {
+      showAlert("Service worker not ready — reload the page and try again.");
+      return;
+    }
+
+    // ask for permission
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      showAlert('Please allow notifications to subscribe (check browser settings).');
+      return;
+    }
+
+    try {
+      let sub = await registrationForPush.pushManager.getSubscription();
+      if (!sub) {
+        if (!vapidPublicKey) {
+          showAlert('Push not configured on the server (no VAPID public key).');
+          warn('Missing VAPID public key value:', vapidPublicKey);
+          return;
+        }
+        sub = await registrationForPush.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+        });
+      }
+
+      currentSubscription = sub;
+      // Save to server
+      let serverResp;
+      try {
+        serverResp = await sendSubscriptionToServer(sub, subject);
+      } catch (e) {
+        // network/server error: still keep local subscription and inform user
+        try {
+          const endpoint = (typeof sub.toJSON === 'function') ? sub.toJSON().endpoint : sub.endpoint;
+          if (endpoint) { setCookie('nn_subscription', endpoint, 365); localStorage.setItem('subscriptionEndpoint', endpoint); }
+        } catch (ignored) {}
+        throw e;
+      }
+
+      // serverResp may contain subjects array
+      if (serverResp && Array.isArray(serverResp.subjects)) {
+        serverSubjectsForEndpoint = serverResp.subjects.map(s => (s || '').toString().toLowerCase());
+      } else if (!serverSubjectsForEndpoint.includes(subject.toLowerCase())) {
+        serverSubjectsForEndpoint.push(subject.toLowerCase());
+      }
+
+      try {
+        const ep = ((typeof sub.toJSON === 'function') ? sub.toJSON().endpoint : sub.endpoint) || '';
+        if (ep) { setCookie('nn_subscription', ep, 365); localStorage.setItem('subscriptionEndpoint', ep); }
+      } catch (e) {}
+
+      updateSubscribeButtonsUI();
+      if (btn) { btn.textContent = 'Subscribed ✓'; btn.classList.add('subscribed'); }
+      showAlert('Subscribed successfully ✓ (server confirmed).');
+      log('subscribeForSubject done', subject, serverSubjectsForEndpoint);
+    } catch (err) {
+      err('subscribeForSubject error', err);
+      if (err && err.name === 'NotAllowedError') {
+        showAlert('Notifications are blocked for this site. Check your browser/site notification settings.');
+      } else if (err && err.name === 'SecurityError') {
+        showAlert('Push subscription failed due to security restrictions (must be HTTPS).');
+      } else {
+        showAlert("Subscription failed: " + (err && err.message ? err.message : String(err)));
+      }
+    }
+  }
+
+  async function unsubscribeEndpoint(btn = null) {
+    if (!registrationForPush) {
+      showAlert("Service worker not ready.");
+      return;
+    }
+    try {
+      const sub = await registrationForPush.pushManager.getSubscription();
+      let endpointToDelete = null;
+      if (!sub) {
+        endpointToDelete = getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint');
+        if (!endpointToDelete) {
+          showAlert('No active subscription to unsubscribe.');
+          return;
+        }
+      } else {
+        endpointToDelete = sub.endpoint;
+      }
+
+      if (!confirm('Unsubscribe this browser from all subjects? This will remove saved subscriptions stored on the server for this browser.')) {
+        return;
+      }
+
+      if (sub) {
+        try { const ok = await sub.unsubscribe(); if (!ok) warn("sub.unsubscribe returned false"); } catch (e) { warn("Error while calling sub.unsubscribe()", e); }
+      }
+
+      try {
+        const resp = await requestServerDeleteEndpoint(endpointToDelete);
+        if (resp && resp.ok) { serverSubjectsForEndpoint = []; updateSubscribeButtonsUI(); }
+        else warn("Server delete returned non-ok", resp);
+      } catch (e) { warn("Server-side deletion error", e); }
+
+      deleteCookie('nn_subscription'); localStorage.removeItem('subscriptionEndpoint');
+      currentSubscription = null; serverSubjectsForEndpoint = [];
+      updateSubscribeButtonsUI();
+      showAlert('Unsubscribed locally and requested server cleanup.');
+    } catch (e) {
+      err("Unsubscribe failed", e);
+      showAlert('Unsubscribe failed (see console).');
+    }
+  }
+
+  // ---- Event binding for subscribe buttons ----
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest(SUB_BTN_SELECTOR);
+    if (!btn) return;
+    e.preventDefault();
+    const subj = btn.dataset.subject || 'Other';
+    const state = btn.dataset.state || 'none';
+    if (state === 'subscribed') {
+      unsubscribeEndpoint(btn);
+    } else {
+      subscribeForSubject(subj, btn);
+    }
+  });
+
+  // Initialize UI disabled state, then init SW & subscription
+  document.addEventListener('DOMContentLoaded', () => {
+    // Disable until SW ready
+    document.querySelectorAll(SUB_BTN_SELECTOR).forEach(b => { b.disabled = true; b.title = 'Subscription initializing…'; });
+    initServiceWorkerAndSubscription().then(() => {
+      // done during initServiceWorkerAndSubscription
+      updateSubscribeButtonsUI();
+    }).catch((e) => {
+      warn('initServiceWorkerAndSubscription failed', e);
+      document.querySelectorAll(SUB_BTN_SELECTOR).forEach(b => { b.disabled = true; b.title = 'Service worker failed to initialize'; });
+    });
+  });
+
+  // Public functions for debugging from console (optional)
+  window.NNPush = {
+    subscribeForSubject,
+    unsubscribeEndpoint,
+    getCurrentSubscription: () => currentSubscription,
+    getServerSubjectsForEndpoint: () => serverSubjectsForEndpoint
+  };
+})();

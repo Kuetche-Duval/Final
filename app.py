@@ -384,16 +384,14 @@ def get_subjects_for_endpoint(endpoint):
     Return list of subjects that a given endpoint is subscribed to (sqlite fallback).
     """
     try:
+        _ensure_local_db_tables()
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
             c.execute("SELECT subject FROM subscriptions WHERE endpoint=?", (endpoint,))
             rows = c.fetchall()
         return [r[0] for r in rows]
     except Exception:
-        try:
-            app.logger.exception("get_subjects_for_endpoint failed for %s", endpoint)
-        except Exception:
-            pass
+        app.logger.exception("get_subjects_for_endpoint failed for %s", endpoint)
         return []
 
 
@@ -403,18 +401,31 @@ def save_notification_for_endpoint(endpoint, subject, title, body, data_obj):
     """
     try:
         now = datetime.utcnow().replace(microsecond=0).isoformat()
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            c.execute("""INSERT INTO notifications(endpoint, subject, title, body, data, created_at, delivered)
-                         VALUES (?,?,?,?,?,?,0)""", (endpoint or "", subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
-            nid = c.lastrowid
-            conn.commit()
-        return nid
+        # try to insert, but if the table is missing (OperationalError), attempt a DB init and retry once
+        for attempt in range(2):
+            try:
+                _ensure_local_db_tables()
+                with sqlite3.connect(str(DB_PATH)) as conn:
+                    c = conn.cursor()
+                    c.execute("""INSERT INTO notifications(endpoint, subject, title, body, data, created_at, delivered)
+                                 VALUES (?,?,?,?,?,?,0)""", (endpoint or "", subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
+                    nid = c.lastrowid
+                    conn.commit()
+                return nid
+            except sqlite3.OperationalError as oe:
+                app.logger.warning("OperationalError saving notification for %s (attempt %s): %s", endpoint, attempt+1, oe)
+                try:
+                    _init_local_db()
+                except Exception:
+                    app.logger.debug("_init_local_db failed during retry")
+                time.sleep(0.05)
+                continue
+            except Exception:
+                app.logger.exception("Unexpected DB error when saving notification for %s", endpoint)
+                return None
+        return None
     except Exception:
-        try:
-            app.logger.exception("save_notification_for_endpoint failed for %s", endpoint)
-        except Exception:
-            pass
+        app.logger.exception("save_notification_for_endpoint failed for %s", endpoint)
         return None
 
 
@@ -423,6 +434,7 @@ def fetch_pending_notifications_for_endpoint(endpoint):
     Fetch undelivered notifications for an endpoint (ordered oldest first).
     """
     try:
+        _ensure_local_db_tables()
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
             c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint,))
@@ -437,10 +449,7 @@ def fetch_pending_notifications_for_endpoint(endpoint):
             out.append({"id": nid, "subject": subj, "title": title, "body": body, "data": data_obj, "created_at": created_at})
         return out
     except Exception:
-        try:
-            app.logger.exception("fetch_pending_notifications_for_endpoint failed for %s", endpoint)
-        except Exception:
-            pass
+        app.logger.exception("fetch_pending_notifications_for_endpoint failed for %s", endpoint)
         return []
 
 
@@ -452,6 +461,7 @@ def ack_notifications_by_ids(endpoint, ids):
     if not ids:
         return 0
     try:
+        _ensure_local_db_tables()
         now = datetime.utcnow().replace(microsecond=0).isoformat()
         changed = 0
         with sqlite3.connect(str(DB_PATH)) as conn:
@@ -466,10 +476,7 @@ def ack_notifications_by_ids(endpoint, ids):
             conn.commit()
         return changed
     except Exception:
-        try:
-            app.logger.exception("ack_notifications_by_ids failed for %s ids=%s", endpoint, ids)
-        except Exception:
-            pass
+        app.logger.exception("ack_notifications_by_ids failed for %s ids=%s", endpoint, ids)
         return 0
 
 
@@ -482,24 +489,30 @@ def mark_notifications_delivered_for_endpoint(endpoint):
     try:
         now = datetime.utcnow().replace(microsecond=0).isoformat()
         norm = normalize_endpoint(endpoint) or ""
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
+        # attempt with retry in case DB/tables were missing
+        for attempt in range(2):
             try:
-                # if you added endpoint_normalized earlier, this will catch those rows too
-                c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE (endpoint=? OR endpoint=?) AND delivered=0", (now, endpoint, norm))
-            except sqlite3.OperationalError:
-                # fallback to endpoint only
-                c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint))
-            conn.commit()
-        try:
-            app.logger.debug("mark_notifications_delivered_for_endpoint marked pending notifications for %s", endpoint)
-        except Exception:
-            pass
+                _ensure_local_db_tables()
+                with sqlite3.connect(str(DB_PATH)) as conn:
+                    c = conn.cursor()
+                    try:
+                        c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE (endpoint=? OR endpoint=?) AND delivered=0", (now, endpoint, norm))
+                    except sqlite3.OperationalError:
+                        c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint))
+                    conn.commit()
+                app.logger.debug("mark_notifications_delivered_for_endpoint marked pending notifications for %s", endpoint)
+                return
+            except sqlite3.OperationalError as oe:
+                app.logger.warning("OperationalError marking delivered for %s (attempt %s): %s", endpoint, attempt+1, oe)
+                try:
+                    _init_local_db()
+                except Exception:
+                    app.logger.debug("_init_local_db failed during retry")
+                time.sleep(0.05)
+                continue
+        app.logger.debug("mark_notifications_delivered_for_endpoint: exhausted retries for %s", endpoint)
     except Exception:
-        try:
-            app.logger.exception("mark_notifications_delivered_for_endpoint failed for %s", endpoint)
-        except Exception:
-            pass
+        app.logger.exception("mark_notifications_delivered_for_endpoint failed for %s", endpoint)
 
 
 # --- END FALLBACK block (sqlite helpers) ---

@@ -1,133 +1,113 @@
-// static/js/push-helper.js
-(() => {
-  const vapidPublicKey = (window.NN_CONFIG && window.NN_CONFIG.vapidPublicKey) || "";
-  function urlBase64ToUint8Array(base64String) {
-    if (!base64String) return null;
-    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-    const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
-    const rawData = atob(base64);
-    const out = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) out[i] = rawData.charCodeAt(i);
-    return out;
-  }
+/* static/js/push-helper.js
+   Tiny helper exposing functions:
+     - registerServiceWorker()
+     - getSubscription()
+     - ensureSubscription(subject)  -> registers + saves subscription to server
+     - unsubscribe(endpoint)
+     - checkServerSubjects(endpoint)
+   Works with endpoints:
+     - GET /api/vapid
+     - POST /save-subscription  (body { subscription, subject })
+     - GET  /subscriptions/check?endpoint=...
+     - POST /subscriptions/delete  (body { endpoint })
+*/
+export async function registerServiceWorker(swPath = '/service-worker.js') {
+  if (!('serviceWorker' in navigator)) throw new Error('Service worker not supported');
+  const reg = await navigator.serviceWorker.register(swPath, { scope: '/' });
+  await navigator.serviceWorker.ready;
+  return reg;
+}
 
-  async function registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) throw new Error("ServiceWorker not supported");
-    const reg = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
-    await navigator.serviceWorker.ready;
-    return reg;
+export async function getVapidPublicKey() {
+  try {
+    const r = await fetch('/api/vapid');
+    if (!r.ok) return '';
+    const j = await r.json();
+    return j && j.publicKey ? j.publicKey : '';
+  } catch (e) {
+    return '';
   }
+}
 
-  async function getSubscription(reg) {
-    try {
-      return await reg.pushManager.getSubscription();
-    } catch (e) {
-      console.error("getSubscription failed", e);
-      return null;
-    }
+export function urlBase64ToUint8Array(base64String) {
+  if (!base64String) return null;
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const array = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) array[i] = rawData.charCodeAt(i);
+  return array;
+}
+
+export async function getSubscription(reg = null) {
+  try {
+    const r = reg || await navigator.serviceWorker.ready;
+    return await r.pushManager.getSubscription();
+  } catch (e) {
+    console.warn('getSubscription failed', e);
+    return null;
   }
+}
 
-  async function subscribeForPush(subject) {
-    try {
-      const reg = await registerServiceWorker();
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') {
-        alert('Please allow notifications to subscribe.');
-        return null;
-      }
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
-      });
-      // send subscription to server
-      const body = { subscription: sub.toJSON ? sub.toJSON() : sub, subject: subject };
-      const res = await fetch('/save-subscription', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const j = await res.json();
-      if (!j || !j.ok) {
-        throw new Error(j && j.error ? j.error : 'save-subscription failed');
-      }
-      return sub;
-    } catch (e) {
-      console.error('subscribeForPush', e);
-      throw e;
-    }
+export async function subscribeUserToPush(subject = 'Other', reg = null, vapidPublicKey = '') {
+  // returns server JSON or throws
+  const swReg = reg || await navigator.serviceWorker.ready;
+  let sub = await swReg.pushManager.getSubscription();
+  if (!sub) {
+    const key = vapidPublicKey || await getVapidPublicKey();
+    const appServerKey = key ? urlBase64ToUint8Array(key) : null;
+    sub = await swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appServerKey });
   }
-
-  async function unsubscribeAll(endpoint) {
-    try {
-      // call server to delete
-      await fetch('/subscriptions/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint })
-      });
-      // Also try local unsubscribe
-      const reg = await registerServiceWorker();
-      const s = await reg.pushManager.getSubscription();
-      if (s) try { await s.unsubscribe(); } catch(e){ console.warn(e); }
-      return true;
-    } catch (e) {
-      console.error('unsubscribeAll', e);
-      return false;
-    }
-  }
-
-  // set up UI handlers
-  function initButtons() {
-    document.querySelectorAll('.subscribe-btn').forEach(btn => {
-      btn.addEventListener('click', async (ev) => {
-        ev.preventDefault();
-        const subj = btn.dataset.subject || 'Other';
-        btn.disabled = true;
-        try {
-          // Check current subscription
-          const reg = await registerServiceWorker();
-          const cur = await getSubscription(reg);
-          if (cur) {
-            // check server if this endpoint already subscribed to this subj
-            const ep = cur.endpoint;
-            try {
-              const r = await fetch('/subscriptions/check?endpoint=' + encodeURIComponent(ep));
-              const j = await r.json();
-              const subscribedSubjects = j && j.subjects ? j.subjects : [];
-              if (subscribedSubjects.map(s=>s.toLowerCase()).includes(subj.toLowerCase())) {
-                // already subscribed to subj -> unsubscribe entirely (simple approach)
-                const ok = await unsubscribeAll(ep);
-                if (ok) {
-                  btn.classList.remove('subscribed');
-                  btn.textContent = '🔔 Subscribe';
-                }
-                btn.disabled = false;
-                return;
-              }
-            } catch (e) { /* ignore */ }
-          }
-          // else subscribe
-          await subscribeForPush(subj);
-          btn.classList.add('subscribed');
-          btn.textContent = 'Subscribed ✓';
-        } catch (err) {
-          console.error(err);
-          alert("Subscription failed: " + (err && err.message ? err.message : err));
-        } finally {
-          btn.disabled = false;
-        }
-      });
-    });
-  }
-
-  // on load
-  document.addEventListener('DOMContentLoaded', async () => {
-    try {
-      await registerServiceWorker();
-    } catch (e) {
-      console.warn('SW register failed', e);
-    }
-    initButtons();
+  const toSend = { subscription: (sub.toJSON ? sub.toJSON() : sub), subject };
+  const res = await fetch('/save-subscription', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(toSend)
   });
+  if (!res.ok) {
+    throw new Error('Failed saving subscription on server');
+  }
+  const j = await res.json();
+  return { server: j, subscription: sub };
+}
 
-})();
+export async function unsubscribeEndpoint(endpoint) {
+  try {
+    const res = await fetch('/subscriptions/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint })
+    });
+    return await res.json();
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function checkServerSubjects(endpoint) {
+  try {
+    const res = await fetch(`/subscriptions/check?endpoint=${encodeURIComponent(endpoint)}`);
+    if (!res.ok) return [];
+    const j = await res.json();
+    return (j && j.subjects) ? j.subjects : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// Helper to ask SW to fetch pending (optional)
+export async function askSWToFetchPending(endpoint) {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'FETCH_PENDING', endpoint });
+      return true;
+    } else if (reg.active) {
+      reg.active.postMessage({ type: 'FETCH_PENDING', endpoint });
+      return true;
+    }
+    return false;
+  } catch (e) {
+    return false;
+  }
+}

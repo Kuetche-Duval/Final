@@ -1,3 +1,4 @@
+{# templates/questions.html — Part 1/2 #}
 {% extends 'base.html' %}
 
 {% block title %}Ask a Question{% endblock %}
@@ -5,28 +6,16 @@
 {% block styles %}
 <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
 <style>
-  /* (kept your original CSS unchanged) */
   :root{ --bg:#f6f8fb; --card-bg:#ffffff; --text:#0b1220; --muted:#6b7280; --accent-green:#25d366; --card-radius:12px; }
   [data-theme="dark"]{ --bg:#08101a; --card-bg:#071019; --text:#e6eef8; --muted:#98a0b3; }
   body{ background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
   .card{ background:var(--card-bg); border-radius:var(--card-radius); box-shadow:0 6px 20px rgba(3,3,3,0.06); padding:14px; }
   .question-list{ list-style:none; padding:0; margin:0; display:grid; gap:10px; }
   .question-item{ display:flex; gap:12px; align-items:flex-start; justify-content:space-between; padding:12px 14px; border-radius:12px; background: rgba(0,0,0,0.02); cursor:pointer; min-width:0; }
-  .question-item .left{ min-width:0; flex:1 1 auto; }
   .category-badge{ background: rgba(37,211,102,0.12); color: var(--accent-green); padding:4px 8px; border-radius:10px; font-weight:700; font-size:.86rem; white-space:nowrap; }
-  .author{ color: var(--muted); font-weight:700; font-size:.88rem; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .message-text{ color: var(--text); font-size:.97rem; white-space:pre-wrap; word-break:break-word; overflow-wrap:break-word; hyphens:auto; }
-  .op-attempt{ margin-top:8px; padding:8px; background:rgba(0,0,0,0.02); border-radius:8px; color:var(--muted); font-size:.92rem; }
-  .btn-sub{ font-size:.85rem; padding:6px 8px; border-radius:8px; }
-  .answer-panel{ display:none; margin-top:8px; }
-  .tiny-link{ font-size:.85rem; color:var(--accent-green); text-decoration:underline; cursor:pointer; background:none;border:0;padding:0; }
-  .subscribe-btn{ background:#fff3cd; border:1px solid #ffeeba; color:#856404; }
+  .subscribe-btn{ background:#fff3cd; border:1px solid #ffeeba; color:#856404; min-width:120px; }
   .subscribe-btn.subscribed{ background:#d4edda; border-color:#c3e6cb; color:#155724; box-shadow:0 0 12px rgba(37,211,102,0.16); }
-  .meta-row{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0; }
   .meta-right{ min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
-  .meta-right-small{ min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
-  @media (max-width:992px) { .question-item{flex-direction:column; align-items:stretch} .author { max-width:100%; white-space:normal; } .meta-right { text-align:left; } }
-  @media (max-width:576px) { .question-item{padding:10px} .author { max-width:140px; } .message-text { font-size:0.95rem } }
 </style>
 {% endblock %}
 
@@ -46,14 +35,14 @@
       <div class="row g-2">
         <div class="col-md-4">
           <label for="name" class="form-label small">Your name (optional)</label>
-          <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous" autocomplete="name">
+          <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous" autocomplete="name" value="{{ request.cookies.get('nn_user','') }}">
         </div>
         <div class="col-md-4">
           <label for="category" class="form-label small">Category</label>
           <select class="form-select" id="category" name="category" required>
             <option value="">-- Select Category --</option>
             {% for c in categories %}
-              <option value="{{ c|e }}">{{ c }}</option>
+              <option value="{{ c|e }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
             {% endfor %}
           </select>
         </div>
@@ -125,7 +114,6 @@
 
             <div class="message-text">{{ text }}</div>
 
-            <!-- OP's attempt (visible to answerers) -->
             <div class="op-attempt" aria-hidden="false">
               <small>OP's attempt</small>
               <div class="op-attempt-short">{{ attempt[:180] }}{% if attempt|length > 180 %}…{% endif %}</div>
@@ -135,7 +123,6 @@
               <div class="op-attempt-full" style="display:none; margin-top:8px;">{{ attempt }}</div>
             </div>
 
-            <!-- Answer / send panel -->
             <div class="answer-panel mt-2" aria-hidden="true">
               <div class="mb-2">
                 <label class="form-label small">Your answer (you'll send it to the community)</label>
@@ -170,7 +157,6 @@
 
 <script type="application/json" id="communityLinksData">{{ community_links|tojson }}</script>
 <script type="application/json" id="vapidKeyData">{{ vapid_public_key|tojson }}</script>
-
 {% endblock %}
 {% block scripts %}
 <script>
@@ -199,23 +185,23 @@ document.addEventListener('DOMContentLoaded', () => {
     document.cookie = name + '=; path=/; max-age=0; samesite=Lax';
   }
 
-  // Prefill
+  // Prefill form from cookies/localStorage
   const nameInput = document.getElementById('name');
-  const lastCategory = getCookie('nn_last_category');
-  if (nameInput) {
+  try {
     const stored = getCookie('nn_user');
-    if (stored) nameInput.value = stored;
-  }
-  if (lastCategory) {
-    const sel = document.getElementById('category');
-    if (sel) {
-      for (const opt of sel.options) {
-        if (opt.value === lastCategory) { opt.selected = true; break; }
+    if (nameInput && stored) nameInput.value = stored;
+    const lastCategory = getCookie('nn_last_category');
+    if (lastCategory) {
+      const sel = document.getElementById('category');
+      if (sel) {
+        for (const opt of sel.options) {
+          if (opt.value === lastCategory) { opt.selected = true; break; }
+        }
       }
     }
-  }
+  } catch(e){}
 
-  // Toggle answer panel
+  // Toggle answer panel & expand attempt
   document.querySelectorAll('.question-item').forEach(item => {
     item.addEventListener('click', (e) => {
       const tag = (e.target && e.target.tagName) || '';
@@ -226,10 +212,8 @@ document.addEventListener('DOMContentLoaded', () => {
       panel.style.display = isVisible ? 'none' : 'block';
       panel.setAttribute('aria-hidden', String(isVisible));
     });
-    item.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); item.click(); }});
   });
 
-  // Expand attempt
   document.querySelectorAll('.show-full-attempt').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -245,30 +229,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Copy answer
+  // copy & whatsapp
   document.querySelectorAll('.copy-answer').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       const item = btn.closest('.question-item');
       const answerEl = item.querySelector('.answer-text');
       const answer = (answerEl && (answerEl.value ?? answerEl.textContent ?? '')) || '';
-      if (!navigator.clipboard) {
-        try {
-          if (answerEl) { answerEl.select(); document.execCommand('copy'); alert('Copied (fallback).'); } else alert('Copy failed — select manually.');
-        } catch (err) { alert('Copy failed — select manually.'); }
-        return;
-      }
       try {
         await navigator.clipboard.writeText(answer);
         const old = btn.textContent;
         btn.textContent = 'Copied ✓';
         setTimeout(() => btn.textContent = old, 1500);
       } catch {
-        alert('Copy failed — please select and copy manually.');
+        alert('Copy failed — please select & copy manually.');
       }
     });
   });
 
-  // WhatsApp share
   document.querySelectorAll('.share-whatsapp').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -283,13 +260,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Theme
+  // Theme toggle
+  const themeToggle = document.getElementById('theme-toggle');
   function applyTheme(theme) {
     if (theme) document.documentElement.setAttribute('data-theme', theme);
     else document.documentElement.removeAttribute('data-theme');
     localStorage.setItem('site-theme', theme || '');
   }
-  const themeToggle = document.getElementById('theme-toggle');
   if (themeToggle) {
     themeToggle.addEventListener('click', () => {
       const cur = localStorage.getItem('site-theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -298,90 +275,57 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   const saved = localStorage.getItem('site-theme'); if (saved) applyTheme(saved);
 
-  // Filter & sort (client-side + server filter)
+  // Filter & sort (client side or server)
   const categoryFilter = document.getElementById('categoryFilter');
-  const searchBox = document.getElementById('searchBox');
-  const sortSelect = document.getElementById('sortSelect');
-  const list = document.getElementById('questionsList');
-
-  function submitFilterToServer() {
-    const val = (categoryFilter && categoryFilter.value) ? encodeURIComponent(categoryFilter.value) : '';
+  if (categoryFilter) categoryFilter.addEventListener('change', () => {
+    const val = encodeURIComponent(categoryFilter.value || '');
     const base = "{{ url_for('questions_page') }}";
-    const url = val ? `${base}?categoryFilter=${val}` : base;
-    window.location.href = url;
-  }
-  if (categoryFilter) categoryFilter.addEventListener('change', submitFilterToServer);
-
-  function filterList() {
-    if (!searchBox || !list) return;
-    const q = (searchBox.value || '').toLowerCase();
-    Array.from(list.children).forEach(li => {
-      const txt = (li.dataset.question || '').toLowerCase() + ' ' + (li.dataset.author || '').toLowerCase() + ' ' + (li.dataset.category || '').toLowerCase() + ' ' + (li.dataset.attempt || '').toLowerCase();
-      li.style.display = txt.includes(q) ? '' : 'none';
-    });
-  }
-  if (searchBox) searchBox.addEventListener('input', filterList);
-
-  function sortListBy(option) {
-    if (!list) return;
-    const nodes = Array.from(list.children).filter(n => n.style.display !== 'none');
-    if (option === 'new') {
-      nodes.sort((a,b) => (Date.parse(b.dataset.time || 0) - Date.parse(a.dataset.time || 0)));
-    } else if (option === 'old') {
-      nodes.sort((a,b) => (Date.parse(a.dataset.time || 0) - Date.parse(b.dataset.time || 0)));
-    } else return;
-    nodes.forEach(n => list.appendChild(n));
-  }
-  if (sortSelect) {
-    sortSelect.addEventListener('change', () => sortListBy(sortSelect.value));
-    if (sortSelect.value && sortSelect.value !== 'none') sortListBy(sortSelect.value);
-  }
-
-  // Form submit: validation + save cookies
-  const newQForm = document.getElementById('new-question-form');
-  if (newQForm) {
-    newQForm.addEventListener('submit', (ev) => {
-      const q = document.getElementById('question');
-      const a = document.getElementById('attempt');
-      const n = document.getElementById('name');
-      const c = document.getElementById('category');
-      if (!q.value.trim() || !a.value.trim()) {
-        ev.preventDefault();
-        alert('Please fill both question and your attempt before submitting.');
-        return;
-      }
-      try {
-        if (n && n.value) setCookie('nn_user', n.value, 365);
-        if (c && c.value) setCookie('nn_last_category', c.value, 365);
-      } catch (e) { /* ignore cookie errors */ }
-    });
-  }
-
-  /* --- Push / subscribe management --- */
+    window.location.href = val ? `${base}?categoryFilter=${val}` : base;
+  });
+/* --- Push / subscribe management --- */
   function urlBase64ToUint8Array(base64String) {
     if (!base64String) return null;
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
     const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
     const rawData = window.atob(base64);
     const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) {
-      outputArray[i] = rawData.charCodeAt(i);
-    }
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
     return outputArray;
   }
 
-  // disable subscribe buttons until SW init completes
-  document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Subscription initializing…'; });
+  document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Initializing…'; });
 
   let registrationForPush = null;
   let currentSubscription = null;
   let serverSubjectsForEndpoint = [];
 
+  async function initServiceWorkerAndSubscription() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Notifications not supported'; });
+      return;
+    }
+    try {
+      registrationForPush = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+      try { await registrationForPush.update(); } catch(e){ }
+      await navigator.serviceWorker.ready;
+      try { currentSubscription = await registrationForPush.pushManager.getSubscription(); } catch(e){ currentSubscription = null; }
+      const savedEndpoint = getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint');
+      if (currentSubscription && currentSubscription.endpoint) {
+        serverSubjectsForEndpoint = await checkServerSubjects(currentSubscription.endpoint) || [];
+      } else if (savedEndpoint) {
+        serverSubjectsForEndpoint = await checkServerSubjects(savedEndpoint) || [];
+      }
+      updateSubscribeButtonsUI();
+    } catch (err) {
+      console.error('SW init failed', err);
+      document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = false; b.title = 'Subscription init error'; });
+    }
+  }
+
   function updateSubscribeButtonsUI() {
     document.querySelectorAll('.subscribe-btn').forEach(btn => {
       const subjRaw = (btn.dataset.subject || '').trim();
-      const subj = subjRaw.toLowerCase();
-      const subscribed = currentSubscription && serverSubjectsForEndpoint.includes(subj);
+      const subscribed = currentSubscription && serverSubjectsForEndpoint.map(s=>s.toLowerCase()).includes(subjRaw.toLowerCase());
       btn.disabled = false;
       btn.title = subscribed ? `Unsubscribe from ${subjRaw}` : `Subscribe to ${subjRaw}`;
       if (subscribed) {
@@ -396,197 +340,101 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  async function initServiceWorkerAndSubscription() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Notifications not supported in this browser'; });
-      console.warn("Push/ServiceWorker not available in this browser.");
+  async function checkServerSubjects(endpoint) {
+    try {
+      const res = await fetch(`/subscriptions/check?endpoint=${encodeURIComponent(endpoint)}`);
+      if (!res.ok) return [];
+      const j = await res.json();
+      return (j && j.subjects) ? j.subjects : [];
+    } catch (e) { console.error(e); return []; }
+  }
+
+  async function subscribeToSubject(subj, btn) {
+    if (!registrationForPush) {
+      alert('Service worker not ready. Try again.');
       return;
     }
     try {
-      registrationForPush = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
-      try { await registrationForPush.update(); } catch(e){ /* ignore */ }
-      await navigator.serviceWorker.ready;
-
-      navigator.serviceWorker.addEventListener('message', (ev) => {
-        if (ev.data && ev.data.type === 'SUBSCRIPTION_LOST') {
-          console.warn('Push subscription possibly lost.');
+      let sub = currentSubscription;
+      if (!sub) {
+        let pub = vapidPublicKey || '';
+        if (!pub) {
+          try { const r = await fetch('/api/vapid'); const jr = await r.json(); pub = jr.publicKey || ''; } catch(e){}
         }
+        const key = urlBase64ToUint8Array(pub);
+        sub = await registrationForPush.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+        currentSubscription = sub;
+        if (sub && sub.endpoint) {
+          setCookie('nn_subscription', sub.endpoint, 365);
+          localStorage.setItem('subscriptionEndpoint', sub.endpoint);
+        }
+      }
+      const payload = { subscription: sub.toJSON ? sub.toJSON() : sub, subject: subj };
+      const res = await fetch('/save-subscription', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
       });
-
-      try {
-        currentSubscription = await registrationForPush.pushManager.getSubscription();
-      } catch (e) {
-        console.error('getSubscription failed', e);
-        currentSubscription = null;
-      }
-
-      const savedEndpointCookie = getCookie('nn_subscription');
-      const savedEndpointLS = localStorage.getItem('subscriptionEndpoint');
-      if (!currentSubscription && (savedEndpointCookie || savedEndpointLS)) {
-        currentSubscription = { endpoint: savedEndpointCookie || savedEndpointLS };
-      }
-
-      if (currentSubscription && currentSubscription.endpoint) {
-        try {
-          const resp = await fetch('/subscriptions/check?endpoint=' + encodeURIComponent(currentSubscription.endpoint));
-          if (resp.ok) {
-            const j = await resp.json();
-            if (j && j.ok && Array.isArray(j.subjects)) {
-              serverSubjectsForEndpoint = j.subjects.map(s => (s || '').toString().toLowerCase());
-            } else {
-              serverSubjectsForEndpoint = [];
-            }
-          } else {
-            serverSubjectsForEndpoint = [];
-          }
-        } catch (e) {
-          console.error("Error querying server for subscriptions:", e);
-          serverSubjectsForEndpoint = [];
-        }
-      } else {
-        serverSubjectsForEndpoint = [];
-      }
-      updateSubscribeButtonsUI();
-      console.log("[subscribe] SW ready. subscription:", !!currentSubscription);
-    } catch (err) {
-      console.error("[subscribe] SW register/getSubscription failed:", err);
-      document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Service worker registration failed'; });
-    }
-  }
-
-  async function subscribeForSubject(subject, btn) {
-    if (!registrationForPush) {
-      alert("Service worker not ready — reload the page and try again.");
-      return;
-    }
-
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-      alert('Please allow notifications to subscribe (check browser settings).');
-      return;
-    }
-
-    try {
-      let sub = await registrationForPush.pushManager.getSubscription();
-      if (!sub) {
-        if (!vapidPublicKey) {
-          alert('Push not configured on the server (no VAPID public key).');
-          console.error("Missing VAPID public key value:", vapidPublicKey);
-          return;
-        }
-        sub = await registrationForPush.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
-        });
-      }
-
-      currentSubscription = sub;
-      const subObj = (typeof sub.toJSON === 'function') ? sub.toJSON() : sub;
-
-      let res, jsonRes;
-      try {
-        res = await fetch('{{ url_for("save_subscription_route") }}', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ subscription: subObj, subject: subject, client_id: 'web' })
-        });
-      } catch (e) {
-        console.error("[subscribe] network error while saving subscription:", e);
-        alert('Network error while saving subscription. Please try again.');
-        return;
-      }
-
-      try { jsonRes = await res.json(); } catch(e){ jsonRes = null; }
-
-      if (!res.ok) {
-        console.error("[subscribe] server returned error", res.status, jsonRes);
-        alert('Failed to save subscription on server: ' + (jsonRes && jsonRes.error ? jsonRes.error : res.statusText));
-        return;
-      }
-
-      if (jsonRes && jsonRes.ok) {
-        if (Array.isArray(jsonRes.subjects)) {
-          serverSubjectsForEndpoint = jsonRes.subjects.map(s => (s || '').toString().toLowerCase());
-        } else if (!serverSubjectsForEndpoint.includes(subject.toLowerCase())) {
-          serverSubjectsForEndpoint.push(subject.toLowerCase());
-        }
-
-        try {
-          const endpoint = subObj.endpoint || '';
-          if (endpoint) { setCookie('nn_subscription', endpoint, 365); localStorage.setItem('subscriptionEndpoint', endpoint); }
-        } catch (e) {}
-
+      const j = await res.json();
+      if (j && j.ok) {
+        serverSubjectsForEndpoint = j.subjects || [];
         updateSubscribeButtonsUI();
-        if (btn) { btn.textContent = 'Subscribed ✓'; btn.classList.add('subscribed'); }
-        alert('Subscribed successfully ✓ (server confirmed).');
+        btn.textContent = 'Subscribed ✓';
+        btn.classList.add('subscribed');
       } else {
-        console.error("[subscribe] unexpected server response", jsonRes);
-        alert('Subscription saved? server response: ' + JSON.stringify(jsonRes));
+        alert('Could not save subscription: ' + (j && j.error ? j.error : 'server error'));
       }
-    } catch (err) {
-      console.error("pushManager.subscribe failed:", err);
-      if (err && err.name === 'NotAllowedError') {
-        alert('Notifications are blocked for this site. Check your browser/site notification settings.');
-      } else if (err && err.name === 'SecurityError') {
-        alert('Push subscription failed due to security restrictions (must be HTTPS).');
-      } else {
-        alert("Subscription failed: " + (err && err.message ? err.message : String(err)));
-      }
+    } catch (e) {
+      console.error('subscribe error', e);
+      alert('Subscription failed: ' + (e && e.message ? e.message : e));
     }
   }
 
-  async function unsubscribeEndpoint(btn) {
-    if (!registrationForPush) {
-      alert("Service worker not ready.");
-      return;
-    }
+  async function unsubscribeFromSubject(subj, btn) {
     try {
-      const sub = await registrationForPush.pushManager.getSubscription();
-      let endpointToDelete = null;
-      if (!sub) {
-        endpointToDelete = getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint');
-        if (!endpointToDelete) {
-          alert('No active subscription to unsubscribe.');
-          return;
-        }
-      } else {
-        endpointToDelete = sub.endpoint;
-      }
-
-      if (!confirm('Unsubscribe this browser from all subjects? This will remove saved subscriptions stored on the server for this browser.')) {
+      const endpoint = currentSubscription && currentSubscription.endpoint ? currentSubscription.endpoint : (getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint'));
+      if (!endpoint) {
+        alert('No subscription found to unsubscribe.');
         return;
       }
-
-      if (sub) {
-        try { const ok = await sub.unsubscribe(); if (!ok) console.warn("sub.unsubscribe returned false"); } catch (e) { console.warn("Error while calling sub.unsubscribe()", e); }
-      }
-
-      try {
-        const resp = await fetch('/subscriptions/delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ endpoint: endpointToDelete }) });
-        if (resp.ok) { serverSubjectsForEndpoint = []; updateSubscribeButtonsUI(); } else console.warn("Server delete returned non-ok", resp.status);
-      } catch (e) { console.error("Failed to request server-side deletion:", e); }
-
-      deleteCookie('nn_subscription'); localStorage.removeItem('subscriptionEndpoint');
-      currentSubscription = null; serverSubjectsForEndpoint = []; updateSubscribeButtonsUI();
-      alert('Unsubscribed locally and requested server cleanup.');
-    } catch (e) { console.error("Unsubscribe failed", e); alert('Unsubscribe failed (see console).'); }
+      const res = await fetch('/subscriptions/delete', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ endpoint })
+      });
+      const j = await res.json();
+      if (j && j.ok) {
+        try {
+          if (currentSubscription && currentSubscription.unsubscribe) await currentSubscription.unsubscribe();
+          else {
+            const s = await registrationForPush.pushManager.getSubscription();
+            if (s && s.unsubscribe) await s.unsubscribe();
+          }
+        } catch (e) { console.warn('Local unsubscribe failed', e); }
+        deleteCookie('nn_subscription'); localStorage.removeItem('subscriptionEndpoint');
+        currentSubscription = null; serverSubjectsForEndpoint = [];
+        updateSubscribeButtonsUI();
+      } else alert('Unsubscribe failed on server.');
+    } catch (e) { console.error(e); alert('Unsubscribe error.'); }
   }
 
-  document.addEventListener('click', (e) => {
-    const btn = e.target.closest && e.target.closest('.subscribe-btn');
-    if (!btn) return;
-    e.preventDefault();
-    const subj = btn.dataset.subject || 'Other';
-    const state = btn.dataset.state || 'none';
-    if (state === 'subscribed') {
-      unsubscribeEndpoint(btn);
-    } else {
-      subscribeForSubject(subj, btn);
-    }
+  document.querySelectorAll('.subscribe-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const subj = (btn.dataset.subject || 'Other').trim();
+      btn.disabled = true;
+      try {
+        await initServiceWorkerAndSubscription(); // ensure ready
+        const state = btn.dataset.state || 'none';
+        if (state === 'subscribed') await unsubscribeFromSubject(subj, btn);
+        else await subscribeToSubject(subj, btn);
+      } catch (err) {
+        console.error(err);
+        alert('Subscribe action failed.');
+      } finally {
+        btn.disabled = false;
+      }
+    });
   });
 
-  // Kick off service worker / subscription init
-  initServiceWorkerAndSubscription();
+  // final init
+  initServiceWorkerAndSubscription().catch(e => console.error(e));
 });
 </script>
 {% endblock %}

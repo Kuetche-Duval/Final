@@ -126,6 +126,123 @@ except Exception as e:
     def list_subscriptions(subject=None): return []
     def delete_subscriptions_by_endpoint(endpoint): return None
 
+# TIMETABLE: detect columns flexibly and return today's rows
+def get_timetable_today():
+    """
+    Loads values with from_google_sheets() (if available) and attempts to detect
+    useful columns (day, time, subject, facilitator, link, notes). Returns a
+    list of dict entries only for rows that match today's day name.
+    """
+    try:
+        rows = from_google_sheets() or []
+        if not rows or len(rows) < 2:
+            return []
+
+        # header detection
+        header = [str(h).strip() for h in rows[0]]
+        header_lower = [h.lower() for h in header]
+
+        aliases = {
+            "day": ["day", "weekday", "day of week"],
+            "time": ["time", "hour", "period"],
+            "subject": ["subject", "course", "topic"],
+            "facilitator": ["facilitator", "teacher", "instructor", "staff"],
+            "link": ["link", "location", "url", "meeting"],
+            "notes": ["notes", "note", "remarks", "comments"]
+        }
+
+        def find_col_for_alias_list(alias_list):
+            # exact match first
+            for a in alias_list:
+                a_norm = a.lower().strip()
+                for i, h in enumerate(header_lower):
+                    if h == a_norm:
+                        return i
+            # substring match
+            for a in alias_list:
+                a_norm = a.lower().strip()
+                for i, h in enumerate(header_lower):
+                    if a_norm in h:
+                        return i
+            # all tokens present
+            for a in alias_list:
+                toks = [t for t in a.lower().split() if t]
+                if not toks:
+                    continue
+                for i, h in enumerate(header_lower):
+                    if all(tok in h for tok in toks):
+                        return i
+            return None
+
+        col_day = find_col_for_alias_list(aliases["day"])
+        col_time = find_col_for_alias_list(aliases["time"])
+        col_subject = find_col_for_alias_list(aliases["subject"])
+        col_facilitator = find_col_for_alias_list(aliases["facilitator"])
+        col_link = find_col_for_alias_list(aliases["link"])
+        col_notes = find_col_for_alias_list(aliases["notes"])
+
+        # sensible defaults if header is short
+        hl = len(header)
+        if hl >= 6:
+            if col_day is None: col_day = 0
+            if col_time is None: col_time = 1
+            if col_subject is None: col_subject = 2
+            if col_facilitator is None: col_facilitator = 3
+            if col_link is None: col_link = 4
+            if col_notes is None: col_notes = 5
+        else:
+            def fallback_assign(c_idx, preferred_idx):
+                if c_idx is None and preferred_idx < hl:
+                    return preferred_idx
+                return c_idx
+            col_day = fallback_assign(col_day, 0)
+            col_time = fallback_assign(col_time, 1 if hl > 1 else 0)
+            col_subject = fallback_assign(col_subject, 2 if hl > 2 else (hl-1))
+            col_facilitator = fallback_assign(col_facilitator, 3 if hl > 3 else (hl-1))
+            col_link = fallback_assign(col_link, 4 if hl > 4 else (hl-1))
+            col_notes = fallback_assign(col_notes, 5 if hl > 5 else (hl-1))
+
+        # detect today strings
+        today_short = datetime.now().strftime("%a").upper()   # e.g. MON
+        today_full = datetime.now().strftime("%A").upper()    # e.g. Monday
+
+        matches = []
+        for idx, r in enumerate(rows[1:], start=2):
+            try:
+                rlist = list(r)
+                # pick day cell
+                day_cell = ""
+                if col_day is not None and col_day < len(rlist):
+                    day_cell = str(rlist[col_day]).strip()
+                elif len(rlist) > 0:
+                    day_cell = str(rlist[0]).strip()
+                if not day_cell:
+                    continue
+                first = day_cell.upper()
+                if first.startswith(today_short) or first.startswith(today_full[:3]) or today_full in first:
+                    def get_cell(ci):
+                        if ci is None or ci >= len(rlist):
+                            return ""
+                        return rlist[ci] or ""
+                    entry = {
+                        "row_index": idx,
+                        "day": str(get_cell(col_day)).strip(),
+                        "time": str(get_cell(col_time)).strip(),
+                        "subject": str(get_cell(col_subject)).strip(),
+                        "facilitator": str(get_cell(col_facilitator)).strip(),
+                        "link": str(get_cell(col_link)).strip(),
+                        "notes": str(get_cell(col_notes)).strip()
+                    }
+                    matches.append(entry)
+            except Exception:
+                # skip malformed row
+                continue
+
+        return matches
+    except Exception:
+        app.logger.exception("get_timetable_today failed")
+        return []
+
 # Ensure sqlite local DB and tables exist (subscriptions + notifications)
 def _init_local_db():
     try:

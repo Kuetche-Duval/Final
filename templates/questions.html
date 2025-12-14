@@ -1,21 +1,19 @@
-{# templates/questions.html — Part 1/2 #}
+{# QUESTIONS.HTML - PART 1/4 - head + new question form #}
 {% extends 'base.html' %}
-
 {% block title %}Ask a Question{% endblock %}
 
 {% block styles %}
 <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
 <style>
-  :root{ --bg:#f6f8fb; --card-bg:#ffffff; --text:#0b1220; --muted:#6b7280; --accent-green:#25d366; --card-radius:12px; }
-  [data-theme="dark"]{ --bg:#08101a; --card-bg:#071019; --text:#e6eef8; --muted:#98a0b3; }
-  body{ background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
-  .card{ background:var(--card-bg); border-radius:var(--card-radius); box-shadow:0 6px 20px rgba(3,3,3,0.06); padding:14px; }
-  .question-list{ list-style:none; padding:0; margin:0; display:grid; gap:10px; }
-  .question-item{ display:flex; gap:12px; align-items:flex-start; justify-content:space-between; padding:12px 14px; border-radius:12px; background: rgba(0,0,0,0.02); cursor:pointer; min-width:0; }
-  .category-badge{ background: rgba(37,211,102,0.12); color: var(--accent-green); padding:4px 8px; border-radius:10px; font-weight:700; font-size:.86rem; white-space:nowrap; }
-  .subscribe-btn{ background:#fff3cd; border:1px solid #ffeeba; color:#856404; min-width:120px; }
-  .subscribe-btn.subscribed{ background:#d4edda; border-color:#c3e6cb; color:#155724; box-shadow:0 0 12px rgba(37,211,102,0.16); }
-  .meta-right{ min-width:80px; text-align:right; white-space:nowrap; color:var(--muted); font-size:.85rem; }
+:root{--bg:#f6f8fb;--card-bg:#fff;--text:#0b1220;--muted:#6b7280;--accent:#25d366}
+body{background:var(--bg);color:var(--text)}
+.card{background:var(--card-bg);padding:14px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.06)}
+.question-list{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.question-item{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:12px 14px;border-radius:12px;background:rgba(0,0,0,0.02);cursor:pointer;min-width:0}
+.category-badge{background:rgba(37,211,102,0.12);color:var(--accent);padding:4px 8px;border-radius:10px;font-weight:700;font-size:.86rem;white-space:nowrap}
+.subscribe-btn{background:#fff3cd;border:1px solid #ffeeba;color:#856404;padding:6px 10px;border-radius:8px}
+.subscribe-btn.subscribed{background:#d4edda;border-color:#c3e6cb;color:#155724;box-shadow:0 0 12px rgba(37,211,102,0.16)}
+.small-link{font-size:.85rem;color:var(--accent);text-decoration:underline;cursor:pointer}
 </style>
 {% endblock %}
 
@@ -24,25 +22,21 @@
   <div class="card">
     <div class="d-flex justify-content-between align-items-center mb-3">
       <div><strong>💬 Ask & Answer Questions</strong></div>
-      <div class="d-flex gap-2 align-items-center">
-        <button id="theme-toggle" class="btn btn-sm btn-outline-secondary" type="button">Toggle theme</button>
-        <div class="small text-muted">Newton's Nerds</div>
-      </div>
+      <div class="small text-muted">Newton's Nerds</div>
     </div>
 
-    <!-- New Question Form -->
     <form id="new-question-form" method="POST" action="{{ url_for('questions_page') }}" class="mb-4" novalidate>
       <div class="row g-2">
         <div class="col-md-4">
-          <label for="name" class="form-label small">Your name (optional)</label>
-          <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous" autocomplete="name" value="{{ request.cookies.get('nn_user','') }}">
+          <label class="form-label small">Your name (optional)</label>
+          <input type="text" class="form-control" id="name" name="name" placeholder="Anonymous" autocomplete="name">
         </div>
         <div class="col-md-4">
-          <label for="category" class="form-label small">Category</label>
+          <label class="form-label small">Category</label>
           <select class="form-select" id="category" name="category" required>
             <option value="">-- Select Category --</option>
             {% for c in categories %}
-              <option value="{{ c|e }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
+              <option value="{{ c|e }}">{{ c }}</option>
             {% endfor %}
           </select>
         </div>
@@ -52,20 +46,18 @@
       </div>
 
       <div class="mb-3 mt-2">
-        <label for="question" class="form-label small">Your Question</label>
+        <label class="form-label small">Your Question</label>
         <textarea class="form-control" id="question" name="question" rows="3" required></textarea>
       </div>
 
       <div class="mb-3">
-        <label for="attempt" class="form-label small">Your Attempt (required)</label>
+        <label class="form-label small">Your Attempt (required)</label>
         <textarea class="form-control" id="attempt" name="attempt" rows="3" required></textarea>
-        <div class="form-text small text-muted">You must provide your attempt before submitting the question.</div>
+        <div class="form-text small text-muted">You must provide your attempt before submitting.</div>
       </div>
     </form>
-
+{# QUESTIONS.HTML - PART 2/4 - filters + questions list #}
     <hr>
-
-    <!-- Filter + sort -->
     <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
       <div class="d-flex align-items-center gap-2">
         <label class="small mb-0">📂 Filter:</label>
@@ -78,7 +70,6 @@
           </select>
         </div>
       </div>
-
       <div class="ms-auto d-flex gap-2 align-items-center">
         <input id="searchBox" class="form-control form-control-sm" placeholder="Search questions..." style="min-width:200px;">
         <select id="sortSelect" class="form-select form-select-sm" style="width:170px">
@@ -89,7 +80,6 @@
       </div>
     </div>
 
-    <!-- Questions list -->
     <ul class="question-list" id="questionsList" aria-live="polite">
       {% for q in questions %}
         {% set cat = q[0] if q|length > 0 else "Other" %}
@@ -103,29 +93,29 @@
             data-question="{{ text|e }}"
             data-attempt="{{ attempt|e }}"
             data-time="{{ timestr|e }}">
-          <div class="left">
-            <div class="d-flex justify-content-between align-items-start mb-1 meta-row">
+          <div class="left" style="min-width:0">
+            <div style="display:flex;justify-content:space-between;align-items:start">
               <div style="display:flex;gap:8px;align-items:center;min-width:0">
                 <div class="category-badge">{{ cat }}</div>
                 <div class="author" title="{{ author }}">{{ author }}</div>
               </div>
-              <div class="meta-right small text-muted">{{ timestr }}</div>
+              <div class="small text-muted">{{ timestr }}</div>
             </div>
 
             <div class="message-text">{{ text }}</div>
 
-            <div class="op-attempt" aria-hidden="false">
+            <div class="op-attempt mt-2" style="background:rgba(0,0,0,0.02);padding:8px;border-radius:8px;">
               <small>OP's attempt</small>
               <div class="op-attempt-short">{{ attempt[:180] }}{% if attempt|length > 180 %}…{% endif %}</div>
               {% if attempt|length > 180 %}
-                <button class="tiny-link show-full-attempt" type="button">Show full attempt</button>
+                <button class="small-link show-full-attempt" type="button">Show full attempt</button>
               {% endif %}
-              <div class="op-attempt-full" style="display:none; margin-top:8px;">{{ attempt }}</div>
+              <div class="op-attempt-full" style="display:none;margin-top:8px;">{{ attempt }}</div>
             </div>
 
-            <div class="answer-panel mt-2" aria-hidden="true">
+            <div class="answer-panel mt-2" style="display:block;">
               <div class="mb-2">
-                <label class="form-label small">Your answer (you'll send it to the community)</label>
+                <label class="form-label small">Your answer</label>
                 <textarea class="form-control answer-text" rows="3" placeholder="Write your short answer here..."></textarea>
               </div>
 
@@ -136,19 +126,14 @@
                   <button class="btn btn-outline-secondary btn-sub" disabled>Community not set</button>
                 {% endif %}
 
-                <button class="btn btn-outline-warning btn-sub subscribe-btn" data-subject="{{ cat }}" data-state="none" type="button">🔔 Subscribe</button>
+                <button class="btn subscribe-btn" data-subject="{{ cat }}" data-state="none" type="button">🔔 Subscribe</button>
 
                 <button class="btn btn-primary btn-sub copy-answer" type="button">Copy answer</button>
                 <button class="btn btn-info btn-sub share-whatsapp" type="button">Share to WhatsApp</button>
               </div>
-
-              <div class="form-text small text-muted mt-2">Tip: open the community link, paste your answer and send it in the group. The app cannot securely post into WhatsApp groups for you.</div>
             </div>
           </div>
-
-          <div style="min-width:80px; text-align:right" class="meta-right-small">
-            <div class="small text-muted">Asked by {{ author }}</div>
-          </div>
+          <div style="min-width:80px;text-align:right;color:var(--muted)"><div class="small text-muted">Asked by {{ author }}</div></div>
         </li>
       {% endfor %}
     </ul>
@@ -157,284 +142,197 @@
 
 <script type="application/json" id="communityLinksData">{{ community_links|tojson }}</script>
 <script type="application/json" id="vapidKeyData">{{ vapid_public_key|tojson }}</script>
-{% endblock %}
+{# QUESTIONS.HTML - PART 3/4 - scripts (subscribe logic & UI sync) #}
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const communityLinksEl = document.getElementById('communityLinksData');
   const vapidEl = document.getElementById('vapidKeyData');
-  let communityLinks = {};
-  let vapidPublicKey = "";
-  try { communityLinks = communityLinksEl ? JSON.parse(communityLinksEl.textContent || '{}') : {}; } catch(e){ communityLinks = {}; console.error(e); }
-  try { vapidPublicKey = vapidEl ? JSON.parse(vapidEl.textContent || '""') : ""; } catch(e){ vapidPublicKey = ""; console.error(e); }
+  let communityLinks = {}; let vapidPublicKey = "";
+  try { communityLinks = communityLinksEl ? JSON.parse(communityLinksEl.textContent||'{}') : {}; } catch(e){ communityLinks={}; }
+  try { vapidPublicKey = vapidEl ? JSON.parse(vapidEl.textContent||'""') : ""; } catch(e){ vapidPublicKey=""; }
 
-  function getCookie(name) {
-    const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-    return m ? decodeURIComponent(m.pop()) : null;
-  }
-  function setCookie(name, value, days=365) {
-    const maxAge = days * 24 * 60 * 60;
-    const secure = location.protocol === 'https:';
-    document.cookie = name + '=' + encodeURIComponent(value || '') +
-      '; max-age=' + maxAge +
-      '; path=/' +
-      '; samesite=Lax' +
-      (secure ? '; Secure' : '');
-  }
-  function deleteCookie(name) {
-    document.cookie = name + '=; path=/; max-age=0; samesite=Lax';
-  }
+  function getCookie(name){ const m=document.cookie.match('(^|;)\\s*'+name+'\\s*=\\s*([^;]+)'); return m? decodeURIComponent(m.pop()): null; }
+  function setCookie(name,value,days=365){ const maxAge=days*24*60*60; const secure = location.protocol==='https:'; document.cookie = name + '=' + encodeURIComponent(value||'') + '; max-age=' + maxAge + '; path=/; samesite=Lax' + (secure?'; Secure':''); }
+  function deleteCookie(name){ document.cookie = name+'=; path=/; max-age=0; samesite=Lax'; }
 
-  // Prefill form from cookies/localStorage
-  const nameInput = document.getElementById('name');
-  try {
-    const stored = getCookie('nn_user');
-    if (nameInput && stored) nameInput.value = stored;
-    const lastCategory = getCookie('nn_last_category');
-    if (lastCategory) {
-      const sel = document.getElementById('category');
-      if (sel) {
-        for (const opt of sel.options) {
-          if (opt.value === lastCategory) { opt.selected = true; break; }
-        }
-      }
-    }
-  } catch(e){}
-
-  // Toggle answer panel & expand attempt
-  document.querySelectorAll('.question-item').forEach(item => {
-    item.addEventListener('click', (e) => {
-      const tag = (e.target && e.target.tagName) || '';
-      if (['BUTTON','A','TEXTAREA','INPUT','SELECT','LABEL'].includes(tag)) return;
-      const panel = item.querySelector('.answer-panel');
-      if (!panel) return;
-      const isVisible = panel.style.display === 'block';
-      panel.style.display = isVisible ? 'none' : 'block';
-      panel.setAttribute('aria-hidden', String(isVisible));
+  // Expand attempt
+  document.querySelectorAll('.show-full-attempt').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      const item = btn.closest('.question-item'); const full = item.querySelector('.op-attempt-full'); const short = item.querySelector('.op-attempt-short');
+      if(!full || !short) return;
+      if(full.style.display==='none' || !full.style.display){ full.style.display='block'; short.style.display='none'; btn.textContent='Hide full attempt'; }
+      else{ full.style.display='none'; short.style.display=''; btn.textContent='Show full attempt'; }
     });
   });
 
-  document.querySelectorAll('.show-full-attempt').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      const item = btn.closest('.question-item');
-      const full = item.querySelector('.op-attempt-full');
-      const short = item.querySelector('.op-attempt-short');
-      if (!full || !short) return;
-      if (full.style.display === 'none' || !full.style.display) {
-        full.style.display = 'block'; short.style.display = 'none'; btn.textContent = 'Hide full attempt';
-      } else {
-        full.style.display = 'none'; short.style.display = ''; btn.textContent = 'Show full attempt';
-      }
-    });
-  });
+  // Copy and WhatsApp
+  document.querySelectorAll('.copy-answer').forEach(btn=> btn.addEventListener('click', async e=>{
+    const item = btn.closest('.question-item'); const answerEl = item.querySelector('.answer-text'); const answer = (answerEl && (answerEl.value||'')) || '';
+    if(!navigator.clipboard){ if(answerEl){ answerEl.select(); document.execCommand('copy'); alert('Copied (fallback)'); } else alert('Copy failed'); return; }
+    try{ await navigator.clipboard.writeText(answer); const old = btn.textContent; btn.textContent='Copied ✓'; setTimeout(()=>btn.textContent=old,1500); } catch { alert('Copy failed'); }
+  }));
 
-  // copy & whatsapp
-  document.querySelectorAll('.copy-answer').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const item = btn.closest('.question-item');
-      const answerEl = item.querySelector('.answer-text');
-      const answer = (answerEl && (answerEl.value ?? answerEl.textContent ?? '')) || '';
-      try {
-        await navigator.clipboard.writeText(answer);
-        const old = btn.textContent;
-        btn.textContent = 'Copied ✓';
-        setTimeout(() => btn.textContent = old, 1500);
-      } catch {
-        alert('Copy failed — please select & copy manually.');
-      }
-    });
-  });
+  document.querySelectorAll('.share-whatsapp').forEach(btn=> btn.addEventListener('click', e=>{
+    const item=btn.closest('.question-item'); if(!item) return; const answer=(item.querySelector('.answer-text')?.value||'').trim(); const subject=item.dataset.category||''; const group=communityLinks[subject]||'';
+    let text = answer || ''; if(group) text += (text? "\n\n":"") + "Group: "+group;
+    const url = 'https://api.whatsapp.com/send?text=' + encodeURIComponent(text || '(no text)');
+    window.open(url, '_blank');
+  }));
 
-  document.querySelectorAll('.share-whatsapp').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      const item = btn.closest('.question-item'); if(!item) return;
-      const answer = (item.querySelector('.answer-text')?.value || '').trim();
-      const subject = item.dataset?.category || '';
-      const group = communityLinks[subject] || '';
-      let text = answer || '';
-      if (group) text += (text ? "\n\n" : "") + "Group: " + group;
-      const url = 'https://api.whatsapp.com/send?text=' + encodeURIComponent(text || '(no text)');
-      window.open(url, '_blank');
-    });
-  });
+  // Filter/sort/search
+  const categoryFilter = document.getElementById('categoryFilter'); if(categoryFilter) categoryFilter.addEventListener('change', ()=>{ const val = encodeURIComponent(categoryFilter.value||''); const base="{{ url_for('questions_page') }}"; window.location.href = val? `${base}?categoryFilter=${val}`: base; });
+  const searchBox = document.getElementById('searchBox'); const list = document.getElementById('questionsList');
+  if(searchBox) searchBox.addEventListener('input', ()=>{ const q = (searchBox.value||'').toLowerCase(); Array.from(list.children).forEach(li=>{ const txt = ((li.dataset.question||'') + ' ' + (li.dataset.author||'') + ' ' + (li.dataset.category||'') + ' ' + (li.dataset.attempt||'')).toLowerCase(); li.style.display = txt.includes(q)? '': 'none'; }); });
 
-  // Theme toggle
-  const themeToggle = document.getElementById('theme-toggle');
-  function applyTheme(theme) {
-    if (theme) document.documentElement.setAttribute('data-theme', theme);
-    else document.documentElement.removeAttribute('data-theme');
-    localStorage.setItem('site-theme', theme || '');
-  }
-  if (themeToggle) {
-    themeToggle.addEventListener('click', () => {
-      const cur = localStorage.getItem('site-theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-      applyTheme(cur === 'dark' ? 'light' : 'dark');
-    });
-  }
-  const saved = localStorage.getItem('site-theme'); if (saved) applyTheme(saved);
+  // Theme toggle persistence (simple)
+  const saved = localStorage.getItem('site-theme'); if(saved) document.documentElement.setAttribute('data-theme', saved);
 
-  // Filter & sort (client side or server)
-  const categoryFilter = document.getElementById('categoryFilter');
-  if (categoryFilter) categoryFilter.addEventListener('change', () => {
-    const val = encodeURIComponent(categoryFilter.value || '');
-    const base = "{{ url_for('questions_page') }}";
-    window.location.href = val ? `${base}?categoryFilter=${val}` : base;
-  });
-/* --- Push / subscribe management --- */
-  function urlBase64ToUint8Array(base64String) {
-    if (!base64String) return null;
-    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-    const rawData = window.atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-    return outputArray;
-  }
-
-  document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Initializing…'; });
+  // ------------------ PUSH: service worker & subscription management ------------------
+  const subscribeButtons = document.querySelectorAll('.subscribe-btn');
+  subscribeButtons.forEach(b => { b.disabled = true; b.title = 'Initializing...' });
 
   let registrationForPush = null;
   let currentSubscription = null;
   let serverSubjectsForEndpoint = [];
 
-  async function initServiceWorkerAndSubscription() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = true; b.title = 'Notifications not supported'; });
-      return;
-    }
-    try {
-      registrationForPush = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
-      try { await registrationForPush.update(); } catch(e){ }
-      await navigator.serviceWorker.ready;
-      try { currentSubscription = await registrationForPush.pushManager.getSubscription(); } catch(e){ currentSubscription = null; }
-      const savedEndpoint = getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint');
-      if (currentSubscription && currentSubscription.endpoint) {
-        serverSubjectsForEndpoint = await checkServerSubjects(currentSubscription.endpoint) || [];
-      } else if (savedEndpoint) {
-        serverSubjectsForEndpoint = await checkServerSubjects(savedEndpoint) || [];
-      }
-      updateSubscribeButtonsUI();
-    } catch (err) {
-      console.error('SW init failed', err);
-      document.querySelectorAll('.subscribe-btn').forEach(b => { b.disabled = false; b.title = 'Subscription init error'; });
-    }
+  function urlBase64ToUint8Array(base64String) {
+    if(!base64String) return null;
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g,'+').replace(/_/g,'/');
+    const rawData = window.atob(base64); const outputArray = new Uint8Array(rawData.length);
+    for(let i=0;i<rawData.length;++i) outputArray[i]=rawData.charCodeAt(i);
+    return outputArray;
   }
 
-  function updateSubscribeButtonsUI() {
-    document.querySelectorAll('.subscribe-btn').forEach(btn => {
-      const subjRaw = (btn.dataset.subject || '').trim();
-      const subscribed = currentSubscription && serverSubjectsForEndpoint.map(s=>s.toLowerCase()).includes(subjRaw.toLowerCase());
-      btn.disabled = false;
+  async function updateSubscribeButtonsUI(){
+    document.querySelectorAll('.subscribe-btn').forEach(btn=>{
+      const subjRaw = (btn.dataset.subject||'').trim();
+      const subj = subjRaw.toLowerCase();
+      const subscribed = currentSubscription && serverSubjectsForEndpoint.includes(subj);
+      btn.disabled=false;
       btn.title = subscribed ? `Unsubscribe from ${subjRaw}` : `Subscribe to ${subjRaw}`;
-      if (subscribed) {
-        btn.textContent = 'Subscribed ✓';
-        btn.classList.add('subscribed');
-        btn.dataset.state = 'subscribed';
-      } else {
-        btn.textContent = '🔔 Subscribe';
-        btn.classList.remove('subscribed');
-        btn.dataset.state = 'none';
-      }
+      if(subscribed){ btn.textContent='Subscribed ✓'; btn.classList.add('subscribed'); btn.dataset.state='subscribed'; }
+      else { btn.textContent='🔔 Subscribe'; btn.classList.remove('subscribed'); btn.dataset.state='none'; }
     });
   }
 
-  async function checkServerSubjects(endpoint) {
-    try {
-      const res = await fetch(`/subscriptions/check?endpoint=${encodeURIComponent(endpoint)}`);
-      if (!res.ok) return [];
-      const j = await res.json();
-      return (j && j.subjects) ? j.subjects : [];
-    } catch (e) { console.error(e); return []; }
-  }
-
-  async function subscribeToSubject(subj, btn) {
-    if (!registrationForPush) {
-      alert('Service worker not ready. Try again.');
-      return;
-    }
-    try {
-      let sub = currentSubscription;
-      if (!sub) {
-        let pub = vapidPublicKey || '';
-        if (!pub) {
-          try { const r = await fetch('/api/vapid'); const jr = await r.json(); pub = jr.publicKey || ''; } catch(e){}
-        }
-        const key = urlBase64ToUint8Array(pub);
-        sub = await registrationForPush.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-        currentSubscription = sub;
-        if (sub && sub.endpoint) {
-          setCookie('nn_subscription', sub.endpoint, 365);
-          localStorage.setItem('subscriptionEndpoint', sub.endpoint);
-        }
-      }
-      const payload = { subscription: sub.toJSON ? sub.toJSON() : sub, subject: subj };
-      const res = await fetch('/save-subscription', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      const j = await res.json();
-      if (j && j.ok) {
-        serverSubjectsForEndpoint = j.subjects || [];
-        updateSubscribeButtonsUI();
-        btn.textContent = 'Subscribed ✓';
-        btn.classList.add('subscribed');
-      } else {
-        alert('Could not save subscription: ' + (j && j.error ? j.error : 'server error'));
-      }
-    } catch (e) {
-      console.error('subscribe error', e);
-      alert('Subscription failed: ' + (e && e.message ? e.message : e));
-    }
-  }
-
-  async function unsubscribeFromSubject(subj, btn) {
-    try {
-      const endpoint = currentSubscription && currentSubscription.endpoint ? currentSubscription.endpoint : (getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint'));
-      if (!endpoint) {
-        alert('No subscription found to unsubscribe.');
-        return;
-      }
-      const res = await fetch('/subscriptions/delete', {
-        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ endpoint })
-      });
-      const j = await res.json();
-      if (j && j.ok) {
-        try {
-          if (currentSubscription && currentSubscription.unsubscribe) await currentSubscription.unsubscribe();
-          else {
-            const s = await registrationForPush.pushManager.getSubscription();
-            if (s && s.unsubscribe) await s.unsubscribe();
+  async function initServiceWorkerAndSubscription(){
+    if(!('serviceWorker' in navigator) || !('PushManager' in window)){ document.querySelectorAll('.subscribe-btn').forEach(b=>{ b.disabled=true; b.title='Notifications not supported' }); return; }
+    try{
+      registrationForPush = await navigator.serviceWorker.register('/service-worker.js', {scope:'/'});
+      await navigator.serviceWorker.ready;
+      try{ currentSubscription = await registrationForPush.pushManager.getSubscription(); } catch(e){ currentSubscription = null; }
+      // rehydrate server subjects if we have an endpoint cookie or subscription
+      const savedEndpointCookie = getCookie('nn_subscription');
+      const savedEndpointLS = localStorage.getItem('subscriptionEndpoint');
+      const endpointToCheck = (currentSubscription && currentSubscription.endpoint) || savedEndpointCookie || savedEndpointLS || "";
+      if(endpointToCheck){
+        try{
+          const resp = await fetch(`{{ url_for('subscriptions_check') }}?endpoint=${encodeURIComponent(endpointToCheck)}`);
+          if(resp && resp.ok){
+            const body = await resp.json();
+            if(body.ok && Array.isArray(body.subjects)){ serverSubjectsForEndpoint = body.subjects.map(s=>s.toLowerCase()); }
           }
-        } catch (e) { console.warn('Local unsubscribe failed', e); }
-        deleteCookie('nn_subscription'); localStorage.removeItem('subscriptionEndpoint');
-        currentSubscription = null; serverSubjectsForEndpoint = [];
-        updateSubscribeButtonsUI();
-      } else alert('Unsubscribe failed on server.');
-    } catch (e) { console.error(e); alert('Unsubscribe error.'); }
+        } catch(e){ console.error("subscriptions_check failed", e) }
+      }
+      updateSubscribeButtonsUI();
+    } catch (e){
+      console.error("SW init failed", e);
+      document.querySelectorAll('.subscribe-btn').forEach(b=>{ b.disabled=false; b.title='Click to subscribe (init error)' });
+    }
   }
 
-  document.querySelectorAll('.subscribe-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      const subj = (btn.dataset.subject || 'Other').trim();
-      btn.disabled = true;
-      try {
-        await initServiceWorkerAndSubscription(); // ensure ready
-        const state = btn.dataset.state || 'none';
-        if (state === 'subscribed') await unsubscribeFromSubject(subj, btn);
-        else await subscribeToSubject(subj, btn);
-      } catch (err) {
-        console.error(err);
-        alert('Subscribe action failed.');
-      } finally {
-        btn.disabled = false;
+  // call initialization immediately
+  initServiceWorkerAndSubscription();
+
+  // Subscribe/unsubscribe handler
+  async function subscribeToSubject(btn, subject){
+    btn.disabled=true;
+    try{
+      if(!registrationForPush) registrationForPush = await navigator.serviceWorker.register('/service-worker.js', {scope:'/'});
+      // get or create subscription
+      currentSubscription = await registrationForPush.pushManager.getSubscription();
+      if(!currentSubscription){
+        const options = vapidPublicKey ? {userVisibleOnly:true, applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)} : {userVisibleOnly:true};
+        currentSubscription = await registrationForPush.pushManager.subscribe(options);
       }
+      // send subscription + subject to server
+      const payload = { subscription: currentSubscription.toJSON ? currentSubscription.toJSON() : currentSubscription, subject: subject };
+      const resp = await fetch("{{ url_for('save_subscription_route') }}", { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      const data = await resp.json();
+      if(resp.ok && data.ok){
+        // update local serverSubjectsForEndpoint
+        serverSubjectsForEndpoint = (data.subjects || []).map(s=>s.toLowerCase());
+        localStorage.setItem('subscriptionEndpoint', currentSubscription.endpoint || '');
+        setCookie('nn_subscription', currentSubscription.endpoint || '');
+        updateSubscribeButtonsUI();
+      } else {
+        console.error("save-subscription failed", data);
+        alert("Could not save subscription (server).");
+      }
+    } catch (e){
+      console.error("subscribe error", e);
+      alert("Subscription failed: " + (e && e.message ? e.message : e));
+    } finally { btn.disabled=false; }
+  }
+
+  async function unsubscribeFromSubject(btn, subject){
+    btn.disabled=true;
+    try{
+      // find endpoint
+      let sub = currentSubscription;
+      if(!sub){
+        // try cookie endpoint
+        const ep = getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint') || "";
+        if(!ep){ btn.disabled=false; return; }
+        // send delete request to server by endpoint and subject removal will be global
+        const resp = await fetch("{{ url_for('subscriptions_delete') }}", { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({endpoint: ep}) });
+        const data = await resp.json();
+        if(resp.ok && data.ok){
+          serverSubjectsForEndpoint = []; localStorage.removeItem('subscriptionEndpoint'); deleteCookie('nn_subscription'); updateSubscribeButtonsUI();
+        }
+        btn.disabled=false; return;
+      }
+      // Unsubscribe pushManager subscription entirely (client-side)
+      try { await sub.unsubscribe(); } catch (e){ console.warn("unsubscribe client-side failed", e); }
+      // Tell server to delete any rows for this endpoint
+      try {
+        const resp2 = await fetch("{{ url_for('subscriptions_delete') }}", { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({endpoint: sub.endpoint}) });
+        const data2 = await resp2.json();
+        serverSubjectsForEndpoint = [];
+        localStorage.removeItem('subscriptionEndpoint'); deleteCookie('nn_subscription'); updateSubscribeButtonsUI();
+      } catch(e){ console.error("server delete failed", e); }
+    } catch (e){
+      console.error("unsubscribe error", e);
+      alert("Unsubscribe failed");
+    } finally { btn.disabled=false; }
+  }
+
+  // wire up subscribe buttons
+  document.querySelectorAll('.subscribe-btn').forEach(btn=>{
+    btn.addEventListener('click', async e=>{
+      e.preventDefault();
+      const subject = (btn.dataset.subject||'').trim();
+      if(!subject){ alert('Subject not found'); return; }
+      const state = btn.dataset.state || 'none';
+      if(state === 'subscribed') await unsubscribeFromSubject(btn, subject);
+      else await subscribeToSubject(btn, subject);
     });
   });
 
-  // final init
-  initServiceWorkerAndSubscription().catch(e => console.error(e));
-});
+  // make sure buttons reflect server state after actions
+  window.addEventListener('focus', async ()=>{ try{ const ep = getCookie('nn_subscription') || localStorage.getItem('subscriptionEndpoint') || ""; if(ep){ const resp = await fetch(`{{ url_for('subscriptions_check') }}?endpoint=${encodeURIComponent(ep)}`); if(resp.ok){ const d = await resp.json(); serverSubjectsForEndpoint = (d.subjects||[]).map(s=>s.toLowerCase()); updateSubscribeButtonsUI(); } } } catch(e){} });
+
+}); // DOMContentLoaded end
+</script>
+{% endblock %}
+{# QUESTIONS.HTML - PART 4/4 - SW registration & small helpers #}
+<script>
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/service-worker.js', {scope: '/'})
+    .then(()=>console.log('Service Worker registered'))
+    .catch(e=>console.warn('SW register failed', e));
+}
 </script>
 {% endblock %}

@@ -1,21 +1,32 @@
-# app.py — PART 1/5
+# app.py — PART 1/4
+"""
+Full app.py (part 1/4)
+
+Notes:
+ - Paste parts 1..4 into a single file app.py
+ - Required directories: templates/, static/, data/ (the app will create data/)
+ - Optional: sheets.py (with functions used in your previous code)
+ - Optional env vars:
+    FLASK_SECRET_KEY, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT,
+    ADMIN_KEY, EXERCISES_ADMIN_KEY, QUESTIONS_SUBSCRIPTION_KEY, QUESTIONS_SHEET_KEY,
+    TIMETABLE_SHEET_KEY, GROUP_RULES_SHEET_KEY, CODING_EXERCISES_PATH, CODING_EXERCISES_DRIVE_FILE_ID,
+    NN_LOCAL_DB
+"""
 import os
+import re
 import json
 import time
-import base64
 import logging
 import traceback
-import re
 import sqlite3
-import binascii
-import random
+import base64
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 from flask import (
     Flask, render_template, request, redirect, url_for, flash,
-    jsonify, send_from_directory, Response, make_response
+    jsonify, send_from_directory, make_response, abort
 )
 from dotenv import load_dotenv
 
@@ -28,24 +39,34 @@ except Exception:
     WebPushException = Exception
     PYWEBPUSH_AVAILABLE = False
 
-# optional requests for drive image proxy
+# optional requests for drive image proxy / fetching drive content
 try:
     import requests
 except Exception:
     requests = None
 
-# Load env
+# Load environment variables from .env if present
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
-app = Flask(__name__, static_folder="static", template_folder="templates")
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24)
 
-# Constants / config
+# App init
+app = Flask(__name__, static_folder="static", template_folder="templates")
+_secret = os.environ.get("FLASK_SECRET_KEY")
+if _secret:
+    app.secret_key = _secret
+else:
+    # ensure string type
+    app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
+
+# logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("nn_app")
+
+# Constants / config (safe defaults)
 FOOTER_MESSAGE = os.environ.get("FOOTER_MESSAGE", "Love one another ❤")
 STATIC_CATEGORIES = ["Mathematics", "Biology", "Computer Science", "Further Mathematics", "Chemistry", "Physics", "Coding", "Other"]
 COOKIE_MAX_AGE = 365 * 24 * 60 * 60
 
-# Service account (allow base64)
+# Service account support (base64 or path)
 SERVICE_ACCOUNT_B64 = os.environ.get("SERVICE_ACCOUNT_JSON_B64")
 SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_account.json")
 if SERVICE_ACCOUNT_B64:
@@ -63,53 +84,60 @@ if SERVICE_ACCOUNT_B64:
         app.logger.exception("Failed to write service account JSON from env.")
 
 # VAPID config for web push
-VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "").strip()
-VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
-VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com")
+VAPID_PUBLIC_KEY = (os.environ.get("VAPID_PUBLIC_KEY") or "").strip()
+VAPID_PRIVATE_KEY = (os.environ.get("VAPID_PRIVATE_KEY") or "").strip()
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com").strip()
+
+if not (VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY):
+    logger.warning("VAPID keys not set — push sending disabled until both keys are provided.")
 
 # Admin keys
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 EXERCISES_ADMIN_KEY = os.environ.get("EXERCISES_ADMIN_KEY", ADMIN_KEY)
 
-# Sheets keys (if you want to store subscriptions in a dedicated sheet)
-QUESTIONS_SUBSCRIPTION_KEY = os.environ.get("QUESTIONS_SUBSCRIPTION_KEY", "").strip()
-QUESTIONS_SHEET_KEY = os.environ.get("QUESTIONS_SHEET_KEY", "").strip()
-TIMETABLE_SHEET_KEY = os.environ.get("TIMETABLE_SHEET_KEY", "").strip()
-GROUP_RULES_SHEET_KEY = os.environ.get("GROUP_RULES_SHEET_KEY", "").strip()
+# Sheets keys (optional)
+QUESTIONS_SUBSCRIPTION_KEY = (os.environ.get("QUESTIONS_SUBSCRIPTION_KEY") or "").strip()
+QUESTIONS_SHEET_KEY = (os.environ.get("QUESTIONS_SHEET_KEY") or "").strip()
+TIMETABLE_SHEET_KEY = (os.environ.get("TIMETABLE_SHEET_KEY") or "").strip()
+GROUP_RULES_SHEET_KEY = (os.environ.get("GROUP_RULES_SHEET_KEY") or "").strip()
 
-# Coding exercises files
+# coding exercises config
 CODING_LOCAL_PATH = os.environ.get("CODING_EXERCISES_PATH", "coding_exercises.json")
-CODING_DRIVE_FILE_ID = os.environ.get("CODING_EXERCISES_DRIVE_FILE_ID", "").strip()
+CODING_DRIVE_FILE_ID = (os.environ.get("CODING_EXERCISES_DRIVE_FILE_ID") or "").strip()
 
-# Local SQLite DB path (fallback)
+# Local SQLite DB path (fallback / local persistent store)
 NN_LOCAL_DB = os.environ.get("NN_LOCAL_DB", "nn_local.db")
-DB_PATH = Path(NN_LOCAL_DB)
+DB_PATH = Path(NN_LOCAL_DB).resolve()
 
-# Optional external modules: sheets.py and drive.py (we'll detect gracefully)
+# data dir for JSON fallbacks
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True, parents=True)
+
+# Optional external modules: sheets.py (if provided)
 SHEETS_AVAILABLE = False
+sheets_mod = None
 try:
-    import sheets as sheets_mod
-    # check that functions we need exist
+    import sheets as sheets_mod_candidate
+    sheets_mod = sheets_mod_candidate
+    # check that functions we need exist (best-effort)
     if all(hasattr(sheets_mod, fn) for fn in ("save_subscription", "list_subscriptions", "get_questions", "append_row")):
         SHEETS_AVAILABLE = True
         app.logger.info("sheets.py loaded and will be used for Sheets-backed operations.")
     else:
-        app.logger.warning("sheets.py loaded but missing required functions; will fallback to local sqlite when needed.")
+        app.logger.warning("sheets.py loaded but missing some functions; falling back to local storage where needed.")
         SHEETS_AVAILABLE = False
 except Exception:
     sheets_mod = None
-    app.logger.info("sheets.py not available — using local sqlite fallback for subscriptions/notifications.")
-# app.py — PART 2/5 (local DB init, helpers)
+    SHEETS_AVAILABLE = False
+    app.logger.debug("sheets.py not available; using SQLite / local JSON fallback.")
+
+# ensure sqlite DB created
 def _init_local_db():
     try:
-        if not DB_PATH.parent.exists():
-            try:
-                DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(DB_PATH))
         c = conn.cursor()
-        # subscriptions table: endpoint unique
+        # subscriptions table
         c.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (
                 endpoint TEXT PRIMARY KEY,
@@ -121,7 +149,7 @@ def _init_local_db():
                 created_at TEXT
             )
         """)
-        # notifications queue
+        # notifications persistence
         c.execute("""
             CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,7 +172,7 @@ def _init_local_db():
 
 _init_local_db()
 
-# Utilities
+# small helpers
 def normalize_endpoint(endpoint: str) -> str:
     if not endpoint:
         return ""
@@ -163,59 +191,82 @@ def _is_valid_subscription_obj(sub):
     ep = sub.get("endpoint") or sub.get("url")
     if not ep or not isinstance(ep, str):
         return False
-    # keys optionally present
     return True
 
 def _normalize_subject(s):
     return (s or "Other").strip()
-# app.py — PART 3/5 (sheet/local save/list helpers)
-# Save a subscription preferentially to the subscription sheet if configured and available,
-# otherwise to local sqlite.
+# app.py — PART 2/4
+# Subscription storage helpers (Sheets preferred, SQLite fallback)
+
 def _save_subscription(subject, client_id, subscription_obj):
+    """
+    Save a subscription. Prefer using sheets_mod.save_subscription when available and
+    QUESTIONS_SUBSCRIPTION_KEY is set. Otherwise upsert into local sqlite subscriptions table.
+    """
     subject = _normalize_subject(subject)
     try:
-        # If sheets are available AND QUESTIONS_SUBSCRIPTION_KEY provided, prefer that path
+        # prefer Sheets if available and configured
         if SHEETS_AVAILABLE and QUESTIONS_SUBSCRIPTION_KEY:
             try:
-                # sheets_mod.save_subscription(subject, client_id, subscription_obj)
-                # We call the sheets helper and let it dedupe as implemented in your sheets.py
                 sheets_mod.save_subscription(subject, client_id, subscription_obj)
                 app.logger.debug("Saved subscription to Sheets for subject %s", subject)
                 return True
             except Exception:
-                app.logger.exception("sheets.save_subscription failed — falling back to local sqlite")
-        # Local fallback: upsert into SQLite
+                app.logger.exception("sheets.save_subscription failed; falling back to sqlite")
+
+        # normalize subscription object
         if isinstance(subscription_obj, str):
             try:
                 subscription_obj = json.loads(subscription_obj)
             except Exception:
                 subscription_obj = {"endpoint": subscription_obj}
+
         endpoint = subscription_obj.get("endpoint")
+        if not endpoint:
+            app.logger.warning("Subscription missing endpoint, skipping save")
+            return False
+
         keys = subscription_obj.get("keys", {}) if isinstance(subscription_obj, dict) else {}
         p256 = keys.get("p256dh", "")
         auth = keys.get("auth", "")
         now = datetime.utcnow().replace(microsecond=0).isoformat()
+
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
+            # REPLACE will insert or overwrite existing endpoint row
             c.execute("""REPLACE INTO subscriptions (endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
-                         VALUES (?,?,?,?,?,?,?)""", (endpoint, subject, client_id or "", p256, auth, json.dumps(subscription_obj), now))
+                         VALUES (?,?,?,?,?,?,?)""",
+                      (endpoint, subject, client_id or "", p256, auth, json.dumps(subscription_obj), now))
             conn.commit()
-        app.logger.debug("Saved subscription to local sqlite for subject %s", subject)
+        app.logger.debug("Saved subscription to local sqlite for subject %s endpoint %s", subject, endpoint)
         return True
     except Exception:
         app.logger.exception("_save_subscription failed")
         return False
 
-# List subscriptions (prefer sheet if configured)
 def _list_subscriptions(subject=None):
+    """
+    Return a list of dicts with keys: subject, client_id, subscription, created_at
+    If sheets is configured, attempt to read from it first.
+    """
     try:
         if SHEETS_AVAILABLE and QUESTIONS_SUBSCRIPTION_KEY:
             try:
-                # sheets_mod.list_subscriptions(subject) expected to return list of dicts
-                return sheets_mod.list_subscriptions(subject)
+                rows = sheets_mod.list_subscriptions(subject)
+                # normalize to expected dict format
+                out = []
+                for r in (rows or []):
+                    if isinstance(r, dict) and r.get("subscription"):
+                        out.append({
+                            "subject": r.get("subject"),
+                            "client_id": r.get("client_id"),
+                            "subscription": r.get("subscription"),
+                            "created_at": r.get("created_at")
+                        })
+                return out
             except Exception:
-                app.logger.exception("sheets.list_subscriptions failed — falling back to sqlite")
-        # local sqlite fallback
+                app.logger.exception("sheets.list_subscriptions failed; falling back to sqlite")
+
         out = []
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
@@ -239,30 +290,30 @@ def _delete_subscriptions_by_endpoint(endpoint):
     try:
         if not endpoint:
             return
-        # Try sheets first if configured
         if SHEETS_AVAILABLE and QUESTIONS_SUBSCRIPTION_KEY:
             try:
                 sheets_mod.delete_subscriptions_by_endpoint(endpoint)
-                app.logger.debug("Deleted subscription from sheet for endpoint %s", endpoint)
+                app.logger.debug("Deleted subscription from sheets for endpoint %s", endpoint)
                 return
             except Exception:
-                app.logger.exception("sheets.delete_subscriptions_by_endpoint failed — falling back to sqlite")
-        # local sqlite delete
+                app.logger.exception("sheets.delete_subscriptions_by_endpoint failed; falling back to sqlite")
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
             c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint, normalize_endpoint(endpoint)))
             conn.commit()
-        app.logger.debug("Deleted subscription(s) from local sqlite for endpoint %s", endpoint)
+        app.logger.debug("Deleted subscription(s) from sqlite for endpoint %s", endpoint)
     except Exception:
         app.logger.exception("_delete_subscriptions_by_endpoint failed")
-# app.py — PART 4/5 (notifications persistence & send helper + endpoints)
+
+# Notifications table persistence helpers
 def save_notification_for_endpoint(endpoint, subject, title, body, data_obj=None):
     try:
         now = datetime.utcnow().replace(microsecond=0).isoformat()
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
             c.execute("""INSERT INTO notifications (endpoint, subject, title, body, data, created_at, delivered)
-                         VALUES (?,?,?,?,?,?,0)""", (endpoint or "", subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
+                         VALUES (?,?,?,?,?,?,0)""",
+                      (endpoint or "", subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
             nid = c.lastrowid
             conn.commit()
         return nid
@@ -271,9 +322,9 @@ def save_notification_for_endpoint(endpoint, subject, title, body, data_obj=None
         return None
 
 def fetch_pending_notifications_for_endpoint(endpoint):
+    if not endpoint:
+        return []
     try:
-        if not endpoint:
-            return []
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
             c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint,))
@@ -310,9 +361,46 @@ def ack_notifications_by_ids(endpoint, ids):
     except Exception:
         app.logger.exception("ack_notifications_by_ids failed")
         return 0
+# app.py — PART 3/4
+# Push sending logic (guarded) + subscription endpoints + notification endpoints
 
-# Send push to all subscribers of a subject (persist + attempt send)
+def _send_push_to_single(sub, payload):
+    """
+    Try to send a push to a single subscription dict using pywebpush.
+    Returns dict describing result. Errors are captured but not raised.
+    """
+    if not PYWEBPUSH_AVAILABLE:
+        return {"ok": False, "error": "pywebpush-not-available"}
+    if not (VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY):
+        return {"ok": False, "error": "vapid-not-configured"}
+
+    if not isinstance(sub, dict):
+        return {"ok": False, "error": "invalid-sub"}
+
+    try:
+        webpush(
+            subscription_info=sub,
+            data=json.dumps(payload),
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims={"sub": VAPID_SUBJECT}
+        )
+        return {"ok": True}
+    except WebPushException as ex:
+        status = None
+        try:
+            resp = getattr(ex, "response", None)
+            status = getattr(resp, "status_code", None) if resp else None
+        except Exception:
+            status = None
+        return {"ok": False, "error": str(ex), "status": status}
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+
 def send_push_to_subject(subject, question_text, attempt_text):
+    """
+    Persist notifications for each subscriber to the subject, then try to deliver
+    if pywebpush+vapid are available. Returns a summary dict.
+    """
     try:
         subs = _list_subscriptions(subject) or []
     except Exception:
@@ -326,38 +414,33 @@ def send_push_to_subject(subject, question_text, attempt_text):
     body = f"Q: {q_preview}\nA: {a_preview}"
     payload_template = {"title": title, "body": body, "url": "/questions", "subject": subject, "preview": {"question": q_preview, "attempt": a_preview}}
 
-    results = []
+    detail = []
     sent = 0
 
-    # persist notifications for each subscription
+    # persist notifications for each subscription row (so client can fetch later if offline)
     for r in subs:
         try:
             sub = r.get("subscription") if isinstance(r, dict) else None
-            if not sub and isinstance(r, dict) and "raw" in r:
-                try:
-                    sub = json.loads(r.get("raw") or "{}")
-                except Exception:
-                    sub = None
             endpoint = sub.get("endpoint") if sub else None
             try:
                 save_notification_for_endpoint(endpoint, subject, payload_template["title"], payload_template["body"], payload_template.get("preview"))
             except Exception:
-                app.logger.debug("Could not persist notification for %s", endpoint)
+                logger.debug("Could not persist notification for %s", endpoint)
         except Exception:
             continue
 
-    # If we cannot send (no pywebpush or VAPID), return persisted result
+    # If sending not available, return persisted info
     if (not PYWEBPUSH_AVAILABLE) or (not VAPID_PRIVATE_KEY):
         for r in subs:
             try:
                 sub = r.get("subscription") if isinstance(r, dict) else None
-                endpoint = sub.get("endpoint") if sub else None
+                ep = sub.get("endpoint") if sub else None
             except Exception:
-                endpoint = None
-            results.append({"endpoint": endpoint, "ok": False, "error": "pywebpush-not-configured"})
-        return {"sent": 0, "errors": ["pywebpush/VAPID not available"], "detail": results}
+                ep = None
+            detail.append({"endpoint": ep, "ok": False, "error": "sending-disabled"})
+        return {"sent": 0, "errors": ["sending-disabled"], "detail": detail}
 
-    # attempt sending
+    # attempt delivery
     for r in subs:
         try:
             sub = r.get("subscription") if isinstance(r, dict) else None
@@ -365,69 +448,65 @@ def send_push_to_subject(subject, question_text, attempt_text):
                 continue
             endpoint = sub.get("endpoint")
             if not endpoint:
-                results.append({"endpoint": None, "ok": False, "error": "no-endpoint"})
+                detail.append({"endpoint": None, "ok": False, "error": "no-endpoint"})
                 continue
 
-            payload = dict(payload_template)
+            # provider specific trimming
             parsed = urlparse(endpoint)
             domain = parsed.netloc.lower() if parsed.netloc else ""
+            payload = dict(payload_template)
             if "windows" in domain or "wns" in domain:
                 payload = {"title": payload_template["title"], "body": (q_preview or a_preview)[:80], "url": "/questions"}
 
-            # trim large payloads
+            # trim very large payloads
             data_bytes = json.dumps(payload).encode("utf-8")
             if len(data_bytes) > 2000:
                 payload["preview"] = None
                 payload["body"] = (payload.get("body","")[:200] + "…")
 
-            attempt = 0
-            while attempt < 2:
-                attempt += 1
-                try:
-                    webpush(subscription_info=sub, data=json.dumps(payload), vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims={"sub": VAPID_SUBJECT})
+            # try up to 2 attempts for transient issues
+            ok = False
+            for attempt in range(2):
+                res = _send_push_to_single(sub, payload)
+                if res.get("ok"):
+                    ok = True
                     sent += 1
-                    results.append({"endpoint": endpoint, "ok": True})
-                    # mark delivered
-                    with sqlite3.connect(str(DB_PATH)) as conn:
-                        c = conn.cursor()
-                        now = datetime.utcnow().replace(microsecond=0).isoformat()
-                        c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint))
-                        conn.commit()
-                    break
-                except WebPushException as ex:
-                    resp = getattr(ex, "response", None)
-                    status = getattr(resp, "status_code", None) if resp else None
-                    body_text = None
+                    detail.append({"endpoint": endpoint, "ok": True})
+                    # mark as delivered in notifications table
                     try:
-                        if resp and hasattr(resp, "content"):
-                            body_text = resp.content.decode("utf-8", errors="ignore")
+                        now = datetime.utcnow().replace(microsecond=0).isoformat()
+                        with sqlite3.connect(str(DB_PATH)) as conn:
+                            c = conn.cursor()
+                            c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint))
+                            conn.commit()
                     except Exception:
-                        body_text = None
-                    err_text = str(ex)
-                    app.logger.warning("WebPushException endpoint=%s status=%s err=%s", endpoint, status, err_text)
-                    if status in (404, 410) or (body_text and "unsubscribed" in body_text.lower()):
+                        logger.exception("Failed marking delivered for %s", endpoint)
+                    break
+                else:
+                    status = res.get("status")
+                    err = res.get("error")
+                    logger.warning("Push failure to %s (status=%s): %s", endpoint, status, err)
+                    # if stale, delete
+                    if status in (404, 410) or (err and "unsubscribed" in str(err).lower()):
                         try:
                             _delete_subscriptions_by_endpoint(endpoint)
                         except Exception:
-                            pass
-                        results.append({"endpoint": endpoint, "ok": False, "status": status, "error": err_text, "deleted": True})
+                            logger.exception("Failed removing stale subscription %s", endpoint)
+                        detail.append({"endpoint": endpoint, "ok": False, "status": status, "error": err, "deleted": True})
+                        ok = False
                         break
-                    if attempt < 2:
-                        time.sleep(0.12)
-                        continue
-                    else:
-                        results.append({"endpoint": endpoint, "ok": False, "status": status, "error": err_text})
-                        break
-                except Exception as ex:
-                    app.logger.exception("Unexpected exception sending push to %s", endpoint)
-                    results.append({"endpoint": endpoint, "ok": False, "error": str(ex)})
-                    break
+                    # else transient -> retry once
+                    time.sleep(0.12)
+            if not ok:
+                detail.append({"endpoint": endpoint, "ok": False, "error": "final-failure"})
         except Exception:
-            app.logger.exception("Error handling subscription for sending")
-            results.append({"endpoint": None, "ok": False, "error": "processing-exception"})
-    return {"sent": sent, "errors": [r for r in results if not r.get("ok")], "detail": results}
+            logger.exception("Exception sending push to subscription row")
+            detail.append({"endpoint": None, "ok": False, "error": "processing-exception"})
+    return {"sent": sent, "errors": [d for d in detail if not d.get("ok")], "detail": detail}
 
-# Routes: save-subscription, subscriptions/check, notifications endpoints
+# -------------------------
+# HTTP endpoints for client JS
+# -------------------------
 @app.route("/save-subscription", methods=["POST"])
 def save_subscription_route():
     try:
@@ -466,9 +545,9 @@ def save_subscription_route():
         except Exception:
             pass
         return resp, (200 if ok else 500)
-    except Exception as e:
-        app.logger.exception("save-subscription failed: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception:
+        logger.exception("save-subscription failed: %s", traceback.format_exc())
+        return jsonify({"ok": False, "error": "server-error"}), 500
 
 @app.route("/subscriptions/check", methods=["GET"])
 def subscriptions_check():
@@ -488,11 +567,11 @@ def subscriptions_check():
                 except Exception:
                     continue
         except Exception:
-            app.logger.exception("subscriptions_check list failed")
+            logger.exception("subscriptions_check list failed")
         return jsonify({"ok": True, "subjects": sorted(list(dict.fromkeys(out_subjects)))})
-    except Exception as e:
-        app.logger.exception("subscriptions_check top-level failed: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception:
+        logger.exception("subscriptions_check top-level failed")
+        return jsonify({"ok": False, "error": "server-error"}), 500
 
 @app.route("/notifications/pending", methods=["GET"])
 def notifications_pending():
@@ -502,9 +581,9 @@ def notifications_pending():
             return jsonify({"ok": False, "error": "endpoint required"}), 400
         items = fetch_pending_notifications_for_endpoint(endpoint)
         return jsonify({"ok": True, "items": items})
-    except Exception as e:
-        app.logger.exception("notifications_pending failed: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception:
+        logger.exception("notifications_pending failed")
+        return jsonify({"ok": False, "error": "server-error"}), 500
 
 @app.route("/notifications/ack", methods=["POST"])
 def notifications_ack():
@@ -518,15 +597,77 @@ def notifications_ack():
             return jsonify({"ok": False, "error": "ids must be a list"}), 400
         n = ack_notifications_by_ids(endpoint, ids)
         return jsonify({"ok": True, "count": n})
-    except Exception as e:
-        app.logger.exception("notifications_ack failed: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
-# app.py — PART 5/5 (core pages, questions submit, admin announcement, SQL runner, entry)
-# Basic pages — home and questions
+    except Exception:
+        logger.exception("notifications_ack failed")
+        return jsonify({"ok": False, "error": "server-error"}), 500
+
+# route to expose vapid public key to browser
+@app.route("/api/vapid")
+def api_vapid():
+    if not VAPID_PUBLIC_KEY:
+        return jsonify({"ok": False, "error": "vapid-not-configured"}), 503
+    return jsonify({"ok": True, "publicKey": VAPID_PUBLIC_KEY})
+# app.py — PART 4/4
+# Pages, question submission, admin announcement, exercise runner, error handlers
+
+# Serve service-worker file from static (if present)
+@app.route("/service-worker.js")
+def service_worker():
+    try:
+        return send_from_directory(app.static_folder, "service-worker.js")
+    except Exception:
+        logger.exception("service-worker not found")
+        abort(404)
+
+# Basic pages referenced by base.html
 @app.route("/")
 def home_page():
     return render_template("index.html", message=FOOTER_MESSAGE)
 
+@app.route("/content")
+def content_page():
+    # content.html should reference images via url_for('static', filename='img/...') so they'll load correctly
+    return render_template("content.html", message=FOOTER_MESSAGE)
+
+@app.route("/quizzes")
+def quiz_forms():
+    return render_template("quizzes.html", message=FOOTER_MESSAGE)
+
+@app.route("/coding")
+def coding_page():
+    # load coding exercises from local file (or Google Drive if implemented)
+    exercises = []
+    # try local JSON first
+    try:
+        p = Path(CODING_LOCAL_PATH)
+        if p.exists():
+            exercises = json.loads(p.read_text(encoding="utf-8") or "[]")
+    except Exception:
+        logger.exception("Failed loading local coding_exercises.json")
+        exercises = []
+    # nothing critical if missing
+    return render_template("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
+
+@app.route("/health")
+def health_index():
+    return render_template("health.html", message=FOOTER_MESSAGE)
+
+@app.route("/rules")
+def rules_page():
+    # group rules may be loaded from Google Sheets via sheets_mod.read_rules if available
+    rules = []
+    try:
+        if SHEETS_AVAILABLE and GROUP_RULES_SHEET_KEY:
+            try:
+                rules = sheets_mod.read_rules()
+            except Exception:
+                logger.exception("Failed reading group rules from sheets")
+                rules = []
+    except Exception:
+        rules = []
+    return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
+
+# Questions route: GET shows list, POST appends (sheets preferred)
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
     try:
@@ -539,34 +680,27 @@ def questions_page():
             name = (request.form.get("name") or "Anonymous").strip()
             category = (request.form.get("category") or "Other").strip()
             timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
-            # append_row -> prefer sheets get_questions implementation if provided in sheets_mod
+            # append to primary storage (Sheets preferred)
             try:
-                if SHEETS_AVAILABLE:
+                if SHEETS_AVAILABLE and QUESTIONS_SHEET_KEY:
                     sheets_mod.append_row([category, name, question, attempt, timestamp])
                 else:
-                    # fallback: append to QUESTIONS_SHEET_KEY using sqlite or saved local file
-                    # Here we rely on sheets_mod.get_questions fallback earlier
-                    append_fallback = getattr(sheets_mod, "append_row", None)
-                    if callable(append_fallback):
-                        append_fallback([category, name, question, attempt, timestamp])
-                    else:
-                        # minimal local persistence: save to local 'data/questions_local.json'
-                        p = Path("data/questions_local.json")
-                        p.parent.mkdir(parents=True, exist_ok=True)
-                        try:
-                            arr = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
-                        except Exception:
-                            arr = []
-                        arr.append([category, name, question, attempt, timestamp])
-                        p.write_text(json.dumps(arr, ensure_ascii=False, indent=2), encoding="utf-8")
+                    # fallback local persistence into data/questions_local.json
+                    qpath = DATA_DIR / "questions_local.json"
+                    try:
+                        arr = json.loads(qpath.read_text(encoding="utf-8")) if qpath.exists() else []
+                    except Exception:
+                        arr = []
+                    arr.append([category, name, question, attempt, timestamp])
+                    qpath.write_text(json.dumps(arr, ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception:
-                app.logger.exception("Failed to append question to primary storage; still continuing.")
+                logger.exception("Failed appending question to primary storage; continuing anyway")
             flash("Question submitted. Thank you!", "success")
-            # Persist notifications and try to send
+            # try to notify subject subscribers (persisted regardless)
             try:
                 send_push_to_subject(category, question, attempt)
             except Exception:
-                app.logger.exception("send_push_to_subject failed")
+                logger.exception("send_push_to_subject error")
             resp = redirect(url_for("questions_page"))
             try:
                 resp.set_cookie("nn_user", name, max_age=COOKIE_MAX_AGE, samesite="Lax")
@@ -574,54 +708,60 @@ def questions_page():
             except Exception:
                 pass
             return resp
-        # GET
-        # load questions (prefer sheets_mod.get_questions())
+
+        # GET: load questions
         questions = []
+        raw = []
         try:
-            if SHEETS_AVAILABLE:
+            if SHEETS_AVAILABLE and QUESTIONS_SHEET_KEY:
                 raw = sheets_mod.get_questions()
             else:
-                raw = []
-            # normalize rows to length 5 and filter out subscription marker rows
-            for r in (raw or []):
-                try:
-                    row = list(r)
-                    while len(row) < 5:
-                        row.append("")
-                    if len(row) > 0 and str(row[0]).strip() == "__subscription__":
-                        continue
-                    questions.append(row)
-                except Exception:
-                    continue
+                qpath = DATA_DIR / "questions_local.json"
+                if qpath.exists():
+                    raw = json.loads(qpath.read_text(encoding="utf-8") or "[]")
+                else:
+                    raw = []
         except Exception:
-            app.logger.exception("Failed loading questions; showing empty list.")
-            questions = []
-        # build categories
+            logger.exception("Failed loading questions; showing empty list.")
+            raw = []
+        # Normalize rows to length 5 and filter subscription marker rows
+        for r in (raw or []):
+            try:
+                row = list(r)
+                while len(row) < 5:
+                    row.append("")
+                if len(row) > 0 and str(row[0]).strip() == "__subscription__":
+                    continue
+                questions.append(row)
+            except Exception:
+                continue
+        # categories for UI
         derived = {str(q[0]).strip() for q in questions if q and q[0]}
         categories_for_ui = STATIC_CATEGORIES + [c for c in sorted(derived) if c not in STATIC_CATEGORIES]
         selected_category = request.args.get("categoryFilter", "")
         if selected_category:
             questions = [q for q in questions if str(q[0]).strip() == selected_category]
         return render_template("questions.html", questions=questions, categories=categories_for_ui, selected_category=selected_category, message=FOOTER_MESSAGE, vapid_public_key=VAPID_PUBLIC_KEY)
-    except Exception as e:
-        app.logger.exception("questions_page exception: %s", e)
+    except Exception:
+        logger.exception("questions_page exception")
         flash("Could not load questions", "danger")
         return render_template("questions.html", questions=[], categories=STATIC_CATEGORIES, selected_category="", message=FOOTER_MESSAGE, vapid_public_key=VAPID_PUBLIC_KEY)
 
-# Admin announcement route (send to all or by subject)
+# Admin announcement UI and action (protected by ADMIN_KEY)
 @app.route("/admin/announcement", methods=["GET", "POST"])
 def admin_announcement():
-    key = request.args.get("key") or request.form.get("admin_key") or request.form.get("key") or ""
-    if request.method == "GET" and not key:
+    # key may be passed as ?key= or form field admin_key
+    provided_key = request.args.get("key") or request.form.get("admin_key") or request.form.get("key") or ""
+    if request.method == "GET" and not provided_key:
         return render_template("admin_announcement.html", key="", message=FOOTER_MESSAGE)
-    if key != ADMIN_KEY:
+    if provided_key != ADMIN_KEY:
         flash("Unauthorized admin key.", "warning")
         return render_template("admin_announcement.html", key="", message=FOOTER_MESSAGE)
     if request.method == "POST":
         subject = (request.form.get("subject") or "All").strip()
         title = (request.form.get("title") or "Announcement").strip()
         body = (request.form.get("body") or "").strip()
-        details = []
+        results = []
         try:
             if subject.lower() in ("all", "everyone", "any"):
                 subs = _list_subscriptions()
@@ -640,28 +780,26 @@ def admin_announcement():
                     try:
                         save_notification_for_endpoint(sub.get("endpoint"), subject, title, body, {"announcement": True})
                         if PYWEBPUSH_AVAILABLE and VAPID_PRIVATE_KEY:
-                            try:
-                                webpush(subscription_info=sub, data=json.dumps({"title": title, "body": body, "url": "/"}), vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims={"sub": VAPID_SUBJECT})
-                                details.append({"endpoint": sub.get("endpoint"), "ok": True})
-                            except Exception as ex:
-                                details.append({"endpoint": sub.get("endpoint"), "ok": False, "error": str(ex)})
+                            res = _send_push_to_single(sub, {"title": title, "body": body, "url": "/"})
+                            results.append({"endpoint": sub.get("endpoint"), **res})
                         else:
-                            details.append({"endpoint": sub.get("endpoint"), "ok": False, "error": "push-not-configured"})
+                            results.append({"endpoint": sub.get("endpoint"), "ok": False, "error": "push-not-configured"})
                     except Exception:
-                        details.append({"endpoint": None, "ok": False, "error": "exception"})
-                flash(f"Announcement queued/sent to {len(details)} endpoints.", "success")
-                return render_template("admin_announcement.html", key=key, result=details, message=FOOTER_MESSAGE)
+                        results.append({"endpoint": None, "ok": False, "error": "exception"})
+                flash(f"Announcement queued/sent to {len(results)} endpoints.", "success")
+                return render_template("admin_announcement.html", key=provided_key, result=results, message=FOOTER_MESSAGE)
             else:
+                # send to subscribers of a specific subject
                 res = send_push_to_subject(subject, title, body)
                 flash("Announcement attempted.", "success")
-                return render_template("admin_announcement.html", key=key, result=res, message=FOOTER_MESSAGE)
-        except Exception as e:
-            app.logger.exception("admin_announcement failed: %s", e)
+                return render_template("admin_announcement.html", key=provided_key, result=res, message=FOOTER_MESSAGE)
+        except Exception:
+            logger.exception("admin_announcement failed")
             flash("Failed to send announcement.", "danger")
-            return render_template("admin_announcement.html", key=key, message=FOOTER_MESSAGE)
-    return render_template("admin_announcement.html", key=key, message=FOOTER_MESSAGE)
+            return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
+    return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
 
-# Exercise SQL runner (kept simple, multi-statement enabled)
+# Small utility: safe multi-statement SQL executor for exercises (returns in-memory sqlite connection)
 def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -670,7 +808,7 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
         try:
             cur.executescript(schema_sql)
         except Exception:
-            # attempt split fallback
+            # fallback: try splitting; conservative splitting by semicolon
             stmts = [s.strip() for s in re.split(r';\s*(?=\b)', schema_sql) if s.strip()]
             for s in stmts:
                 try:
@@ -680,7 +818,6 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
                         cur.execute(s)
                     except Exception:
                         continue
-    # populate sample_data if dict
     if sample_data and isinstance(sample_data, dict):
         for table, rows in sample_data.items():
             if not isinstance(rows, list):
@@ -712,14 +849,45 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
     conn.commit()
     return conn, [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
 
-# Minimal error handler and launch
+# Generic admin SQL runner endpoint (protected) - optional; careful in production!
+@app.route("/admin/run-sql", methods=["POST"])
+def admin_run_sql():
+    provided = request.args.get("key") or request.form.get("admin_key") or ""
+    if provided != EXERCISES_ADMIN_KEY:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    payload = request.get_json(force=True, silent=True) or {}
+    schema = payload.get("schema") or payload.get("sql") or ""
+    sample = payload.get("sample") or {}
+    try:
+        conn, tables = _safe_create_and_populate_sqlite(schema, sample)
+        # return a limited preview of tables as JSON
+        rows_preview = {}
+        for t in tables:
+            try:
+                cur = conn.execute(f"SELECT * FROM \"{t}\" LIMIT 20")
+                rows_preview[t] = [dict(row) for row in cur.fetchall()]
+            except Exception:
+                rows_preview[t] = []
+        return jsonify({"ok": True, "tables": tables, "preview": rows_preview})
+    except Exception:
+        logger.exception("admin_run_sql failed")
+        return jsonify({"ok": False, "error": "execution-failed"}), 500
+
+# Handlers for general exceptions — render friendly pages for human visitors
+@app.errorhandler(404)
+def handle_404(e):
+    return render_template("errors/404.html", message=FOOTER_MESSAGE), 404
+
 @app.errorhandler(Exception)
 def handle_exception(e):
-    app.logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
-    if request.path.startswith("/api/") or request.path.startswith("/exercise-table"):
+    # If request looks like an API, return JSON
+    logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
+    if request.path.startswith("/api/") or request.path.startswith("/admin/run-sql") or request.is_json:
         return jsonify({"ok": False, "error": str(e)}), 500
+    # render generic error page
     return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 500
 
+# Run
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")

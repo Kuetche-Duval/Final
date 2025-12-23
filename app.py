@@ -811,16 +811,35 @@ def admin_run_sql():
 # Handlers for general exceptions — render friendly pages for human visitors
 @app.errorhandler(404)
 def handle_404(e):
-    return render_template("errors/404.html", message=FOOTER_MESSAGE), 404
+    try:
+        return render_template(
+            "errors/404.html",
+            message=FOOTER_MESSAGE,
+            error_code=404
+        ), 404
+    except Exception:
+        return render_template(
+            "error.html",
+            message=FOOTER_MESSAGE,
+            error_code=404
+        ), 404
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    # If request looks like an API, return JSON
     logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
-    if request.path.startswith("/api/") or request.path.startswith("/admin/run-sql") or request.is_json:
+
+    if hasattr(e, "code") and e.code == 404:
+        return handle_404(e)
+
+    if request.path.startswith("/api/") or request.is_json:
         return jsonify({"ok": False, "error": str(e)}), 500
-    # render generic error page
-    return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 500
+
+    return render_template(
+        "error.html",
+        message=FOOTER_MESSAGE,
+        error=str(e),
+        error_code=500
+    ), 500
 
 # Run
 if __name__ == "__main__":

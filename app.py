@@ -1,17 +1,4 @@
 # app.py — PART 1/4
-"""
-Full app.py (part 1/4)
-
-Notes:
- - Paste parts 1..4 into a single file app.py
- - Required directories: templates/, static/, data/ (the app will create data/)
- - Optional: sheets.py (with functions used in your previous code)
- - Optional env vars:
-    FLASK_SECRET_KEY, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT,
-    ADMIN_KEY, EXERCISES_ADMIN_KEY, QUESTIONS_SUBSCRIPTION_KEY, QUESTIONS_SHEET_KEY,
-    TIMETABLE_SHEET_KEY, GROUP_RULES_SHEET_KEY, CODING_EXERCISES_PATH, CODING_EXERCISES_DRIVE_FILE_ID,
-    NN_LOCAL_DB
-"""
 import os
 import re
 import json
@@ -20,6 +7,7 @@ import logging
 import traceback
 import sqlite3
 import base64
+import uuid
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -54,7 +42,6 @@ _secret = os.environ.get("FLASK_SECRET_KEY")
 if _secret:
     app.secret_key = _secret
 else:
-    # ensure string type
     app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
 
 # logging
@@ -109,9 +96,11 @@ CODING_DRIVE_FILE_ID = (os.environ.get("CODING_EXERCISES_DRIVE_FILE_ID") or "").
 NN_LOCAL_DB = os.environ.get("NN_LOCAL_DB", "nn_local.db")
 DB_PATH = Path(NN_LOCAL_DB).resolve()
 
-# data dir for JSON fallbacks
+# data dir for JSON fallbacks (admin_notifications.json etc)
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True, parents=True)
+ADMIN_NOTIF_FILE = DATA_DIR / "admin_notifications.json"
+USER_STATES_FILE = DATA_DIR / "user_states.json"
 
 # Optional external modules: sheets.py (if provided)
 SHEETS_AVAILABLE = False
@@ -130,7 +119,7 @@ except Exception:
     sheets_mod = None
     SHEETS_AVAILABLE = False
     app.logger.debug("sheets.py not available; using SQLite / local JSON fallback.")
-
+# app.py — PART 2/4
 # ensure sqlite DB created
 def _init_local_db():
     try:
@@ -149,7 +138,7 @@ def _init_local_db():
                 created_at TEXT
             )
         """)
-        # notifications persistence
+        # (legacy) notifications persistence table left for compatibility but not required
         c.execute("""
             CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,9 +184,8 @@ def _is_valid_subscription_obj(sub):
 
 def _normalize_subject(s):
     return (s or "Other").strip()
-# app.py — PART 2/4
-# Subscription storage helpers (Sheets preferred, SQLite fallback)
 
+# Subscription storage helpers (Sheets preferred, SQLite fallback)
 def _save_subscription(subject, client_id, subscription_obj):
     """
     Save a subscription. Prefer using sheets_mod.save_subscription when available and
@@ -304,66 +292,153 @@ def _delete_subscriptions_by_endpoint(endpoint):
         app.logger.debug("Deleted subscription(s) from sqlite for endpoint %s", endpoint)
     except Exception:
         app.logger.exception("_delete_subscriptions_by_endpoint failed")
-
-# Notifications table persistence helpers
-def save_notification_for_endpoint(endpoint, subject, title, body, data_obj=None):
+# app.py — PART 3/4
+# ADMIN notifications stored as JSON in /data/admin_notifications.json
+def _load_admin_notifications():
     try:
-        now = datetime.utcnow().replace(microsecond=0).isoformat()
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            c.execute("""INSERT INTO notifications (endpoint, subject, title, body, data, created_at, delivered)
-                         VALUES (?,?,?,?,?,?,0)""",
-                      (endpoint or "", subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
-            nid = c.lastrowid
-            conn.commit()
-        return nid
+        if not ADMIN_NOTIF_FILE.exists():
+            ADMIN_NOTIF_FILE.write_text("[]", encoding="utf-8")
+            return []
+        data = json.loads(ADMIN_NOTIF_FILE.read_text(encoding="utf-8") or "[]")
+        if not isinstance(data, list):
+            return []
+        return data
     except Exception:
-        app.logger.exception("save_notification_for_endpoint failed")
+        logger.exception("_load_admin_notifications failed")
+        return []
+
+def _save_admin_notifications(notifs):
+    try:
+        tmp = ADMIN_NOTIF_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(notifs, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(ADMIN_NOTIF_FILE)
+        return True
+    except Exception:
+        logger.exception("_save_admin_notifications failed")
+        return False
+
+def _add_admin_notification(title, body, meta=None):
+    try:
+        notifs = _load_admin_notifications()
+        next_id = 1
+        if notifs:
+            try:
+                next_id = max(int(n.get("id", 0)) for n in notifs) + 1
+            except Exception:
+                next_id = (len(notifs) + 1)
+        item = {
+            "id": int(next_id),
+            "title": title,
+            "body": body,
+            "meta": meta or {},
+            "created_at": datetime.utcnow().replace(microsecond=0).isoformat()
+        }
+        notifs.append(item)
+        _save_admin_notifications(notifs)
+        return item
+    except Exception:
+        logger.exception("_add_admin_notification failed")
         return None
 
-def fetch_pending_notifications_for_endpoint(endpoint):
+# user_states.json maps endpoint -> last_seen_id (int)
+def _load_user_states():
+    try:
+        if not USER_STATES_FILE.exists():
+            USER_STATES_FILE.write_text("{}", encoding="utf-8")
+            return {}
+        data = json.loads(USER_STATES_FILE.read_text(encoding="utf-8") or "{}")
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        logger.exception("_load_user_states failed")
+        return {}
+
+def _save_user_states(states):
+    try:
+        tmp = USER_STATES_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(states, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(USER_STATES_FILE)
+        return True
+    except Exception:
+        logger.exception("_save_user_states failed")
+        return False
+
+def _get_pending_admin_notifications_for_endpoint(endpoint):
     if not endpoint:
         return []
     try:
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint,))
-            rows = c.fetchall()
-        out = []
-        for nid, subj, title, body, data_text, created_at in rows:
-            try:
-                data_obj = json.loads(data_text) if data_text else {}
-            except Exception:
-                data_obj = {}
-            out.append({"id": nid, "subject": subj, "title": title, "body": body, "data": data_obj, "created_at": created_at})
-        return out
+        notifs = _load_admin_notifications()
+        states = _load_user_states()
+        last_seen = int(states.get(endpoint, 0))
+        pending = [n for n in notifs if int(n.get("id", 0)) > last_seen]
+        return pending
     except Exception:
-        app.logger.exception("fetch_pending_notifications_for_endpoint failed")
+        logger.exception("_get_pending_admin_notifications_for_endpoint failed")
         return []
 
-def ack_notifications_by_ids(endpoint, ids):
-    if not endpoint or not ids:
-        return 0
+def _ack_admin_notifications_for_endpoint(endpoint, ids=None):
+    """
+    If ids provided, set last_seen to max(ids)
+    Otherwise mark all as seen (set last_seen to last notification id)
+    """
     try:
-        now = datetime.utcnow().replace(microsecond=0).isoformat()
-        changed = 0
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            for nid in ids:
-                try:
-                    c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint))
-                    if c.rowcount:
-                        changed += 1
-                except Exception:
-                    continue
-            conn.commit()
-        return changed
+        if not endpoint:
+            return False
+        notifs = _load_admin_notifications()
+        if not notifs:
+            return True
+        states = _load_user_states()
+        if ids and isinstance(ids, list) and ids:
+            try:
+                maxid = max(int(i) for i in ids if isinstance(i, (int, str)) and str(i).strip().isdigit())
+            except Exception:
+                maxid = 0
+        else:
+            try:
+                maxid = max(int(n.get("id", 0)) for n in notifs)
+            except Exception:
+                maxid = 0
+        if maxid <= 0:
+            return True
+        states[endpoint] = int(maxid)
+        return _save_user_states(states)
     except Exception:
-        app.logger.exception("ack_notifications_by_ids failed")
-        return 0
-# app.py — PART 3/4
-# Push sending logic (guarded) + subscription endpoints + notification endpoints
+        logger.exception("_ack_admin_notifications_for_endpoint failed")
+        return False
 
+# send push to all subscriptions (used for admin announcements)
+def _send_push_to_all(payload):
+    results = []
+    try:
+        subs = _list_subscriptions() or []
+    except Exception:
+        subs = []
+    if not subs:
+        return {"sent": 0, "detail": []}
+    sent = 0
+    for r in subs:
+        try:
+            sub = r.get("subscription")
+            if not sub:
+                continue
+            res = _send_push_to_single(sub, payload)
+            ok = res.get("ok")
+            if ok:
+                sent += 1
+            results.append({"endpoint": sub.get("endpoint"), **res})
+            # if stale and server signaled deletion, remove subscription
+            if res.get("status") in (404, 410) or ("unsubscribed" in str(res.get("error", "")).lower()):
+                try:
+                    _delete_subscriptions_by_endpoint(sub.get("endpoint"))
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("failed sending push to row")
+            results.append({"endpoint": None, "ok": False, "error": "exception"})
+    return {"sent": sent, "detail": results}
+
+# --------- Push utilities (single sender) ----------
 def _send_push_to_single(sub, payload):
     """
     Try to send a push to a single subscription dict using pywebpush.
@@ -395,117 +470,9 @@ def _send_push_to_single(sub, payload):
         return {"ok": False, "error": str(ex), "status": status}
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
-
-def send_push_to_subject(subject, question_text, attempt_text):
-    """
-    Persist notifications for each subscriber to the subject, then try to deliver
-    if pywebpush+vapid are available. Returns a summary dict.
-    """
-    try:
-        subs = _list_subscriptions(subject) or []
-    except Exception:
-        subs = []
-    if not subs:
-        return {"sent": 0, "errors": ["no subscribers"], "detail": []}
-
-    title = f"New question in {subject}"
-    q_preview = (question_text or "")[:140]
-    a_preview = (attempt_text or "")[:180]
-    body = f"Q: {q_preview}\nA: {a_preview}"
-    payload_template = {"title": title, "body": body, "url": "/questions", "subject": subject, "preview": {"question": q_preview, "attempt": a_preview}}
-
-    detail = []
-    sent = 0
-
-    # persist notifications for each subscription row (so client can fetch later if offline)
-    for r in subs:
-        try:
-            sub = r.get("subscription") if isinstance(r, dict) else None
-            endpoint = sub.get("endpoint") if sub else None
-            try:
-                save_notification_for_endpoint(endpoint, subject, payload_template["title"], payload_template["body"], payload_template.get("preview"))
-            except Exception:
-                logger.debug("Could not persist notification for %s", endpoint)
-        except Exception:
-            continue
-
-    # If sending not available, return persisted info
-    if (not PYWEBPUSH_AVAILABLE) or (not VAPID_PRIVATE_KEY):
-        for r in subs:
-            try:
-                sub = r.get("subscription") if isinstance(r, dict) else None
-                ep = sub.get("endpoint") if sub else None
-            except Exception:
-                ep = None
-            detail.append({"endpoint": ep, "ok": False, "error": "sending-disabled"})
-        return {"sent": 0, "errors": ["sending-disabled"], "detail": detail}
-
-    # attempt delivery
-    for r in subs:
-        try:
-            sub = r.get("subscription") if isinstance(r, dict) else None
-            if not sub:
-                continue
-            endpoint = sub.get("endpoint")
-            if not endpoint:
-                detail.append({"endpoint": None, "ok": False, "error": "no-endpoint"})
-                continue
-
-            # provider specific trimming
-            parsed = urlparse(endpoint)
-            domain = parsed.netloc.lower() if parsed.netloc else ""
-            payload = dict(payload_template)
-            if "windows" in domain or "wns" in domain:
-                payload = {"title": payload_template["title"], "body": (q_preview or a_preview)[:80], "url": "/questions"}
-
-            # trim very large payloads
-            data_bytes = json.dumps(payload).encode("utf-8")
-            if len(data_bytes) > 2000:
-                payload["preview"] = None
-                payload["body"] = (payload.get("body","")[:200] + "…")
-
-            # try up to 2 attempts for transient issues
-            ok = False
-            for attempt in range(2):
-                res = _send_push_to_single(sub, payload)
-                if res.get("ok"):
-                    ok = True
-                    sent += 1
-                    detail.append({"endpoint": endpoint, "ok": True})
-                    # mark as delivered in notifications table
-                    try:
-                        now = datetime.utcnow().replace(microsecond=0).isoformat()
-                        with sqlite3.connect(str(DB_PATH)) as conn:
-                            c = conn.cursor()
-                            c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint))
-                            conn.commit()
-                    except Exception:
-                        logger.exception("Failed marking delivered for %s", endpoint)
-                    break
-                else:
-                    status = res.get("status")
-                    err = res.get("error")
-                    logger.warning("Push failure to %s (status=%s): %s", endpoint, status, err)
-                    # if stale, delete
-                    if status in (404, 410) or (err and "unsubscribed" in str(err).lower()):
-                        try:
-                            _delete_subscriptions_by_endpoint(endpoint)
-                        except Exception:
-                            logger.exception("Failed removing stale subscription %s", endpoint)
-                        detail.append({"endpoint": endpoint, "ok": False, "status": status, "error": err, "deleted": True})
-                        ok = False
-                        break
-                    # else transient -> retry once
-                    time.sleep(0.12)
-            if not ok:
-                detail.append({"endpoint": endpoint, "ok": False, "error": "final-failure"})
-        except Exception:
-            logger.exception("Exception sending push to subscription row")
-            detail.append({"endpoint": None, "ok": False, "error": "processing-exception"})
-    return {"sent": sent, "errors": [d for d in detail if not d.get("ok")], "detail": detail}
-
+# app.py — PART 4/4
 # -------------------------
-# HTTP endpoints for client JS
+# HTTP endpoints for client JS (subscriptions + notifications)
 # -------------------------
 @app.route("/save-subscription", methods=["POST"])
 def save_subscription_route():
@@ -579,7 +546,7 @@ def notifications_pending():
         endpoint = request.args.get("endpoint", "").strip() or (request.cookies.get('nn_subscription') or "").strip()
         if not endpoint:
             return jsonify({"ok": False, "error": "endpoint required"}), 400
-        items = fetch_pending_notifications_for_endpoint(endpoint)
+        items = _get_pending_admin_notifications_for_endpoint(endpoint)
         return jsonify({"ok": True, "items": items})
     except Exception:
         logger.exception("notifications_pending failed")
@@ -593,22 +560,19 @@ def notifications_ack():
         ids = payload.get("ids") or []
         if not endpoint:
             return jsonify({"ok": False, "error": "endpoint required"}), 400
-        if not isinstance(ids, list):
-            return jsonify({"ok": False, "error": "ids must be a list"}), 400
-        n = ack_notifications_by_ids(endpoint, ids)
-        return jsonify({"ok": True, "count": n})
+        # If ids is provided, ack those; otherwise mark all as seen
+        ok = _ack_admin_notifications_for_endpoint(endpoint, ids if isinstance(ids, list) else None)
+        return jsonify({"ok": True, "result": ok})
     except Exception:
         logger.exception("notifications_ack failed")
         return jsonify({"ok": False, "error": "server-error"}), 500
 
-# route to expose vapid public key to browser
+# route to expose vapid public key to browser (name kept for compatibility)
 @app.route("/api/vapid")
 def api_vapid():
     if not VAPID_PUBLIC_KEY:
         return jsonify({"ok": False, "error": "vapid-not-configured"}), 503
     return jsonify({"ok": True, "publicKey": VAPID_PUBLIC_KEY})
-# app.py — PART 4/4
-# Pages, question submission, admin announcement, exercise runner, error handlers
 
 # Serve service-worker file from static (if present)
 @app.route("/service-worker.js")
@@ -619,14 +583,13 @@ def service_worker():
         logger.exception("service-worker not found")
         abort(404)
 
-# Basic pages referenced by base.html
+# -------- core pages ----------
 @app.route("/")
 def home_page():
     return render_template("index.html", message=FOOTER_MESSAGE)
 
 @app.route("/content")
 def content_page():
-    # content.html should reference images via url_for('static', filename='img/...') so they'll load correctly
     return render_template("content.html", message=FOOTER_MESSAGE)
 
 @app.route("/quizzes")
@@ -637,7 +600,6 @@ def quiz_forms():
 def coding_page():
     # load coding exercises from local file (or Google Drive if implemented)
     exercises = []
-    # try local JSON first
     try:
         p = Path(CODING_LOCAL_PATH)
         if p.exists():
@@ -645,7 +607,6 @@ def coding_page():
     except Exception:
         logger.exception("Failed loading local coding_exercises.json")
         exercises = []
-    # nothing critical if missing
     return render_template("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
 
 @app.route("/health")
@@ -654,7 +615,6 @@ def health_index():
 
 @app.route("/rules")
 def rules_page():
-    # group rules may be loaded from Google Sheets via sheets_mod.read_rules if available
     rules = []
     try:
         if SHEETS_AVAILABLE and GROUP_RULES_SHEET_KEY:
@@ -667,7 +627,7 @@ def rules_page():
         rules = []
     return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
 
-# Questions route: GET shows list, POST appends (sheets preferred)
+# Questions route: GET shows list, POST appends (sheets preferred) — note: no push on question submit
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
     try:
@@ -696,11 +656,6 @@ def questions_page():
             except Exception:
                 logger.exception("Failed appending question to primary storage; continuing anyway")
             flash("Question submitted. Thank you!", "success")
-            # try to notify subject subscribers (persisted regardless)
-            try:
-                send_push_to_subject(category, question, attempt)
-            except Exception:
-                logger.exception("send_push_to_subject error")
             resp = redirect(url_for("questions_page"))
             try:
                 resp.set_cookie("nn_user", name, max_age=COOKIE_MAX_AGE, samesite="Lax")
@@ -747,7 +702,7 @@ def questions_page():
         flash("Could not load questions", "danger")
         return render_template("questions.html", questions=[], categories=STATIC_CATEGORIES, selected_category="", message=FOOTER_MESSAGE, vapid_public_key=VAPID_PUBLIC_KEY)
 
-# Admin announcement UI and action (protected by ADMIN_KEY)
+# Admin announcement UI and action (protected by ADMIN_KEY) — stores announcements in /data JSON and attempts push delivery
 @app.route("/admin/announcement", methods=["GET", "POST"])
 def admin_announcement():
     # key may be passed as ?key= or form field admin_key
@@ -763,36 +718,16 @@ def admin_announcement():
         body = (request.form.get("body") or "").strip()
         results = []
         try:
-            if subject.lower() in ("all", "everyone", "any"):
-                subs = _list_subscriptions()
-                uniq = {}
-                for r in subs:
-                    try:
-                        sub = r.get("subscription") if isinstance(r, dict) else None
-                        if not sub:
-                            continue
-                        ep = sub.get("endpoint")
-                        if ep and ep not in uniq:
-                            uniq[ep] = sub
-                    except Exception:
-                        continue
-                for sub in uniq.values():
-                    try:
-                        save_notification_for_endpoint(sub.get("endpoint"), subject, title, body, {"announcement": True})
-                        if PYWEBPUSH_AVAILABLE and VAPID_PRIVATE_KEY:
-                            res = _send_push_to_single(sub, {"title": title, "body": body, "url": "/"})
-                            results.append({"endpoint": sub.get("endpoint"), **res})
-                        else:
-                            results.append({"endpoint": sub.get("endpoint"), "ok": False, "error": "push-not-configured"})
-                    except Exception:
-                        results.append({"endpoint": None, "ok": False, "error": "exception"})
-                flash(f"Announcement queued/sent to {len(results)} endpoints.", "success")
-                return render_template("admin_announcement.html", key=provided_key, result=results, message=FOOTER_MESSAGE)
-            else:
-                # send to subscribers of a specific subject
-                res = send_push_to_subject(subject, title, body)
-                flash("Announcement attempted.", "success")
-                return render_template("admin_announcement.html", key=provided_key, result=res, message=FOOTER_MESSAGE)
+            # persist globally
+            item = _add_admin_notification(title, body, {"subject": subject})
+            if not item:
+                flash("Failed persisting announcement.", "danger")
+                return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
+            # send pushes (best-effort)
+            payload = {"title": title, "body": body, "url": "/", "id": item["id"], "announcement": True}
+            push_res = _send_push_to_all(payload)
+            flash(f"Announcement queued. push_sent={push_res.get('sent',0)}", "success")
+            return render_template("admin_announcement.html", key=provided_key, result={"persisted": item, "push": push_res}, message=FOOTER_MESSAGE)
         except Exception:
             logger.exception("admin_announcement failed")
             flash("Failed to send announcement.", "danger")

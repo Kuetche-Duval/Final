@@ -1,113 +1,157 @@
-/* static/js/push-helper.js
-   Tiny helper exposing functions:
-     - registerServiceWorker()
-     - getSubscription()
-     - ensureSubscription(subject)  -> registers + saves subscription to server
-     - unsubscribe(endpoint)
-     - checkServerSubjects(endpoint)
-   Works with endpoints:
-     - GET /api/vapid
-     - POST /save-subscription  (body { subscription, subject })
-     - GET  /subscriptions/check?endpoint=...
-     - POST /subscriptions/delete  (body { endpoint })
-*/
-export async function registerServiceWorker(swPath = '/service-worker.js') {
-  if (!('serviceWorker' in navigator)) throw new Error('Service worker not supported');
-  const reg = await navigator.serviceWorker.register(swPath, { scope: '/' });
-  await navigator.serviceWorker.ready;
-  return reg;
-}
+// static/js/push-helper.js
+// Responsible for: registering service worker, subscribing for push with VAPID key,
+// sending subscription to server (/save-subscription), and utility helpers.
+//
+// Usage (example):
+//   import or include this script in your page. Then call:
+//     pushHelper.initPush({ subject: "Mathematics", clientId: "user-123" });
 
-export async function getVapidPublicKey() {
-  try {
-    const r = await fetch('/api/vapid');
-    if (!r.ok) return '';
-    const j = await r.json();
-    return j && j.publicKey ? j.publicKey : '';
-  } catch (e) {
-    return '';
-  }
-}
+const pushHelper = (function () {
+  const SW_PATH = '/service-worker.js';
+  const VAPID_ENDPOINT = '/api/vapid';
+  const SAVE_SUB_ENDPOINT = '/save-subscription';
+  const SUBSCRIBE_OPTIONS = { userVisibleOnly: true };
 
-export function urlBase64ToUint8Array(base64String) {
-  if (!base64String) return null;
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const array = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) array[i] = rawData.charCodeAt(i);
-  return array;
-}
-
-export async function getSubscription(reg = null) {
-  try {
-    const r = reg || await navigator.serviceWorker.ready;
-    return await r.pushManager.getSubscription();
-  } catch (e) {
-    console.warn('getSubscription failed', e);
-    return null;
-  }
-}
-
-export async function subscribeUserToPush(subject = 'Other', reg = null, vapidPublicKey = '') {
-  // returns server JSON or throws
-  const swReg = reg || await navigator.serviceWorker.ready;
-  let sub = await swReg.pushManager.getSubscription();
-  if (!sub) {
-    const key = vapidPublicKey || await getVapidPublicKey();
-    const appServerKey = key ? urlBase64ToUint8Array(key) : null;
-    sub = await swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appServerKey });
-  }
-  const toSend = { subscription: (sub.toJSON ? sub.toJSON() : sub), subject };
-  const res = await fetch('/save-subscription', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(toSend)
-  });
-  if (!res.ok) {
-    throw new Error('Failed saving subscription on server');
-  }
-  const j = await res.json();
-  return { server: j, subscription: sub };
-}
-
-export async function unsubscribeEndpoint(endpoint) {
-  try {
-    const res = await fetch('/subscriptions/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ endpoint })
-    });
-    return await res.json();
-  } catch (e) {
-    return { ok: false, error: String(e) };
-  }
-}
-
-export async function checkServerSubjects(endpoint) {
-  try {
-    const res = await fetch(`/subscriptions/check?endpoint=${encodeURIComponent(endpoint)}`);
-    if (!res.ok) return [];
-    const j = await res.json();
-    return (j && j.subjects) ? j.subjects : [];
-  } catch (e) {
-    return [];
-  }
-}
-
-// Helper to ask SW to fetch pending (optional)
-export async function askSWToFetchPending(endpoint) {
-  try {
-    const reg = await navigator.serviceWorker.ready;
-    if (navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage({ type: 'FETCH_PENDING', endpoint });
-      return true;
-    } else if (reg.active) {
-      reg.active.postMessage({ type: 'FETCH_PENDING', endpoint });
-      return true;
+  // Helper: base64 url -> Uint8Array (for vapid key)
+  function urlBase64ToUint8Array(base64String) {
+    // Pad base64 string
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
     }
-    return false;
-  } catch (e) {
-    return false;
+    return outputArray;
   }
-}
+
+  // Register service worker if supported
+  async function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) {
+      console.warn('Service workers unsupported in this browser.');
+      return null;
+    }
+    try {
+      const reg = await navigator.serviceWorker.register(SW_PATH, { scope: '/' });
+      console.info('Service worker registered:', reg);
+      return reg;
+    } catch (err) {
+      console.error('Service worker registration failed:', err);
+      return null;
+    }
+  }
+
+  // Get VAPID public key from server
+  async function fetchVapidPublicKey() {
+    try {
+      const resp = await fetch(VAPID_ENDPOINT, { method: 'GET', credentials: 'same-origin' });
+      if (!resp.ok) throw new Error(`Failed to fetch VAPID key: ${resp.status}`);
+      const j = await resp.json();
+      if (!j.ok || !j.publicKey) throw new Error('VAPID public key missing in response');
+      return j.publicKey;
+    } catch (err) {
+      console.error('Error fetching VAPID key:', err);
+      return null;
+    }
+  }
+
+  // Subscribe to push with VAPID key
+  async function subscribeToPush(registration, vapidPublicKey) {
+    if (!registration || !registration.pushManager) {
+      throw new Error('Invalid service worker registration for push manager.');
+    }
+    // request permission first
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      throw new Error('Notification permission not granted.');
+    }
+
+    const sub = await registration.pushManager.subscribe({
+      ...SUBSCRIBE_OPTIONS,
+      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+    });
+
+    return sub;
+  }
+
+  // Send subscription object to your server endpoint
+  async function saveSubscriptionToServer(subscription, subject = 'Other', clientId = '') {
+    try {
+      const payload = { subscription, subject, client_id: clientId };
+      const resp = await fetch(SAVE_SUB_ENDPOINT, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        console.warn('save-subscription returned non-ok:', resp.status, txt);
+      }
+      return resp;
+    } catch (err) {
+      console.error('Failed saving subscription to server:', err);
+      throw err;
+    }
+  }
+
+  // Public init function: registers SW, subscribes, saves
+  async function initPush(opts = {}) {
+    const { subject = 'Other', clientId = '' } = opts;
+    if (!('serviceWorker' in navigator)) {
+      console.warn('Push not supported (no serviceWorker).');
+      return { ok: false, reason: 'no-service-worker' };
+    }
+    try {
+      const reg = await registerServiceWorker();
+      if (!reg) return { ok: false, reason: 'sw-register-failed' };
+
+      const vapidKey = await fetchVapidPublicKey();
+      if (!vapidKey) return { ok: false, reason: 'no-vapid' };
+
+      // Check if already subscribed
+      let existing = await reg.pushManager.getSubscription();
+      if (existing) {
+        console.info('Already subscribed to push:', existing.endpoint);
+        await saveSubscriptionToServer(existing, subject, clientId);
+        return { ok: true, subscription: existing };
+      }
+
+      const sub = await subscribeToPush(reg, vapidKey);
+      await saveSubscriptionToServer(sub, subject, clientId);
+      console.info('Push subscription successful.');
+      return { ok: true, subscription: sub };
+    } catch (err) {
+      console.error('initPush error:', err);
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  // Optional unsubscribe helper (local + ask server to remove)
+  async function unsubscribe() {
+    if (!('serviceWorker' in navigator)) return { ok: false, reason: 'no-sw' };
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return { ok: true, message: 'no-subscription' };
+    try {
+      // ask server to remove (best-effort)
+      await fetch('/notifications/unsubscribe', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: sub.endpoint })
+      }).catch(() => {});
+      const ok = await sub.unsubscribe();
+      return { ok };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  // Expose a simple API
+  return {
+    initPush,
+    unsubscribe,
+    registerServiceWorker // exposed for advanced usage
+  };
+})();

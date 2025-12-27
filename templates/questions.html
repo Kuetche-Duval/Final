@@ -1,171 +1,159 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Newton's Nerds – Questions</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body>
-  <header>
-    <h1>Submit Your Questions</h1>
-    <nav>
-      <ul>
-        <li><a href="{{ url_for('index') }}">Home</a></li>
-        <li><a href="{{ url_for('questions_page') }}" class="active">Questions</a></li>
-        <li><a href="{{ url_for('quiz_forms') }}">Quizzes</a></li>
-      </ul>
-    </nav>
-  </header>
+{% extends 'base.html' %}
+{% block title %}Ask a Question — Newton's Nerds{% endblock %}
 
-  <main>
-    <!-- Question submission form -->
-    <section id="question-section">
-      <form id="question-form">
-        <label for="subject">Subject:</label>
-        <select id="subject" name="subject" required>
-          <option value="">Select Subject</option>
-          <option value="Mathematics">Mathematics</option>
-          <option value="Physics">Physics</option>
-          <option value="Chemistry">Chemistry</option>
-          <option value="Biology">Biology</option>
-        </select>
+{% block styles %}
+<style>
+  .qa-grid { display:grid; grid-template-columns: 1fr 360px; gap:18px; }
+  @media (max-width: 980px) { .qa-grid { grid-template-columns: 1fr; } }
+  .question-card { margin-bottom:12px; }
+  .small-muted { font-size:0.9rem; color:var(--muted); }
+  .copy-btn { cursor:pointer; }
+  .attempt-box { white-space:pre-wrap; word-break:break-word; }
+</style>
+{% endblock %}
 
-        <label for="question">Question:</label>
-        <textarea id="question" name="question" rows="4" required></textarea>
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Questions & Attempts</h3>
+    <div>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home_page') }}">Back home</a>
+    </div>
+  </div>
 
-        <label for="solution">Proposed Solution (optional):</label>
-        <textarea id="solution" name="solution" rows="3"></textarea>
+  <div class="qa-grid">
+    <!-- Left: question list -->
+    <section>
+      <div class="card p-3">
+        <h5 class="mb-2">Submitted questions</h5>
 
-        <button type="submit">Submit Question</button>
-      </form>
+        <div class="mb-2 d-flex gap-2 align-items-center">
+          <label class="small mb-0 me-2">Filter:</label>
+          <select id="categoryFilter" class="form-select form-select-sm" style="max-width:260px;">
+            <option value="">All subjects</option>
+            {% for c in categories %}
+              <option value="{{ c }}" {% if c == selected_category %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
 
-      <div id="form-message"></div>
+        <div id="questionsList" class="mt-2">
+          {% if questions and questions|length %}
+            {% for q in questions %}
+              {# q might be sequence (list) or mapping (dict) depending on source #}
+              {% if q is sequence %}
+                {% set subj = q[0] if q|length>0 else '' %}
+                {% set user = q[1] if q|length>1 else '' %}
+                {% set text = q[2] if q|length>2 else '' %}
+                {% set attempt = q[3] if q|length>3 else '' %}
+                {% set ts = q[4] if q|length>4 else '' %}
+              {% elif q is mapping %}
+                {% set subj = q.subject or q['subject'] if q.subject is defined else (q.get('subject') if q.get) %}
+                {% set user = q.user if q.user is defined else (q.get('user') if q.get) %}
+                {% set text = q.text if q.text is defined else (q.get('text') if q.get) %}
+                {% set attempt = q.attempt if q.attempt is defined else (q.get('attempt') if q.get) %}
+                {% set ts = q.timestamp if q.timestamp is defined else (q.get('timestamp') if q.get) %}
+              {% else %}
+                {% set subj = '' %}{% set user = '' %}{% set text = q %}{% set attempt = '' %}{% set ts = '' %}
+              {% endif %}
+
+              <div class="card question-card p-3">
+                <div class="d-flex justify-content-between align-items-start">
+                  <div class="me-3" style="min-width:0;">
+                    <div class="d-flex gap-2 align-items-center mb-1">
+                      <div class="category-badge">{{ subj }}</div>
+                      <div class="small-muted ms-1">{{ user or 'Anonymous' }}</div>
+                    </div>
+                    <div class="message-text">{{ text }}</div>
+                    {% if attempt %}
+                      <div class="mt-2 attempt-box small text-muted">{{ attempt }}</div>
+                    {% endif %}
+                  </div>
+                  <div class="text-end small-muted" style="min-width:90px;">
+                    <div>{{ ts }}</div>
+                    <div class="mt-2">
+                      <button class="btn btn-sm btn-outline-secondary copy-btn" data-q="{{ text|e }}" data-a="{{ attempt|e }}">Copy</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="p-3 text-muted">No questions yet — be the first to ask!</div>
+          {% endif %}
+        </div>
+      </div>
     </section>
 
-    <!-- Submitted questions list -->
-    <section id="submitted-questions">
-      <h2>Submitted Questions</h2>
-      <ul id="questions-list">
-        {% for q in questions %}
-          <li>
-            <strong>{{ q.subject }}:</strong> {{ q.question }}
-            {% if q.solution %}
-              <pre>{{ q.solution }}</pre>
-            {% endif %}
-            <button class="copy-btn" data-question="{{ q.question }}" data-solution="{{ q.solution|default('') }}">Copy</button>
-          </li>
-        {% endfor %}
-      </ul>
-    </section>
-<!-- Notifications section -->
-    <section id="notifications-section">
-      <h2>Notifications</h2>
-      <ul id="notifications-list"></ul>
-    </section>
-  </main>
+    <!-- Right: submit form -->
+    <aside>
+      <div class="card p-3">
+        <h5 class="mb-2">Submit a question</h5>
+        <form method="post" action="{{ url_for('questions_page') }}">
+          <div class="mb-2">
+            <label class="form-label small">Name</label>
+            <input class="form-control form-control-sm" name="name" placeholder="Your name (optional)" value="{{ request.cookies.get('nn_user') or '' }}">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">Subject</label>
+            <select name="category" class="form-select form-select-sm" required>
+              <option value="">Choose subject</option>
+              {% for c in categories %}
+                <option value="{{ c }}" {% if c == (request.cookies.get('nn_last_category') or '') %}selected{% endif %}>{{ c }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">Question</label>
+            <textarea name="question" rows="4" class="form-control" required></textarea>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">Your attempt / Notes</label>
+            <textarea name="attempt" rows="3" class="form-control"></textarea>
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-primary w-100" type="submit">Submit</button>
+          </div>
+        </form>
 
-  <script>
-    // --- Service Worker Registration ---
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('{{ url_for("static", filename="service-worker.js") }}')
-        .then(reg => console.log('Service Worker registered', reg))
-        .catch(err => console.error('SW registration failed', err));
-    }
+        <div class="mt-3 small text-muted">
+          Tips: Provide your thought process — we show both question and attempt to the community.
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+{% endblock %}
 
-    // --- Push Subscription ---
-    async function subscribeUser() {
-      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  // copy btns
+  document.body.addEventListener('click', function (ev) {
+    const btn = ev.target.closest && ev.target.closest('.copy-btn');
+    if (!btn) return;
+    const q = btn.getAttribute('data-q') || '';
+    const a = btn.getAttribute('data-a') || '';
+    const txt = q + (a ? ("\n\nAttempt:\n" + a) : '');
+    navigator.clipboard.writeText(txt).then(() => {
+      btn.textContent = 'Copied ✓';
+      setTimeout(()=> btn.textContent = 'Copy', 1400);
+    }).catch(()=> alert('Copy failed — use select + copy'));
+  });
 
-      const registration = await navigator.serviceWorker.ready;
-      const res = await fetch('/vapid-public-key');
-      const vapidPublicKey = await res.text();
-      const convertedKey = urlBase64ToUint8Array(vapidPublicKey);
-
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: convertedKey
+  // filter by category (client-side)
+  const filter = document.getElementById('categoryFilter');
+  if (filter) {
+    filter.addEventListener('change', function () {
+      const sel = this.value;
+      document.querySelectorAll('#questionsList .question-card').forEach(card => {
+        const badge = card.querySelector('.category-badge');
+        const val = badge ? badge.textContent.trim() : '';
+        if (!sel || val === sel) card.style.display = '';
+        else card.style.display = 'none';
       });
-
-      await fetch('/save-subscription', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(subscription)
-      });
-    }
-
-    function urlBase64ToUint8Array(base64String) {
-      const padding = '='.repeat((4 - base64String.length % 4) % 4);
-      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-      const rawData = atob(base64);
-      return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
-    }
-
-    subscribeUser().catch(err => console.warn('Push subscription failed', err));
-
-    // --- Submit Question ---
-    const form = document.getElementById('question-form');
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const subject = form.subject.value;
-      const question = form.question.value;
-      const solution = form.solution.value;
-
-      const res = await fetch('{{ url_for("questions_page") }}', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject, question, solution })
-      });
-
-      const data = await res.json();
-      document.getElementById('form-message').textContent = data.message || 'Question submitted!';
-      form.reset();
-      loadQuestions();
     });
-
-    // --- Load Submitted Questions ---
-    async function loadQuestions() {
-      const res = await fetch('{{ url_for("questions_page") }}?json=1');
-      const data = await res.json();
-      const list = document.getElementById('questions-list');
-      list.innerHTML = '';
-      data.questions.forEach(q => {
-        const li = document.createElement('li');
-        li.innerHTML = `<strong>${q.subject}:</strong> ${q.question}` +
-          (q.solution ? `<pre>${q.solution}</pre>` : '') +
-          `<button class="copy-btn" data-question="${q.question}" data-solution="${q.solution || ''}">Copy</button>`;
-        list.appendChild(li);
-      });
-      attachCopyButtons();
-    }
-
-    // --- Copy Button ---
-    function attachCopyButtons() {
-      document.querySelectorAll('.copy-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const text = `Q: ${btn.dataset.question}\n${btn.dataset.solution ? 'Solution: ' + btn.dataset.solution : ''}`;
-          navigator.clipboard.writeText(text).then(() => alert('Copied!'));
-        });
-      });
-    }
-
-    // --- Fetch Notifications ---
-    async function fetchNotifications() {
-      const res = await fetch('/notifications/pending');
-      const notifications = await res.json();
-      const list = document.getElementById('notifications-list');
-      list.innerHTML = '';
-      notifications.forEach(n => {
-        const li = document.createElement('li');
-        li.textContent = `${n.subject}: ${n.message}`;
-        list.appendChild(li);
-      });
-    }
-
-    loadQuestions();
-    attachCopyButtons();
-    fetchNotifications();
-    setInterval(fetchNotifications, 5000); // Refresh every 5s
-  </script>
-</body>
-</html>
+  }
+});
+</script>
+{% endblock %}

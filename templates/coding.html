@@ -16,7 +16,7 @@
   .sql-table th, .sql-table td, .preview-table th, .preview-table td { border:1px solid rgba(0,0,0,0.06); padding:6px; font-size:0.9rem; }
   .exercise-row { display:flex; flex-direction:column; gap:6px; }
   .exercise-row a { font-weight:700; color:var(--text); text-decoration:none; }
-  .exercise-row a:hover { text-decoration:underline; color:var(--accent-green); }
+  .exercise-row a:hover { text-decoration:underline; color:var(--accent); }
   .hint { font-size:0.9rem; color:var(--muted); margin-top:6px; }
   .small-muted { font-size:0.85rem; color:var(--muted); }
   .btn-loading { pointer-events: none; opacity: .7; }
@@ -49,7 +49,7 @@
                     <div class="small-muted">{{ ex.description }}</div>
                   </div>
                   <div class="text-end">
-                    <div><span class="lang-badge">{{ ex.language|upper }}</span></div>
+                    <div><span class="lang-badge">{{ (ex.language or '')|upper }}</span></div>
                     <div class="small-muted mt-1">{{ ex.difficulty }}</div>
                   </div>
                 </div>
@@ -107,7 +107,9 @@
 </div>
 
 <script type="application/json" id="exercisesData">{{ exercises|tojson }}</script>
+{% endblock %}
 
+{% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const exEl = document.getElementById('exercisesData');
@@ -127,17 +129,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const showServerBtn = document.getElementById('showServerTableBtn');
   const serverContainer = document.getElementById('sqlServerTable');
 
-  // Helper: determine canonical code/solution keys for different languages
   function getStarterFor(ex, mode) {
     if(!ex) return '';
     mode = (mode || '').toLowerCase();
-    // check common variants and fallbacks
     if(mode === 'js') return ex.starter_js || ex.starterJS || ex.starter || '';
     if(mode === 'html') return ex.starter_html || ex.starterHTML || ex.starter || '';
     if(mode === 'c') return ex.starter_c || ex.starterC || ex.starter || '';
-    if(mode === 'python') return ex.starter_py || ex.starter_python || ex.starter_python3 || ex.starter || '';
+    if(mode === 'python') return ex.starter_py || ex.starter_python || ex.starter || '';
     if(mode === 'sql') return ex.schema_sql || ex.schema || ex.schemaSql || ex.starter || '';
-    // fallback to any available starter field
     return ex.starter_js || ex.starter_html || ex.starter_py || ex.starter_c || ex.schema_sql || ex.starter || '';
   }
   function getSolutionFor(ex, mode) {
@@ -147,11 +146,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if(mode === 'html') return ex.solution_html || ex.solutionHTML || ex.solution || '';
     if(mode === 'c') return ex.solution_c || ex.solutionC || ex.solution || '';
     if(mode === 'python') return ex.solution_py || ex.solution_python || ex.solution || '';
-    if(mode === 'sql') return ex.example_query || ex.example_query || ex.exampleQuery || ex.example || '';
+    if(mode === 'sql') return ex.example_query || ex.exampleQuery || ex.example || '';
     return ex.solution_js || ex.solution_html || ex.solution_py || ex.solution_c || ex.example_query || ex.solution || '';
   }
 
-  // helper: render sample data tables into #sampleData (supports multiple tables)
   function renderSampleData(sample) {
     sampleDataRoot.innerHTML = '';
     if (!sample || typeof sample !== 'object' || Object.keys(sample).length === 0) {
@@ -172,7 +170,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const thead = document.createElement('thead');
       const tbody = document.createElement('tbody');
 
-      // compute columns as union of keys across rows to be robust
       const colsSet = new Set();
       rows.forEach(r => {
         if (r && typeof r === 'object') {
@@ -211,32 +208,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Apply current exercise & editor mode to UI fields
   function applyExerciseToUI(ex) {
     if(!ex) return;
     current = ex;
-    // decide mode: prefer exercise language unless user changed mode explicitly
     const lang = (ex.language || 'js').toLowerCase();
-    // keep existing selection unless it's inconsistent with ex language; if mismatch, set to ex language
     const allowed = ['js','html','c','sql','python'];
     if(!allowed.includes(editorModeSelect.value) || editorModeSelect.value !== lang) {
-      // set editor mode to exercise language to make solution display consistent by default
       editorModeSelect.value = lang;
     }
     updateEditorFromCurrent();
   }
 
-  // Fill editor and solution fields from `current` + editorModeSelect
   function updateEditorFromCurrent() {
     if(!current) return;
     const mode = editorModeSelect.value;
     const starter = getStarterFor(current, mode);
     const solution = getSolutionFor(current, mode);
-    // Set editor content
     codeEditor.value = starter || '';
-    // Set solution content
     solutionPre.textContent = solution || '(No solution provided for this exercise in this language.)';
-    // Show/hide SQL preview area
     if(mode === 'sql') {
       sqlPreview.style.display = '';
       renderSampleData(current.sample_data || {});
@@ -247,16 +236,12 @@ document.addEventListener('DOMContentLoaded', () => {
       showServerBtn.style.display = (['js','html','c','python'].includes(mode) ? 'none' : 'none');
       serverContainer.style.display = 'none';
     }
-    // Show or hide preview/console based on mode
     jsConsole.style.display = (mode === 'js' ? '' : 'none');
     preview.style.display = (mode === 'html' || mode === 'js' ? '' : 'none');
-
-    // Hide solution initially
     solutionPre.style.display = 'none';
     showSolBtn.textContent = 'Show solution';
   }
 
-  // Set exercise by id
   function setExercise(id){
     if(!exercises || !exercises.length) return;
     const ex = exercises.find(x => String(x.id) === String(id));
@@ -264,7 +249,6 @@ document.addEventListener('DOMContentLoaded', () => {
     applyExerciseToUI(ex);
   }
 
-  // click to choose exercise (delegated)
   document.body.addEventListener('click', (e) => {
     const el = e.target.closest && e.target.closest('.choose-ex');
     if(!el) return;
@@ -273,12 +257,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if(id != null) setExercise(id);
   });
 
-  // editor mode changes update editor + solution immediately to the canonical fields
   editorModeSelect.addEventListener('change', () => {
     updateEditorFromCurrent();
   });
 
-  // copy button
   const copyBtn = document.getElementById('copyCode');
   copyBtn.addEventListener('click', async () => {
     try {
@@ -286,12 +268,10 @@ document.addEventListener('DOMContentLoaded', () => {
       copyBtn.textContent = 'Copied ✓';
       setTimeout(()=> copyBtn.textContent = 'Copy', 1500);
     } catch (e) {
-      console.warn('Clipboard failed', e);
       alert('Copy failed — please select and copy manually.');
     }
   });
 
-  // solution toggle
   showSolBtn.addEventListener('click', () => {
     if (solutionPre.style.display === 'none') {
       solutionPre.style.display = '';
@@ -307,7 +287,6 @@ document.addEventListener('DOMContentLoaded', () => {
   runBtn.addEventListener('click', async () => {
     const mode = editorModeSelect ? editorModeSelect.value : 'js';
     const code = codeEditor ? codeEditor.value : '';
-    // reset server table area
     serverContainer.style.display = 'none';
     serverContainer.innerHTML = '';
     if(jsConsole) { jsConsole.style.display = 'none'; jsConsole.textContent = ''; }
@@ -338,17 +317,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const url = URL.createObjectURL(blob);
       if(preview){
         preview.srcdoc = `<html><body><script src="${url}"><\/script></body></html>`;
-        preview.onload = () => {
-          try { URL.revokeObjectURL(url); } catch(_){}
-          preview.onload = null;
-        };
+        preview.onload = () => { try { URL.revokeObjectURL(url); } catch(_){}; preview.onload = null; };
       }
     } else if(mode === 'c') {
-      try { await navigator.clipboard.writeText(code || ''); } catch(e){ /* ignore */ }
+      try { await navigator.clipboard.writeText(code || ''); } catch(e){ }
       window.open('https://www.onlinegdb.com/online_c_compiler', '_blank');
-      alert('C code copied to clipboard (if permitted) — paste into OnlineGDB and run.');
+      alert('C code copied to clipboard — paste into OnlineGDB and run.');
     } else if(mode === 'python') {
-      try { await navigator.clipboard.writeText(code || ''); } catch(e){ /* ignore */ }
+      try { await navigator.clipboard.writeText(code || ''); } catch(e){ }
       window.open('https://replit.com/languages/python3', '_blank');
       alert('Python code copied to clipboard — paste into the opened REPL.');
     } else if(mode === 'sql') {
@@ -356,7 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // receive messages from iframe (console output)
+  // iframe console messages
   window.addEventListener('message', (ev) => {
     try {
       if(!ev.data || ev.data.type !== 'console') return;
@@ -366,7 +342,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch(_) {}
   });
 
-  // Show server table button: POSTs the editor SQL to server and displays returned HTML
+  // Robust server table handler (supports /exercise-table preview format)
   let serverVisible = false;
   showServerBtn.addEventListener('click', async () => {
     if(!current || String(current.language).toLowerCase() !== 'sql') return;
@@ -382,7 +358,7 @@ document.addEventListener('DOMContentLoaded', () => {
     showServerBtn.classList.add('btn-loading');
     const origText = showServerBtn.textContent;
     showServerBtn.textContent = 'Loading…';
-    serverContainer.style.display = ''; // ensure visible while loading
+    serverContainer.style.display = '';
     serverContainer.innerHTML = '<div class="small-muted">Loading table from server…</div>';
 
     try {
@@ -393,26 +369,59 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({ sql: sqlText })
       });
 
-      let json;
-      try {
-        json = await resp.json();
-      } catch (parseErr) {
-        const text = await resp.text();
-        serverContainer.innerHTML = '<div class="alert alert-warning small">Server returned non-JSON response — rendering raw HTML below.</div>' + text;
+      const text = await resp.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch(e) { json = null; }
+
+      if (!json) {
+        serverContainer.innerHTML = text || '<div class="small-muted">No table data</div>';
         showServerBtn.textContent = 'Hide table (server)';
         serverVisible = true;
         return;
       }
 
-      if(!json.ok) {
-        serverContainer.innerHTML = `<div class="alert alert-danger small">Error: ${json.error || 'Unknown server error'}</div>`;
-        showServerBtn.textContent = 'Show table (server)';
-        serverVisible = false;
-      } else {
-        serverContainer.innerHTML = json.html || '<div class="small-muted">No table data</div>';
+      if (json.ok && json.preview && typeof json.preview === 'object') {
+        const buildHtmlFromPreview = (previewObj) => {
+          let out = '';
+          for (const tbl of Object.keys(previewObj)) {
+            const rows = Array.isArray(previewObj[tbl]) ? previewObj[tbl] : [];
+            out += `<div class="small-muted mb-1">Table: ${tbl}</div>`;
+            if (!rows.length) {
+              out += '<div class="small-muted mb-2">No rows</div>';
+              continue;
+            }
+            const colsSet = new Set();
+            rows.forEach(r => { if(r && typeof r === 'object') Object.keys(r).forEach(k=>colsSet.add(k)); });
+            const cols = Array.from(colsSet);
+            out += '<div class="table-responsive"><table class="table table-sm preview-table"><thead><tr>';
+            cols.forEach(c => out += `<th>${c}</th>`);
+            out += '</tr></thead><tbody>';
+            rows.forEach(r => {
+              out += '<tr>';
+              cols.forEach(c => out += `<td>${(r && Object.prototype.hasOwnProperty.call(r,c)) ? String(r[c]) : ''}</td>`);
+              out += '</tr>';
+            });
+            out += '</tbody></table></div><hr/>';
+          }
+          return out;
+        };
+
+        serverContainer.innerHTML = buildHtmlFromPreview(json.preview);
         showServerBtn.textContent = 'Hide table (server)';
         serverVisible = true;
+        return;
       }
+
+      if (json.ok && json.previewHtml) {
+        serverContainer.innerHTML = json.previewHtml;
+        showServerBtn.textContent = 'Hide table (server)';
+        serverVisible = true;
+        return;
+      }
+
+      serverContainer.innerHTML = `<div class="alert alert-warning small">No table returned by server or unknown response format.</div>`;
+      showServerBtn.textContent = 'Show table (server)';
+      serverVisible = false;
 
     } catch (err) {
       serverContainer.innerHTML = `<div class="alert alert-danger small">Request failed: ${err && err.message ? err.message : String(err)}</div>`;
@@ -424,12 +433,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // initial selection: pick first exercise if any
+  // initial selection
   if(exercises && exercises.length) {
-    // prefer the first SQL or first item if none — keep UX consistent
     setExercise(exercises[0].id);
   }
 });
 </script>
-
 {% endblock %}

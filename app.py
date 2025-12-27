@@ -459,6 +459,36 @@ def drive_image(file_id: str):
 @app.route("/")
 def home_page():
     return render_template("index.html", message=FOOTER_MESSAGE)
+# Add this route to app.py (near other page routes)
+
+@app.route("/rules", endpoint="rules_page")
+def rules_page():
+    """
+    Serve the rules page. Try reading from a sheets helper if available,
+    otherwise fall back to a local JSON file data/rules.json, or an empty list.
+    """
+    rules = []
+    # try sheets.py first (if the app includes it)
+    try:
+        import sheets as sheets_mod  # optional dependency
+        if hasattr(sheets_mod, "read_rules"):
+            try:
+                rules = sheets_mod.read_rules() or []
+            except Exception:
+                # sheet read failed; fallback below
+                rules = []
+    except Exception:
+        # sheets not available — fall back to local JSON
+        try:
+            rules = safe_load_json(DATA_DIR / "rules.json") or []
+        except Exception:
+            rules = []
+
+    # Ensure rules is a list for template safety
+    if not isinstance(rules, list):
+        rules = []
+
+    return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
 
 # Explicit quiz_forms endpoint so templates using url_for('quiz_forms') succeed
 @app.route("/quiz-forms", endpoint="quiz_forms")

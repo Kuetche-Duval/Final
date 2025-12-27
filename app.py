@@ -1,4 +1,3 @@
-# Unified app.py — Combined and repaired from provided parts
 """
 Flask app for Newton's Nerds (push subscriptions, questions, exercises runner, admin tools).
 This file consolidates the 5 parts you supplied, with defensive checks and small fixes.
@@ -168,7 +167,8 @@ def normalize_endpoint(endpoint: str) -> str:
         scheme = u.scheme or "https"
         netloc = u.netloc or u.path.split("/")[0]
         path = u.path or ""
-        return f"{scheme}://{netloc}{path}".rstrip("/")
+        normalized = f"{scheme}://{netloc}{path}".rstrip("/")
+        return normalized
     except Exception:
         return endpoint.strip()
 
@@ -219,10 +219,13 @@ def _save_subscription(subject, client_id, subscription_obj) -> bool:
             except Exception:
                 subscription_obj = {"endpoint": subscription_obj}
 
-        endpoint = subscription_obj.get("endpoint")
+        endpoint = subscription_obj.get("endpoint") or subscription_obj.get("url")
         if not endpoint:
             logger.warning("Subscription missing endpoint; skipping save")
             return False
+
+        # normalize endpoint for consistent storage
+        endpoint_norm = normalize_endpoint(endpoint)
 
         keys = subscription_obj.get("keys", {}) if isinstance(subscription_obj, dict) else {}
         p256 = keys.get("p256dh", "")
@@ -230,12 +233,13 @@ def _save_subscription(subject, client_id, subscription_obj) -> bool:
         now = datetime.utcnow().replace(microsecond=0).isoformat()
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
+            # store using normalized endpoint as primary key
             c.execute("""REPLACE INTO subscriptions
                          (endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
                          VALUES (?,?,?,?,?,?,?)""",
-                      (endpoint, subject, client_id or "", p256, auth, json.dumps(subscription_obj), now))
+                      (endpoint_norm, subject, client_id or "", p256, auth, json.dumps(subscription_obj), now))
             conn.commit()
-        logger.debug("Saved subscription to sqlite for %s", endpoint)
+        logger.debug("Saved subscription to sqlite for %s", endpoint_norm)
         return True
     except Exception:
         logger.exception("_save_subscription failed")
@@ -294,9 +298,10 @@ def _delete_subscriptions_by_endpoint(endpoint):
         normalized = normalize_endpoint(endpoint)
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
+            # delete by raw or normalized endpoint variants to be robust
             c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint, normalized))
             conn.commit()
-        logger.debug("Deleted local subscription(s) for endpoint %s", endpoint)
+        logger.debug("Deleted local subscription(s) for endpoint %s (normalized=%s)", endpoint, normalized)
     except Exception:
         logger.exception("_delete_subscriptions_by_endpoint failed")
 
@@ -304,12 +309,16 @@ def _delete_subscriptions_by_endpoint(endpoint):
 
 def save_notification_for_endpoint(endpoint, subject, title, body, data_obj=None):
     try:
+        if not endpoint:
+            logger.debug("Not saving notification: missing endpoint")
+            return None
+        endpoint_norm = normalize_endpoint(endpoint)
         now = datetime.utcnow().replace(microsecond=0).isoformat()
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
             c.execute("""INSERT INTO notifications (endpoint, subject, title, body, data, created_at, delivered)
                          VALUES (?,?,?,?,?,?,0)""",
-                      (endpoint or "", subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
+                      (endpoint_norm or "", subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
             nid = c.lastrowid
             conn.commit()
         return nid
@@ -322,9 +331,10 @@ def fetch_pending_notifications_for_endpoint(endpoint):
     try:
         if not endpoint:
             return []
+        endpoint_norm = normalize_endpoint(endpoint)
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
-            c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint,))
+            c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint_norm,))
             rows = c.fetchall()
         out = []
         for nid, subj, title, body, data_text, created_at in rows:
@@ -343,13 +353,14 @@ def ack_notifications_by_ids(endpoint, ids):
     try:
         if not endpoint or not ids:
             return 0
+        endpoint_norm = normalize_endpoint(endpoint)
         now = datetime.utcnow().replace(microsecond=0).isoformat()
         changed = 0
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
             for nid in ids:
                 try:
-                    c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint))
+                    c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=??", (now, nid, endpoint_norm))
                     if c.rowcount:
                         changed += 1
                 except Exception:
@@ -395,17 +406,19 @@ def send_push_to_subject(subject, question_text, attempt_text):
     title = f"New message in {subject}"
     q_preview = (question_text or "")[:140]
     a_preview = (attempt_text or "")[:180]
-    body = f"Q: {q_preview}\nA: {a_preview}"
+    body = f"Q: {q_preview}\\nA: {a_preview}"
     payload_template = {"title": title, "body": body, "url": "/questions", "subject": subject, "preview": {"question": q_preview, "attempt": a_preview}}
 
     detail = []
     sent = 0
 
-    # persist notifications for offline clients
+    # persist notifications for offline clients (use normalized endpoints)
     for r in subs:
         try:
             sub = r.get("subscription") if isinstance(r, dict) else None
-            endpoint = sub.get("endpoint") if sub else None
+            endpoint = None
+            if sub and isinstance(sub, dict):
+                endpoint = sub.get("endpoint")
             save_notification_for_endpoint(endpoint, subject, payload_template["title"], payload_template["body"], payload_template.get("preview"))
         except Exception:
             continue
@@ -450,12 +463,13 @@ def send_push_to_subject(subject, question_text, attempt_text):
                 if res.get("ok"):
                     ok = True
                     sent += 1
-                    detail.append({"endpoint": endpoint, "ok": True})
+                    detail.append({"endpoint": normalize_endpoint(endpoint), "ok": True})
                     try:
                         now = datetime.utcnow().replace(microsecond=0).isoformat()
                         with sqlite3.connect(str(DB_PATH)) as conn:
                             c = conn.cursor()
-                            c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, endpoint))
+                            # mark delivered for normalized endpoint
+                            c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, normalize_endpoint(endpoint)))
                             conn.commit()
                     except Exception:
                         logger.exception("Failed to mark delivered for %s", endpoint)
@@ -470,12 +484,12 @@ def send_push_to_subject(subject, question_text, attempt_text):
                             _delete_subscriptions_by_endpoint(endpoint)
                         except Exception:
                             logger.exception("Failed removing stale subscription %s", endpoint)
-                        detail.append({"endpoint": endpoint, "ok": False, "status": status, "error": err, "deleted": True})
+                        detail.append({"endpoint": normalize_endpoint(endpoint), "ok": False, "status": status, "error": err, "deleted": True})
                         ok = False
                         break
                     time.sleep(0.12)
             if not ok:
-                detail.append({"endpoint": endpoint, "ok": False, "error": "final-failure"})
+                detail.append({"endpoint": normalize_endpoint(endpoint), "ok": False, "error": "final-failure"})
         except Exception:
             logger.exception("Exception sending push to subscription row")
             detail.append({"endpoint": None, "ok": False, "error": "processing-exception"})
@@ -506,8 +520,9 @@ def save_subscription_route():
                 try:
                     sub = r.get("subscription") if isinstance(r, dict) else None
                     subj = r.get("subject") if isinstance(r, dict) else None
-                    if sub and sub.get("endpoint") == endpoint and subj:
-                        subjects_for_endpoint.append(_normalize_subject(subj))
+                    if sub and subj:
+                        if normalize_endpoint(sub.get("endpoint")) == normalize_endpoint(endpoint):
+                            subjects_for_endpoint.append(_normalize_subject(subj))
                 except Exception:
                     continue
             subjects_for_endpoint = sorted(list(dict.fromkeys(subjects_for_endpoint)))
@@ -516,7 +531,7 @@ def save_subscription_route():
         resp = jsonify({"ok": ok, "subjects": subjects_for_endpoint})
         try:
             if endpoint:
-                resp.set_cookie('nn_subscription', endpoint, max_age=COOKIE_MAX_AGE, samesite='Lax')
+                resp.set_cookie('nn_subscription', normalize_endpoint(endpoint), max_age=COOKIE_MAX_AGE, samesite='Lax')
         except Exception:
             pass
         return resp, (200 if ok else 500)
@@ -538,7 +553,7 @@ def subscriptions_check():
                 try:
                     sub = r.get("subscription") if isinstance(r, dict) else None
                     subj = r.get("subject") if isinstance(r, dict) else None
-                    if sub and sub.get("endpoint") == endpoint and subj:
+                    if sub and subj and normalize_endpoint(sub.get("endpoint")) == normalize_endpoint(endpoint):
                         out_subjects.append(_normalize_subject(subj))
                 except Exception:
                     continue
@@ -763,8 +778,10 @@ def admin_announcement():
                         if not sub:
                             continue
                         ep = sub.get("endpoint")
-                        if ep and ep not in uniq:
-                            uniq[ep] = sub
+                        if ep:
+                            epn = normalize_endpoint(ep)
+                            if epn and epn not in uniq:
+                                uniq[epn] = sub
                     except Exception:
                         continue
                 for sub in uniq.values():
@@ -772,9 +789,9 @@ def admin_announcement():
                         save_notification_for_endpoint(sub.get("endpoint"), subject, title, body, {"announcement": True})
                         if PYWEBPUSH_AVAILABLE and VAPID_PRIVATE_KEY:
                             res = _send_push_to_single(sub, {"title": title, "body": body, "url": "/"})
-                            results.append({"endpoint": sub.get("endpoint"), **res})
+                            results.append({"endpoint": normalize_endpoint(sub.get("endpoint")), **res})
                         else:
-                            results.append({"endpoint": sub.get("endpoint"), "ok": False, "error": "push-not-configured"})
+                            results.append({"endpoint": normalize_endpoint(sub.get("endpoint")), "ok": False, "error": "push-not-configured"})
                     except Exception:
                         results.append({"endpoint": None, "ok": False, "error": "exception"})
                 flash(f"Announcement queued/sent to {len(results)} endpoints.", "success")
@@ -822,7 +839,7 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
             if not cols:
                 continue
             try:
-                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name= ?", (table,))
                 if not cur.fetchone():
                     cols_def = ", ".join([f'"{c}" TEXT' for c in cols])
                     cur.execute(f'CREATE TABLE "{table}" ({cols_def});')
@@ -939,7 +956,7 @@ def handle_404(e):
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
+    logger.error("Unhandled Exception: %s\\n%s", e, traceback.format_exc())
     # If request is JSON or API path, return JSON
     if request.path.startswith("/api/") or request.path.startswith("/admin/run-sql") or request.is_json:
         return jsonify({"ok": False, "error": str(e)}), 500

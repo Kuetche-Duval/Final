@@ -1,4 +1,9 @@
-# app.py — PART 1/5
+# Unified app.py — Combined and repaired from provided parts
+"""
+Flask app for Newton's Nerds (push subscriptions, questions, exercises runner, admin tools).
+This file consolidates the 5 parts you supplied, with defensive checks and small fixes.
+"""
+
 import os
 import json
 import time
@@ -36,6 +41,7 @@ _secret = os.environ.get("FLASK_SECRET_KEY")
 if _secret:
     app.secret_key = _secret
 else:
+    # fallback to a secure random secret
     app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
 
 # Logging
@@ -44,7 +50,10 @@ logger = logging.getLogger("nn_app")
 
 # Constants
 FOOTER_MESSAGE = os.environ.get("FOOTER_MESSAGE", "Love one another ❤")
-STATIC_CATEGORIES = ["Mathematics", "Biology", "Computer Science", "Further Mathematics", "Chemistry", "Physics", "Coding", "Other"]
+STATIC_CATEGORIES = [
+    "Mathematics", "Biology", "Computer Science", "Further Mathematics",
+    "Chemistry", "Physics", "Coding", "Other"
+]
 COOKIE_MAX_AGE = 365 * 24 * 60 * 60
 
 # Service account support (optional base64)
@@ -53,7 +62,8 @@ SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_acco
 if SERVICE_ACCOUNT_B64:
     try:
         data = base64.b64decode(SERVICE_ACCOUNT_B64)
-        json.loads(data.decode("utf-8"))  # validate
+        # validate JSON
+        json.loads(data.decode("utf-8"))
         with open(SERVICE_ACCOUNT_PATH, "wb") as fh:
             fh.write(data)
         try:
@@ -95,7 +105,7 @@ DB_PATH = Path(NN_LOCAL_DB).resolve()
 SHEETS_AVAILABLE = False
 sheets_mod = None
 try:
-    import sheets as sheets_mod_candidate
+    import sheets as sheets_mod_candidate  # type: ignore
     sheets_mod = sheets_mod_candidate
     if all(hasattr(sheets_mod, fn) for fn in ("save_subscription", "list_subscriptions", "get_questions", "append_row")):
         SHEETS_AVAILABLE = True
@@ -107,7 +117,8 @@ except Exception:
     sheets_mod = None
     SHEETS_AVAILABLE = False
     logger.debug("sheets.py not present; using local sqlite / data/ JSON fallback.")
-# app.py — PART 2/5 (local DB init, helpers)
+
+# --- Local DB init ---
 def _init_local_db():
     """Ensure local sqlite DB and tables exist."""
     try:
@@ -147,7 +158,8 @@ def _init_local_db():
 
 _init_local_db()
 
-# helpers
+# --- helpers ---
+
 def normalize_endpoint(endpoint: str) -> str:
     if not endpoint:
         return ""
@@ -160,7 +172,8 @@ def normalize_endpoint(endpoint: str) -> str:
     except Exception:
         return endpoint.strip()
 
-def _is_valid_subscription_obj(sub):
+
+def _is_valid_subscription_obj(sub) -> bool:
     if not sub or not isinstance(sub, dict):
         return False
     ep = sub.get("endpoint") or sub.get("url")
@@ -168,7 +181,8 @@ def _is_valid_subscription_obj(sub):
         return False
     return True
 
-def _normalize_subject(s):
+
+def _normalize_subject(s: str) -> str:
     return (s or "Other").strip()
 
 # wrapper to safely render templates (avoid TemplateNotFound crashes)
@@ -185,9 +199,9 @@ def render_template_safe(template_name, **kwargs):
             return render_template("error.html", message=FOOTER_MESSAGE, error=f"Missing template: {template_name}"), 500
         except Exception:
             return f"<h1>Template missing: {template_name}</h1><pre>{str(e)}</pre>", 500
-# app.py — PART 3/5 (subscriptions + notifications persistence + listing)
-# Save subscription preferentially to Sheets (if configured), else to sqlite
-def _save_subscription(subject, client_id, subscription_obj):
+
+# --- persistence helpers: subscriptions & notifications ---
+def _save_subscription(subject, client_id, subscription_obj) -> bool:
     subject = _normalize_subject(subject)
     try:
         # prefer Sheets if configured
@@ -227,6 +241,7 @@ def _save_subscription(subject, client_id, subscription_obj):
         logger.exception("_save_subscription failed")
         return False
 
+
 def _list_subscriptions(subject=None):
     try:
         if SHEETS_AVAILABLE and QUESTIONS_SUBSCRIPTION_KEY:
@@ -264,6 +279,7 @@ def _list_subscriptions(subject=None):
         logger.exception("_list_subscriptions failed")
         return []
 
+
 def _delete_subscriptions_by_endpoint(endpoint):
     try:
         if not endpoint:
@@ -275,15 +291,17 @@ def _delete_subscriptions_by_endpoint(endpoint):
                 return
             except Exception:
                 logger.exception("sheets.delete_subscriptions_by_endpoint failed; falling back to sqlite")
+        normalized = normalize_endpoint(endpoint)
         with sqlite3.connect(str(DB_PATH)) as conn:
             c = conn.cursor()
-            c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint, normalize_endpoint(endpoint)))
+            c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint, normalized))
             conn.commit()
         logger.debug("Deleted local subscription(s) for endpoint %s", endpoint)
     except Exception:
         logger.exception("_delete_subscriptions_by_endpoint failed")
 
 # notifications persistence
+
 def save_notification_for_endpoint(endpoint, subject, title, body, data_obj=None):
     try:
         now = datetime.utcnow().replace(microsecond=0).isoformat()
@@ -298,6 +316,7 @@ def save_notification_for_endpoint(endpoint, subject, title, body, data_obj=None
     except Exception:
         logger.exception("save_notification_for_endpoint failed")
         return None
+
 
 def fetch_pending_notifications_for_endpoint(endpoint):
     try:
@@ -319,6 +338,7 @@ def fetch_pending_notifications_for_endpoint(endpoint):
         logger.exception("fetch_pending_notifications_for_endpoint failed")
         return []
 
+
 def ack_notifications_by_ids(endpoint, ids):
     try:
         if not endpoint or not ids:
@@ -339,8 +359,9 @@ def ack_notifications_by_ids(endpoint, ids):
     except Exception:
         logger.exception("ack_notifications_by_ids failed")
         return 0
-# app.py — PART 4/5 (push send, subscription endpoints, notifications API)
-# low-level send single push (guarded)
+
+# --- push sending ---
+
 def _send_push_to_single(sub, payload):
     if not PYWEBPUSH_AVAILABLE:
         return {"ok": False, "error": "pywebpush-not-available"}
@@ -361,6 +382,7 @@ def _send_push_to_single(sub, payload):
         return {"ok": False, "error": str(ex), "status": status}
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
+
 
 def send_push_to_subject(subject, question_text, attempt_text):
     try:
@@ -397,7 +419,7 @@ def send_push_to_subject(subject, question_text, attempt_text):
             except Exception:
                 ep = None
             detail.append({"endpoint": ep, "ok": False, "error": "sending-disabled"})
-        return {"sent": 0, "errors": ["sending-disabled"], "detail": detail}
+        return {"sent": 0, "errors": [d for d in detail if not d.get("ok")], "detail": detail}
 
     # attempt delivery
     for r in subs:
@@ -442,6 +464,7 @@ def send_push_to_subject(subject, question_text, attempt_text):
                     status = res.get("status")
                     err = res.get("error")
                     logger.warning("Push failure to %s (status=%s): %s", endpoint, status, err)
+                    # stale subscription cleanup
                     if status in (404, 410) or (err and "unsubscribed" in str(err).lower()):
                         try:
                             _delete_subscriptions_by_endpoint(endpoint)
@@ -459,7 +482,7 @@ def send_push_to_subject(subject, question_text, attempt_text):
 
     return {"sent": sent, "errors": [d for d in detail if not d.get("ok")], "detail": detail}
 
-# HTTP endpoints for subscription + notifications
+# --- HTTP endpoints for subscription + notifications ---
 @app.route("/save-subscription", methods=["POST"])
 def save_subscription_route():
     try:
@@ -501,6 +524,7 @@ def save_subscription_route():
         logger.exception("save-subscription failed: %s", traceback.format_exc())
         return jsonify({"ok": False, "error": "server-error"}), 500
 
+
 @app.route("/subscriptions/check", methods=["GET"])
 def subscriptions_check():
     try:
@@ -525,6 +549,7 @@ def subscriptions_check():
         logger.exception("subscriptions_check top-level failed")
         return jsonify({"ok": False, "error": "server-error"}), 500
 
+
 @app.route("/notifications/pending", methods=["GET"])
 def notifications_pending():
     try:
@@ -536,6 +561,7 @@ def notifications_pending():
     except Exception:
         logger.exception("notifications_pending failed")
         return jsonify({"ok": False, "error": "server-error"}), 500
+
 
 @app.route("/notifications/ack", methods=["POST"])
 def notifications_ack():
@@ -553,13 +579,15 @@ def notifications_ack():
         logger.exception("notifications_ack failed")
         return jsonify({"ok": False, "error": "server-error"}), 500
 
+
 # expose vapid public key
 @app.route("/api/vapid")
 def api_vapid():
     if not VAPID_PUBLIC_KEY:
         return jsonify({"ok": False, "error": "vapid-not-configured"}), 503
     return jsonify({"ok": True, "publicKey": VAPID_PUBLIC_KEY})
-# app.py — PART 5/5 (pages, exercise runner, admin announcement, error handlers, run)
+
+# --- pages and app features ---
 # Serve service worker if present
 @app.route("/service-worker.js")
 def service_worker():
@@ -583,19 +611,19 @@ def index_alias():
         logger.exception("index_alias failed")
         return render_template_safe("index.html", message=FOOTER_MESSAGE)
 
+
 @app.route("/content")
 def content_page():
     return render_template_safe("content.html", message=FOOTER_MESSAGE)
 
-# quizzes list page and quiz forms
 @app.route("/quizzes")
 def quizzes_page():
     return render_template_safe("quizzes.html", message=FOOTER_MESSAGE)
 
 @app.route("/quiz-forms")
 def quiz_forms():
-    # ensure endpoint name used in templates is 'quiz_forms'
     return render_template_safe("quiz_forms.html", message=FOOTER_MESSAGE)
+
 
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
@@ -630,8 +658,8 @@ def questions_page():
                 logger.exception("send_push_to_subject failed")
             resp = redirect(url_for("questions_page"))
             try:
-                resp.set_cookie("nn_user", name, max_age=COOKIE_MAX_AGE, samesite="Lax")
-                resp.set_cookie("nn_last_category", category, max_age=COOKIE_MAX_AGE, samesite="Lax")
+                resp.set_cookie("nn_user", name, max_age=COOKIE_MAX_AGE, samesite='Lax')
+                resp.set_cookie("nn_last_category", category, max_age=COOKIE_MAX_AGE, samesite='Lax')
             except Exception:
                 pass
             return resp
@@ -671,6 +699,7 @@ def questions_page():
         flash("Could not load questions", "danger")
         return render_template_safe("questions.html", questions=[], categories=STATIC_CATEGORIES, selected_category="", message=FOOTER_MESSAGE, vapid_public_key=VAPID_PUBLIC_KEY)
 
+
 @app.route("/coding")
 def coding_page():
     exercises = []
@@ -682,14 +711,17 @@ def coding_page():
         logger.exception("Failed loading coding_exercises.json")
     return render_template_safe("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
 
+
 @app.route("/health")
 def health_index():
     return render_template_safe("health.html", message=FOOTER_MESSAGE)
+
 
 @app.route("/health/<path:slug>")
 def health_detail(slug):
     # Render health_detail.html with slug; templates should load content by slug or show fallback
     return render_template_safe("health_detail.html", slug=slug, message=FOOTER_MESSAGE)
+
 
 @app.route("/rules")
 def rules_page():
@@ -701,9 +733,11 @@ def rules_page():
         logger.exception("Failed reading group rules")
     return render_template_safe("rules.html", rules=rules, message=FOOTER_MESSAGE)
 
+
 @app.route("/admin/questions")
 def admin_questions():
     return render_template_safe("admin_questions.html", message=FOOTER_MESSAGE)
+
 
 # admin announcement route (protected by ADMIN_KEY)
 @app.route("/admin/announcement", methods=["GET", "POST"])
@@ -755,6 +789,7 @@ def admin_announcement():
             return render_template_safe("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
     return render_template_safe("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
 
+
 # Safe multi-statement SQL runner helper
 def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
     conn = sqlite3.connect(":memory:")
@@ -804,6 +839,7 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
                     continue
     conn.commit()
     return conn, [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+
 
 # exercise-table route (accepts POST - form or JSON body)
 @app.route("/exercise-table/<path:name>", methods=["POST", "GET"])
@@ -866,6 +902,7 @@ def exercise_table(name):
         logger.exception("exercise_table execution error")
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
 # admin-run-sql endpoint
 @app.route("/admin/run-sql", methods=["POST"])
 def admin_run_sql():
@@ -890,6 +927,7 @@ def admin_run_sql():
         logger.exception("admin_run_sql failed")
         return jsonify({"ok": False, "error": "execution-failed"}), 500
 
+
 # Error handlers
 @app.errorhandler(404)
 def handle_404(e):
@@ -898,12 +936,15 @@ def handle_404(e):
     except Exception:
         return render_template_safe("error.html", message=FOOTER_MESSAGE, error=str(e)), 404
 
+
 @app.errorhandler(Exception)
 def handle_exception(e):
     logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
+    # If request is JSON or API path, return JSON
     if request.path.startswith("/api/") or request.path.startswith("/admin/run-sql") or request.is_json:
         return jsonify({"ok": False, "error": str(e)}), 500
     return render_template_safe("error.html", message=FOOTER_MESSAGE, error=str(e)), 500
+
 
 # At startup: log which templates are present / missing (helps debugging)
 def _log_template_inventory():

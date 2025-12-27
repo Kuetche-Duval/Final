@@ -45,6 +45,8 @@
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar">
         <span class="navbar-toggler-icon"></span>
       </button>
+      <button id="subscribe-btn">Enable Notifications</button>
+
 
       <div class="collapse navbar-collapse" id="mainNavbar">
         <ul class="navbar-nav ms-auto align-items-lg-center">
@@ -96,6 +98,90 @@
   <!-- push & notification helpers -->
   <script src="{{ url_for('static', filename='js/push-helper.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/notifications.js') }}" defer></script>
+
+<script>
+(async () => {
+    const btn = document.getElementById("subscribe-btn");
+
+    function getCookie(name) {
+        const value = "; " + document.cookie;
+        const parts = value.split("; " + name + "=");
+        if (parts.length === 2) return decodeURIComponent(parts.pop().split(";").shift());
+        return null;
+    }
+
+    function setCookie(name, value, days = 365) {
+        const d = new Date();
+        d.setTime(d.getTime() + days*24*60*60*1000);
+        document.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${days*24*60*60}`;
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+        return outputArray;
+    }
+
+    async function subscribePush() {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+
+        const userName = getCookie("nn_user") || "";
+        const category = getCookie("nn_last_category") || "Other";
+
+        const registration = await navigator.serviceWorker.register('/service-worker.js');
+        console.log("Service Worker registered at", registration.scope);
+
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") throw new Error("Notification permission denied");
+
+        const vapidResp = await fetch('/api/vapid');
+        const vapidData = await vapidResp.json();
+        if (!vapidData.ok) throw new Error(vapidData.error || "VAPID key missing");
+
+        const sub = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(vapidData.publicKey)
+        });
+
+        // Save subscription to server
+        const res = await fetch('/save-subscription', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subscription: sub, subject: category, client_id: userName })
+        });
+        const result = await res.json();
+        console.log("Subscription saved:", result);
+
+        if (sub.endpoint) setCookie('nn_subscription', sub.endpoint, 365);
+        alert("Subscribed to notifications successfully!");
+    }
+
+    // Automatically subscribe if user has a name cookie
+    if (getCookie("nn_user")) {
+        try {
+            await subscribePush();
+        } catch (err) {
+            console.warn("Automatic subscription failed:", err.message);
+        }
+    }
+
+    // Optional: manual button click
+    if (btn) {
+        btn.addEventListener("click", async () => {
+            try {
+                await subscribePush();
+            } catch (err) {
+                console.error(err);
+                alert("Failed to subscribe: " + err.message);
+            }
+        });
+    }
+})();
+</script>
+
 
   <script>
     (function(){

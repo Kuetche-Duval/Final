@@ -169,33 +169,6 @@
             </div>
           </div>
         </div>
-
-        <div class="col-md-6" id="google_forms_quizzes">
-          <div class="card shadow">
-            <div class="card-header bg-secondary text-white fw-bold">📝 Google Forms (Quizzes)</div>
-            <div class="card-body">
-              {% if form_list %}
-                <ul class="list-group">
-                  {% for f in form_list %}
-                    {% set fname = (f.name if f is mapping and f.get('name') else (f.title if f is mapping and f.get('title') else 'Untitled Form')) %}
-                    {% set fid = (f.form_id if f is mapping and f.get('form_id') else (f.fileId if f is mapping and f.get('fileId') else '')) %}
-                    {% set link = (f.form_answer_link if f is mapping and f.get('form_answer_link') else ( 'https://docs.google.com/forms/d/' ~ (fid or '') ~ '/viewform' )) %}
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                      <div>
-                        <div class="fw-bold">{{ fname }}</div>
-                        {% if f.get('notes') %}<div class="small text-muted">{{ f.get('notes') }}</div>{% endif %}
-                      </div>
-                      <a class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer" href="{{ link }}">Open</a>
-                    </li>
-                  {% endfor %}
-                </ul>
-              {% else %}
-                <div class="small text-muted">No forms found. Ensure <code>FORMS_FOLDER_ID</code> is set and the service account has Viewer access.</div>
-              {% endif %}
-            </div>
-          </div>
-        </div>
-
       </div>
     </div>
 

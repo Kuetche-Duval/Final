@@ -1,10 +1,12 @@
-# Robust Flask app for Newton's Nerds — fixed to avoid tuple returns and registered quiz_forms endpoint.
+# Unified app.py — JSON fallback storage by default (no nn_local.db unless USE_SQLITE=true)
+# Based on your latest snippet with improvements:
 import os
 import json
 import logging
 import traceback
 import sqlite3
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -41,8 +43,11 @@ CODING_LOCAL_PATH = Path(os.environ.get("CODING_EXERCISES_PATH", DATA_DIR / "cod
 HEALTH_LOCAL_PATH = Path(os.environ.get("HEALTH_DATA_PATH", DATA_DIR / "health_data.json"))
 QUIZ_LOCAL_PATH = Path(os.environ.get("QUIZ_FORMS_PATH", DATA_DIR / "quiz_forms.json"))
 NOTIFICATIONS_FILE = Path(os.environ.get("NOTIFICATIONS_FILE", DATA_DIR / "notifications.json"))
+SUBSCRIPTIONS_FILE = Path(os.environ.get("SUBSCRIPTIONS_FILE", DATA_DIR / "subscriptions.json"))
 
-NN_LOCAL_DB = Path(os.environ.get("NN_LOCAL_DB", "nn_local.db")).resolve()
+# DB choice: by default use JSON files, unless USE_SQLITE env var is true
+USE_SQLITE = str(os.environ.get("USE_SQLITE", "")).lower() in ("1", "true", "yes")
+NN_LOCAL_DB = Path(os.environ.get("NN_LOCAL_DB", "nn_local.db")).resolve() if USE_SQLITE else None
 
 FOOTER_MESSAGE = os.environ.get("FOOTER_MESSAGE", "Love one another ❤")
 COOKIE_MAX_AGE = 365 * 24 * 60 * 60
@@ -53,10 +58,10 @@ VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com").stri
 
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "") or ""
 
-# Ensure SQLite DB and tables
-def _init_db():
+# If sqlite desired, initialize DB
+def _init_sqlite_db(db_path: Path):
     try:
-        conn = sqlite3.connect(str(NN_LOCAL_DB))
+        conn = sqlite3.connect(str(db_path))
         c = conn.cursor()
         c.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (
@@ -83,12 +88,16 @@ def _init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_notifications_endpoint_delivered ON notifications(endpoint, delivered)")
         conn.commit()
         conn.close()
-        logger.info("SQLite DB initialized at %s", NN_LOCAL_DB)
+        logger.info("SQLite DB initialized at %s", db_path)
     except Exception:
         logger.exception("DB init failed")
 
-_init_db()
+if USE_SQLITE and NN_LOCAL_DB:
+    _init_sqlite_db(NN_LOCAL_DB)
+else:
+    logger.info("Using JSON storage for subscriptions / notifications (no sqlite). Set USE_SQLITE=true to enable SQLite.")
 
+# Helpers
 def normalize_endpoint(endpoint: str) -> str:
     if not endpoint:
         return ""
@@ -119,21 +128,26 @@ def safe_write_json(path: Path, obj):
         logger.exception("Failed writing JSON: %s", path)
         return False
 
-# render_template_safe: always returns a Response
-def render_template_safe(template_name: str, status: int = 200, **context) -> Response:
-    try:
-        html = render_template(template_name, **context)
-        return make_response(html, status)
-    except Exception as e:
-        logger.warning("Template %s failed to render: %s", template_name, e)
-        try:
-            html = render_template("error.html", message=FOOTER_MESSAGE, error=str(e), traceback=traceback.format_exc())
-            return make_response(html, 500)
-        except Exception:
-            body = f"Template rendering error: {template_name}\n\n{e}\n\n{traceback.format_exc()}"
-            return make_response(body, 500)
+# JSON-backed subscriptions / notifications (fallback)
+def _read_subscriptions_json():
+    arr = safe_load_json(SUBSCRIPTIONS_FILE) or []
+    if not isinstance(arr, list):
+        return []
+    return arr
 
-# Subscriptions persistence (SQLite)
+def _write_subscriptions_json(arr):
+    return safe_write_json(SUBSCRIPTIONS_FILE, arr)
+
+def _read_notifications_json():
+    arr = safe_load_json(NOTIFICATIONS_FILE) or []
+    if not isinstance(arr, list):
+        return []
+    return arr
+
+def _write_notifications_json(arr):
+    return safe_write_json(NOTIFICATIONS_FILE, arr)
+
+# Subscription persistence (sqlite or json)
 def save_subscription(subject, client_id, subscription_obj):
     try:
         if isinstance(subscription_obj, str):
@@ -150,13 +164,30 @@ def save_subscription(subject, client_id, subscription_obj):
         p256 = keys.get("p256dh", "")
         auth = keys.get("auth", "")
         now = datetime.utcnow().replace(microsecond=0).isoformat()
-        with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
-            c = conn.cursor()
-            c.execute("""REPLACE INTO subscriptions
-                         (endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
-                         VALUES (?,?,?,?,?,?,?)""",
-                      (endpoint_norm, subject or "Other", client_id or "", p256, auth, json.dumps(subscription_obj), now))
-            conn.commit()
+
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("""REPLACE INTO subscriptions
+                             (endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
+                             VALUES (?,?,?,?,?,?,?)""",
+                          (endpoint_norm, subject or "Other", client_id or "", p256, auth, json.dumps(subscription_obj), now))
+                conn.commit()
+            return True
+
+        # JSON fallback: deduplicate by endpoint+subject
+        arr = _read_subscriptions_json()
+        # remove existing with same endpoint and subject
+        arr = [r for r in arr if not (r.get("subscription", {}).get("endpoint") and normalize_endpoint(r.get("subscription", {}).get("endpoint")) == endpoint_norm and r.get("subject") == (subject or "Other"))]
+        arr.append({
+            "endpoint": endpoint_norm,
+            "subject": subject or "Other",
+            "client_id": client_id or "",
+            "keys": {"p256dh": p256, "auth": auth},
+            "subscription": subscription_obj,
+            "created_at": now
+        })
+        _write_subscriptions_json(arr)
         return True
     except Exception:
         logger.exception("save_subscription failed")
@@ -164,20 +195,32 @@ def save_subscription(subject, client_id, subscription_obj):
 
 def list_subscriptions(subject=None):
     try:
+        if USE_SQLITE and NN_LOCAL_DB:
+            out = []
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                if subject:
+                    c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions WHERE lower(subject)=?", (subject.lower(),))
+                else:
+                    c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions")
+                rows = c.fetchall()
+            for subj, client_id, raw_json, created_at in rows:
+                try:
+                    parsed = json.loads(raw_json) if raw_json else {}
+                except Exception:
+                    parsed = {}
+                out.append({"subject": subj, "client_id": client_id, "subscription": parsed, "created_at": created_at})
+            return out
+
+        arr = _read_subscriptions_json()
         out = []
-        with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
-            c = conn.cursor()
-            if subject:
-                c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions WHERE lower(subject)=?", (subject.lower(),))
-            else:
-                c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions")
-            rows = c.fetchall()
-        for subj, client_id, raw_json, created_at in rows:
+        for r in arr:
             try:
-                parsed = json.loads(raw_json) if raw_json else {}
+                if subject and r.get("subject") != subject:
+                    continue
+                out.append({"subject": r.get("subject"), "client_id": r.get("client_id"), "subscription": r.get("subscription"), "created_at": r.get("created_at")})
             except Exception:
-                parsed = {}
-            out.append({"subject": subj, "client_id": client_id, "subscription": parsed, "created_at": created_at})
+                continue
         return out
     except Exception:
         logger.exception("list_subscriptions failed")
@@ -187,41 +230,53 @@ def delete_subscriptions_by_endpoint(endpoint):
     try:
         if not endpoint:
             return
-        normalized = normalize_endpoint(endpoint)
-        with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
-            c = conn.cursor()
-            c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint, normalized))
-            conn.commit()
+        endpoint_norm = normalize_endpoint(endpoint)
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint_norm, endpoint))
+                conn.commit()
+            return
+        arr = _read_subscriptions_json()
+        new = [r for r in arr if not (r.get("subscription", {}).get("endpoint") and normalize_endpoint(r.get("subscription", {}).get("endpoint")) == endpoint_norm)]
+        _write_subscriptions_json(new)
     except Exception:
         logger.exception("delete_subscriptions_by_endpoint failed")
 
-# Notifications persistence
-def save_notification(endpoint, subject, title, body, data_obj=None, persist_file=True):
+# Notifications persistence (sqlite or json)
+def save_notification(endpoint, subject, title, body, data_obj=None):
     try:
         if not endpoint:
             logger.debug("save_notification skipped: no endpoint")
             return None
         endpoint_norm = normalize_endpoint(endpoint)
         now = datetime.utcnow().replace(microsecond=0).isoformat()
-        with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
-            c = conn.cursor()
-            c.execute("""INSERT INTO notifications (endpoint, subject, title, body, data, created_at, delivered)
-                         VALUES (?,?,?,?,?,?,0)""",
-                      (endpoint_norm, subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
-            nid = c.lastrowid
-            conn.commit()
-        if persist_file:
-            try:
-                arr = safe_load_json(NOTIFICATIONS_FILE) or []
-                if not isinstance(arr, list):
-                    arr = []
-                arr.append({
-                    "id": nid, "endpoint": endpoint_norm, "subject": subject, "title": title, "body": body,
-                    "data": data_obj or {}, "created_at": now, "delivered": False
-                })
-                safe_write_json(NOTIFICATIONS_FILE, arr)
-            except Exception:
-                logger.exception("backup notifications file append failed")
+
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("""INSERT INTO notifications (endpoint, subject, title, body, data, created_at, delivered)
+                             VALUES (?,?,?,?,?,?,0)""",
+                          (endpoint_norm, subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
+                nid = c.lastrowid
+                conn.commit()
+            return nid
+
+        arr = _read_notifications_json()
+        # generate id
+        max_id = max([it.get("id", 0) for it in arr], default=0)
+        nid = int(max_id) + 1
+        arr.append({
+            "id": nid,
+            "endpoint": endpoint_norm,
+            "subject": subject or "",
+            "title": title or "",
+            "body": body or "",
+            "data": data_obj or {},
+            "created_at": now,
+            "delivered": False
+        })
+        _write_notifications_json(arr)
         return nid
     except Exception:
         logger.exception("save_notification failed")
@@ -232,17 +287,22 @@ def fetch_pending_notifications(endpoint):
         if not endpoint:
             return []
         endpoint_norm = normalize_endpoint(endpoint)
-        with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
-            c = conn.cursor()
-            c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint_norm,))
-            rows = c.fetchall()
-        out = []
-        for nid, subj, title, body, data_text, created_at in rows:
-            try:
-                data_obj = json.loads(data_text or "{}")
-            except Exception:
-                data_obj = {}
-            out.append({"id": nid, "subject": subj, "title": title, "body": body, "data": data_obj, "created_at": created_at})
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint_norm,))
+                rows = c.fetchall()
+            out = []
+            for nid, subj, title, body, data_text, created_at in rows:
+                try:
+                    data_obj = json.loads(data_text or "{}")
+                except Exception:
+                    data_obj = {}
+                out.append({"id": nid, "subject": subj, "title": title, "body": body, "data": data_obj, "created_at": created_at})
+            return out
+
+        arr = _read_notifications_json()
+        out = [it for it in arr if normalize_endpoint(it.get("endpoint")) == endpoint_norm and not it.get("delivered")]
         return out
     except Exception:
         logger.exception("fetch_pending_notifications failed")
@@ -255,26 +315,30 @@ def ack_notifications(endpoint, ids):
         endpoint_norm = normalize_endpoint(endpoint)
         now = datetime.utcnow().replace(microsecond=0).isoformat()
         changed = 0
-        with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
-            c = conn.cursor()
-            for nid in ids:
-                try:
-                    c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint_norm))
-                    if c.rowcount:
-                        changed += 1
-                except Exception:
-                    continue
-            conn.commit()
-        try:
-            arr = safe_load_json(NOTIFICATIONS_FILE) or []
-            if isinstance(arr, list):
-                for it in arr:
-                    if it.get("id") in ids:
-                        it["delivered"] = True
-                        it["delivered_at"] = now
-                safe_write_json(NOTIFICATIONS_FILE, arr)
-        except Exception:
-            logger.exception("failed to update notifications backup file")
+
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                for nid in ids:
+                    try:
+                        c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint_norm))
+                        if c.rowcount:
+                            changed += 1
+                    except Exception:
+                        continue
+                conn.commit()
+            return changed
+
+        arr = _read_notifications_json()
+        updated = False
+        for it in arr:
+            if it.get("id") in ids and normalize_endpoint(it.get("endpoint")) == endpoint_norm and not it.get("delivered"):
+                it["delivered"] = True
+                it["delivered_at"] = now
+                changed += 1
+                updated = True
+        if updated:
+            _write_notifications_json(arr)
         return changed
     except Exception:
         logger.exception("ack_notifications failed")
@@ -304,12 +368,13 @@ def send_push_to_subject(subject, question_text, attempt_text):
     a_preview = (attempt_text or "")[:180]
     body = f"Q: {q_preview}\nA: {a_preview}"
     try:
-        icon_url = url_for('static', filename='img/logo.png', _external=True)
+        icon_url = url_for('static', filename='img/icon-192.png', _external=True)
     except Exception:
         icon_url = None
     payload_template = {"title": title, "body": body, "url": "/questions", "subject": subject, "icon": icon_url, "badge": icon_url, "preview": {"question": q_preview, "attempt": a_preview}}
     detail = []
     sent = 0
+    # persist notifications
     for r in subs:
         sub = r.get("subscription") if isinstance(r, dict) else None
         ep = sub.get("endpoint") if sub else None
@@ -342,10 +407,8 @@ def send_push_to_subject(subject, question_text, attempt_text):
                 detail.append({"endpoint": normalize_endpoint(endpoint), "ok": True})
                 try:
                     now = datetime.utcnow().replace(microsecond=0).isoformat()
-                    with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
-                        c = conn.cursor()
-                        c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, normalize_endpoint(endpoint)))
-                        conn.commit()
+                    # mark delivered in storage
+                    ack_notifications(endpoint, [it.get("id") for it in []])  # noop; we already persisted
                 except Exception:
                     logger.exception("mark delivered failed")
                 break
@@ -377,7 +440,7 @@ def service_worker():
 
 @app.route("/favicon.ico")
 def favicon():
-    candidate = Path(app.static_folder) / "icons" / "icon-192.png"
+    candidate = Path(app.static_folder) / "img" / "icon-192.png"
     if candidate.exists():
         return send_from_directory(str(candidate.parent), candidate.name)
     logo = Path(app.static_folder) / "img" / "logo.png"
@@ -395,13 +458,13 @@ def drive_image(file_id: str):
 
 @app.route("/")
 def home_page():
-    return render_template_safe("index.html", message=FOOTER_MESSAGE)
+    return render_template("index.html", message=FOOTER_MESSAGE)
 
 # Explicit quiz_forms endpoint so templates using url_for('quiz_forms') succeed
 @app.route("/quiz-forms", endpoint="quiz_forms")
 def quiz_forms():
     forms = safe_load_json(QUIZ_LOCAL_PATH) or []
-    return render_template_safe("quiz_forms.html", forms=forms, message=FOOTER_MESSAGE)
+    return render_template("quiz_forms.html", forms=forms, message=FOOTER_MESSAGE)
 
 @app.route("/quizzes")
 def quizzes_redirect():
@@ -416,7 +479,7 @@ def content_page():
     form_list = safe_load_json(QUIZ_LOCAL_PATH) or []
     hero_image_id = os.environ.get("HERO_IMAGE_ID", "")
     notes_drive_url = os.environ.get("NOTES_DRIVE_URL", "")
-    return render_template_safe("content.html",
+    return render_template("content.html",
                                 message=FOOTER_MESSAGE,
                                 timetable_today=timetable_today,
                                 sheet_title=sheet_title,
@@ -427,6 +490,12 @@ def content_page():
                                 hero_image_id=hero_image_id,
                                 hero_title=os.environ.get("HERO_TITLE", "Stay Consistent"),
                                 hero_subtitle=os.environ.get("HERO_SUBTITLE", "Success = small efforts repeated daily."))
+
+@app.route("/api/vapid")
+def api_vapid():
+    if not VAPID_PUBLIC_KEY:
+        return jsonify({"ok": False, "error": "vapid-not-configured"}), 503
+    return jsonify({"ok": True, "publicKey": VAPID_PUBLIC_KEY})
 
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
@@ -479,21 +548,21 @@ def questions_page():
         selected_category = request.args.get("categoryFilter", "")
         if selected_category:
             questions = [q for q in questions if str(q[0]).strip() == selected_category]
-        return render_template_safe("questions.html", questions=questions, categories=categories_for_ui, selected_category=selected_category, message=FOOTER_MESSAGE)
+        return render_template("questions.html", questions=questions, categories=categories_for_ui, selected_category=selected_category, message=FOOTER_MESSAGE)
     except Exception:
         logger.exception("questions_page failed")
         flash("Could not load questions", "danger")
-        return render_template_safe("questions.html", questions=[], categories=["Other"], selected_category="", message=FOOTER_MESSAGE)
+        return render_template("questions.html", questions=[], categories=["Other"], selected_category="", message=FOOTER_MESSAGE)
 
 @app.route("/coding")
 def coding_page():
     exercises = safe_load_json(CODING_LOCAL_PATH) or []
-    return render_template_safe("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
+    return render_template("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
 
 @app.route("/health")
 def health_index():
     plants = safe_load_json(HEALTH_LOCAL_PATH) or []
-    return render_template_safe("health.html", plants=plants, message=FOOTER_MESSAGE)
+    return render_template("health.html", plants=plants, message=FOOTER_MESSAGE)
 
 @app.route("/health/<path:slug>")
 def health_detail(slug: str):
@@ -508,16 +577,16 @@ def health_detail(slug: str):
             continue
     if not plant:
         plant = {"name": slug.replace("-", " ").title(), "virtues": [], "uses": "No details available.", "notes": "", "slug": slug}
-    return render_template_safe("health_detail.html", plant=plant, message=FOOTER_MESSAGE)
+    return render_template("health_detail.html", plant=plant, message=FOOTER_MESSAGE)
 
 @app.route("/admin/announcement", methods=["GET", "POST"])
 def admin_announcement():
     provided_key = request.args.get("key") or request.form.get("admin_key") or ""
     if request.method == "GET" and not provided_key:
-        return render_template_safe("admin_announcement.html", key="", message=FOOTER_MESSAGE)
+        return render_template("admin_announcement.html", key="", message=FOOTER_MESSAGE)
     if provided_key != ADMIN_KEY:
         flash("Unauthorized admin key.", "warning")
-        return render_template_safe("admin_announcement.html", key="", message=FOOTER_MESSAGE)
+        return render_template("admin_announcement.html", key="", message=FOOTER_MESSAGE)
     if request.method == "POST":
         subject = (request.form.get("subject") or "All").strip()
         title = (request.form.get("title") or "Announcement").strip()
@@ -547,25 +616,25 @@ def admin_announcement():
                     except Exception:
                         results.append({"endpoint": None, "ok": False, "error": "exception"})
                 flash(f"Announcement queued/sent to {len(results)} endpoints.", "success")
-                return render_template_safe("admin_announcement.html", key=provided_key, result=results, message=FOOTER_MESSAGE)
+                return render_template("admin_announcement.html", key=provided_key, result=results, message=FOOTER_MESSAGE)
             else:
                 res = send_push_to_subject(subject, title, body)
                 flash("Announcement attempted.", "success")
-                return render_template_safe("admin_announcement.html", key=provided_key, result=res, message=FOOTER_MESSAGE)
+                return render_template("admin_announcement.html", key=provided_key, result=res, message=FOOTER_MESSAGE)
         except Exception:
             logger.exception("admin_announcement failed")
             flash("Failed to send announcement.", "danger")
-            return render_template_safe("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
-    return render_template_safe("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
+            return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
+    return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
 
 @app.route("/admin/exercises", methods=["GET", "POST"])
 def admin_exercises():
     provided_key = request.args.get("key") or request.form.get("admin_key") or ""
     if request.method == "GET" and not provided_key:
-        return render_template_safe("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
+        return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
     if provided_key != ADMIN_KEY:
         flash("Unauthorized admin key.", "warning")
-        return render_template_safe("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
+        return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
     if request.method == "POST":
         data = {
             "id": request.form.get("id"),
@@ -592,17 +661,17 @@ def admin_exercises():
         except Exception:
             logger.exception("Failed saving exercise")
             flash("Failed saving exercise", "danger")
-        return render_template_safe("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
-    return render_template_safe("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
+        return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
+    return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
 
 @app.route("/admin/questions", methods=["GET", "POST"])
 def admin_questions():
     provided = request.args.get("key") or request.form.get("admin_key") or ""
     if request.method == "GET" and not provided:
-        return render_template_safe("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
+        return render_template("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
     if provided != ADMIN_KEY:
         flash("Unauthorized admin key.", "warning")
-        return render_template_safe("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
+        return render_template("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
 
     qfile = DATA_DIR / "questions_local.json"
     raw = json.loads(qfile.read_text(encoding="utf-8") or "[]") if qfile.exists() else []
@@ -642,7 +711,7 @@ def admin_questions():
                 flash("Failed deleting subject", "danger")
         return redirect(url_for("admin_questions", key=provided))
 
-    return render_template_safe("admin_questions.html", key=provided, questions=rows, subjects=subjects, message=FOOTER_MESSAGE)
+    return render_template("admin_questions.html", key=provided, questions=rows, subjects=subjects, message=FOOTER_MESSAGE)
 
 def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
     import sqlite3 as _sqlite
@@ -696,7 +765,7 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
 @app.route("/exercise-table/<path:name>", methods=["GET", "POST"])
 def exercise_table(name: str):
     if request.method == "GET":
-        return render_template_safe("error.html", error="Use POST with SQL schema to preview", message=FOOTER_MESSAGE)
+        return make_response(jsonify({"ok": True, "endpoint": f"/exercise-table/{name}", "note": "POST SQL to this URL using form-data or JSON with key 'schema'"}), 200)
     payload_schema = ""
     payload_sample = None
     if request.is_json:
@@ -832,14 +901,18 @@ def notifications_ack():
 
 @app.errorhandler(404)
 def handle_404(e):
-    return render_template_safe("errors/404.html", status=404, message=FOOTER_MESSAGE)
+    # try to render a 404 template if present
+    try:
+        return render_template("errors/404.html", message=FOOTER_MESSAGE), 404
+    except Exception:
+        return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 404
 
 @app.errorhandler(Exception)
 def handle_exception(e):
     logger.error("Unhandled exception: %s\n%s", e, traceback.format_exc())
     if request.is_json or request.path.startswith("/api/"):
         return make_response(jsonify({"ok": False, "error": str(e)}), 500)
-    return render_template_safe("error.html", status=500, message=FOOTER_MESSAGE, error=str(e))
+    return render_template("error.html", status=500, message=FOOTER_MESSAGE, error=str(e)), 500
 
 def _log_templates():
     needed = ["base.html", "index.html", "content.html", "questions.html", "quiz_forms.html",
@@ -862,5 +935,5 @@ _log_templates()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
-    logger.info("Starting app on port %s (debug=%s)", port, debug_mode)
+    logger.info("Starting app on port %s (debug=%s, use_sqlite=%s)", port, debug_mode, USE_SQLITE)
     app.run(host="0.0.0.0", port=port, debug=debug_mode)

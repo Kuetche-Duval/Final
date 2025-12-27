@@ -1,95 +1,53 @@
-// Minimal, safe service-worker for Newton's Nerds
-// Place at static/service-worker.js and serve at "/service-worker.js".
+// Minimal, safe service worker for Newton's Nerds
+// - Handles basic push events and displays notifications
+// - Avoids crashing when fetch handlers fail; always respond with a Response object.
 
-const CACHE_NAME = 'nn-static-v1';
-const OFFLINE_HTML = '/offline.html'; // optional offline fallback (you can add a file)
-
-self.addEventListener('install', (event) => {
+self.addEventListener('install', (ev) => {
   self.skipWaiting();
-  // Optionally pre-cache assets:
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      // add essentials if you want, e.g. '/', '/static/css/main.css'
-      return cache.addAll([
-        // '/offline.html'
-      ].filter(Boolean));
-    })
-  );
 });
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+self.addEventListener('activate', (ev) => {
+  clients.claim();
 });
 
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-  // Always let non-HTTP(S) requests through
-  if (!req.url.startsWith('http')) return;
-
-  const url = new URL(req.url);
-
-  // Bypass service worker for admin/api/notification endpoints and service-worker itself
-  if (url.pathname === '/service-worker.js' ||
-      url.pathname.startsWith('/api/') ||
-      url.pathname.startsWith('/notifications') ||
-      url.pathname.startsWith('/save-subscription') ||
-      url.pathname.startsWith('/exercise-table') ) {
-    event.respondWith(fetch(req));
-    return;
-  }
-
-  // Don't interfere with POST/PUT/DELETE — just fetch them
-  if (req.method !== 'GET') {
-    event.respondWith(fetch(req));
-    return;
-  }
-
-  // For navigation or GET resources, try network first then fallback to cache
-  event.respondWith(
-    fetch(req).then((networkResponse) => {
-      // Ensure we only cache successful responses (optional)
-      try {
-        if (networkResponse && networkResponse.ok) {
-          const clone = networkResponse.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(req, clone)).catch(()=>{});
-        }
-      } catch (e) { /* ignore */ }
-      return networkResponse;
-    }).catch(() => {
-      // On network failure, try cache
-      return caches.match(req).then(cached => {
-        if (cached) return cached;
-        // optionally return an offline fallback for navigations
-        return caches.match(OFFLINE_HTML).then(fallback => fallback || new Response('Offline', {status: 503, statusText: 'Offline'}));
-      });
-    })
-  );
-});
-
-// (Optional) push handler (safe no-op if not configured)
-self.addEventListener('push', (event) => {
+// Very small push handler: show notification with data
+self.addEventListener('push', function(event) {
   try {
-    const data = event.data ? event.data.json() : { title: 'Newton\'s Nerds', body: 'New notification' };
-    const title = data.title || 'Newton\'s Nerds';
+    const payload = event.data ? event.data.json() : {};
+    const title = payload.title || 'Newton\'s Nerds';
     const options = {
-      body: data.body || '',
-      icon: '/static/icons/icon-192.svg',
-      badge: '/static/icons/icon-192.svg',
-      data: data.url || '/'
+      body: payload.body || '',
+      icon: payload.icon || '/static/img/icon-192.png',
+      badge: payload.badge || '/static/img/icon-192.png',
+      data: payload || {}
     };
     event.waitUntil(self.registration.showNotification(title, options));
   } catch (e) {
-    // swallow errors in SW context
+    // fallback: show generic notification
+    event.waitUntil(self.registration.showNotification('Newton\'s Nerds', { body: 'You have a new message.' }));
   }
 });
 
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const url = event.notification.data || '/';
-  event.waitUntil(clients.matchAll({type:'window'}).then(clientList => {
-    for (const c of clientList) {
-      if (c.url === url && 'focus' in c) return c.focus();
-    }
-    if (clients.openWindow) return clients.openWindow(url);
-  }));
+// Keep fetch handler defensive: never call respondWith with something that's not a Response
+self.addEventListener('fetch', function(event) {
+  const url = new URL(event.request.url);
+  // Let navigation and site assets go through normally; for specific API endpoints we proxy safely
+  if (url.pathname.startsWith('/notifications/pending')) {
+    // Try to forward request; respond with a JSON 503 on failure to avoid TypeError in clients
+    event.respondWith((async () => {
+      try {
+        const resp = await fetch(event.request);
+        // ensure we return a proper Response
+        return resp;
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, error: 'network-error' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    })());
+    return;
+  }
+  // default: let the request go to network (no caching here)
+  // We do not call event.respondWith() for ordinary requests to keep things simple.
 });

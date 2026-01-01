@@ -26,6 +26,21 @@ except Exception:
     WebPushException = Exception
     PYWEBPUSH_AVAILABLE = False
 
+# Drive & Sheets helpers (optional; forgiving if missing)
+try:
+    import drive as gdrive
+    DRIVE_API_AVAILABLE = getattr(gdrive, "GOOGLEAPI_AVAILABLE", False)
+except Exception:
+    gdrive = None
+    DRIVE_API_AVAILABLE = False
+
+try:
+    import sheets as gsheets
+    SHEETS_AVAILABLE = True
+except Exception:
+    gsheets = None
+    SHEETS_AVAILABLE = False
+
 load_dotenv()
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -845,6 +860,66 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
                     continue
     conn.commit()
     return conn, [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+
+@app.route("/drive-image/<path:file_id>")
+def drive_image(file_id: str):
+    """
+    Serve an image stored on Google Drive by file_id.
+    - If Drive API is available and the service account works, fetch the bytes + mimeType and return them.
+    - Otherwise fall back to static img/logo.png or icon-192.png.
+    """
+    # Quick sanity: if the client accidentally passed a filename (e.g. "logo.png"), serve static file directly.
+    static_candidate = Path(app.static_folder) / "img" / file_id
+    if static_candidate.exists():
+        return send_from_directory(str(static_candidate.parent), static_candidate.name)
+
+    # If drive helper available, try to fetch metadata and bytes
+    if DRIVE_API_AVAILABLE and gdrive:
+        try:
+            # get metadata (mimeType, name)
+            meta = {}
+            try:
+                meta = gdrive.get_file_metadata(file_id) or {}
+            except Exception:
+                meta = {}
+
+            # download file bytes
+            data = b""
+            try:
+                data = gdrive.download_file(file_id) or b""
+            except Exception:
+                data = b""
+
+            if data:
+                # decide mime type from metadata, fallback to guess by name, then to image/png
+                mime = (meta.get("mimeType") or mimetypes.guess_type(meta.get("name", ""))[0] or None)
+                if not mime:
+                    # try to guess image types heuristically (many drive images will be jpeg/png/webp)
+                    mime = "image/png"
+
+                file_name = meta.get("name") or f"{file_id}"
+                bio = io.BytesIO(data)
+                bio.seek(0)
+
+                # set caching headers: browser can cache images for an hour (adjust as needed)
+                resp = send_file(bio, mimetype=mime, download_name=file_name, as_attachment=False, conditional=True)
+                resp.cache_control.max_age = 3600
+                resp.cache_control.public = True
+                return resp
+            else:
+                logger.warning("Drive returned empty bytes for file_id=%s", file_id)
+        except Exception:
+            logger.exception("drive_image: error fetching %s from Drive", file_id)
+
+    # final fallback(s): try to serve icon-192 or logo
+    fallback = Path(app.static_folder) / "img" / "icon-192.png"
+    if not fallback.exists():
+        fallback = Path(app.static_folder) / "img" / "logo.png"
+    if fallback.exists():
+        return send_from_directory(str(fallback.parent), fallback.name)
+
+    # If nothing available, return 404
+    return abort(404)
 
 @app.route("/exercise-table/<path:name>", methods=["GET", "POST"])
 def exercise_table(name: str):

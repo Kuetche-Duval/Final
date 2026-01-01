@@ -1,47 +1,18 @@
 [
   {
-    "id": "fizzbuzz-js",
-    "title": "FizzBuzz",
-    "language": "javascript",
-    "difficulty": "Easy",
-    "category": "Logic",
-    "description": "Print numbers from 1 to N. For multiples of 3 print 'Fizz', for multiples of 5 print 'Buzz', and for multiples of both print 'FizzBuzz'.",
-    "starter_code": {
-      "javascript": "for (let i = 1; i <= 100; i++) {\n  // your code here\n}"
-    },
-    "solution": {
-      "javascript": "for (let i = 1; i <= 100; i++) {\n  let out = '';\n  if (i % 3 === 0) out += 'Fizz';\n  if (i % 5 === 0) out += 'Buzz';\n  console.log(out || i);\n}"
-    },
-    "notes": "Classic beginner problem testing conditionals and loops."
+    "id": 1,
+    "title": "Sum of Two Numbers",
+    "description": "Write a JS function to sum two numbers.",
+    "language": "js",
+    "starter_js": "function sum(a, b) {\n  return 0;\n}",
+    "solution_js": "function sum(a, b) {\n  return a + b;\n}"
   },
   {
-    "id": "reverse-string-py",
-    "title": "Reverse a String",
-    "language": "python",
-    "difficulty": "Easy",
-    "category": "Strings",
-    "description": "Reverse the characters in a string.",
-    "starter_code": {
-      "python": "def reverse_string(s):\n    # your code here\n    pass\n\nprint(reverse_string('hello'))"
-    },
-    "solution": {
-      "python": "def reverse_string(s):\n    return s[::-1]"
-    },
-    "notes": "Tests understanding of strings and slicing."
-  },
-  {
-    "id": "two-sum-js",
-    "title": "Two Sum",
-    "language": "javascript",
-    "difficulty": "Medium",
-    "category": "Arrays",
-    "description": "Given an array of numbers and a target, return indices of the two numbers that add up to the target.",
-    "starter_code": {
-      "javascript": "function twoSum(nums, target) {\n  // your code here\n}\n\nconsole.log(twoSum([2,7,11,15], 9));"
-    },
-    "solution": {
-      "javascript": "function twoSum(nums, target) {\n  const map = {};\n  for (let i = 0; i < nums.length; i++) {\n    const need = target - nums[i];\n    if (map[need] !== undefined) return [map[need], i];\n    map[nums[i]] = i;\n  }\n  return null;\n}"
-    },
-    "notes": "Introduces hash maps and efficient lookup."
+    "id": 2,
+    "title": "Hello World HTML",
+    "description": "Show 'Hello World' on the page using HTML + JS",
+    "language": "html",
+    "starter_html": "<h1></h1>",
+    "solution_html": "<h1>Hello World</h1>"
   }
 ]

@@ -5,6 +5,44 @@ const siteNotifications = (function () {
   const POLL_INTERVAL = 30 * 1000; // 30s
   const CONTAINER_ID = 'nn-notifications-container';
 
+async function checkAndShowPending() {
+  try {
+    const endpoint = (document.cookie.split('; ').find(c=>c.startsWith('nn_subscription='))||'').split('=')[1] || null;
+    if(!endpoint) return;
+    const res = await fetch('/notifications/pending?endpoint=' + encodeURIComponent(decodeURIComponent(endpoint)));
+    const j = await res.json();
+    if(!j.ok || !Array.isArray(j.items)) return;
+    const idsToAck = [];
+    for(const it of j.items) {
+      const title = it.title || 'Notification';
+      const body = it.body || '';
+      // show using Notification API (or forward to service-worker)
+      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'show-notification', title, body, data: it.data || {} });
+      } else {
+        // fallback: use Notification API directly
+        if (Notification.permission === 'granted') {
+          new Notification(title, { body, data: it.data || {} });
+        }
+      }
+      idsToAck.push(it.id);
+    }
+    if (idsToAck.length) {
+      await fetch('/notifications/ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: decodeURIComponent(endpoint), ids: idsToAck })
+      });
+    }
+  } catch (e) {
+    console.warn('pending notifications check failed', e);
+  }
+}
+
+// poll on page load and then every 30s
+checkAndShowPending();
+setInterval(checkAndShowPending, 30000);
+
   async function fetchPending(endpoint) {
     const url = new URL(PENDING_ENDPOINT, window.location.origin);
     if (endpoint) url.searchParams.set('endpoint', endpoint);

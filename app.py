@@ -1,5 +1,4 @@
-# Unified app.py — JSON fallback storage by default (no nn_local.db unless USE_SQLITE=true)
-# Based on your latest snippet with improvements:
+# app.py — part 1/4
 import os
 import json
 import logging
@@ -7,13 +6,15 @@ import traceback
 import sqlite3
 import re
 import time
+import io
+import mimetypes
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 from flask import (
     Flask, render_template, request, redirect, url_for, flash,
-    jsonify, send_from_directory, make_response, abort, Response
+    jsonify, send_from_directory, make_response, abort, Response, send_file
 )
 from dotenv import load_dotenv
 
@@ -26,7 +27,7 @@ except Exception:
     WebPushException = Exception
     PYWEBPUSH_AVAILABLE = False
 
-# Drive & Sheets helpers (optional; forgiving if missing)
+# Optional Drive & Sheets helpers (for graceful degradation)
 try:
     import drive as gdrive
     DRIVE_API_AVAILABLE = getattr(gdrive, "GOOGLEAPI_AVAILABLE", False)
@@ -142,6 +143,7 @@ def safe_write_json(path: Path, obj):
     except Exception:
         logger.exception("Failed writing JSON: %s", path)
         return False
+# app.py — part 2/4
 
 # JSON-backed subscriptions / notifications (fallback)
 def _read_subscriptions_json():
@@ -358,6 +360,7 @@ def ack_notifications(endpoint, ids):
     except Exception:
         logger.exception("ack_notifications failed")
         return 0
+# app.py — part 3/4
 
 # Push sending helper (optional)
 def _send_push_single(subscription, payload):
@@ -420,12 +423,6 @@ def send_push_to_subject(subject, question_text, attempt_text):
                 ok = True
                 sent += 1
                 detail.append({"endpoint": normalize_endpoint(endpoint), "ok": True})
-                try:
-                    now = datetime.utcnow().replace(microsecond=0).isoformat()
-                    # mark delivered in storage
-                    ack_notifications(endpoint, [it.get("id") for it in []])  # noop; we already persisted
-                except Exception:
-                    logger.exception("mark delivered failed")
                 break
             else:
                 status = res.get("status")
@@ -466,46 +463,83 @@ def favicon():
 
 @app.route("/drive-image/<path:file_id>")
 def drive_image(file_id: str):
-    logo = Path(app.static_folder) / "img" / "logo.png"
-    if logo.exists():
-        return send_from_directory(str(logo.parent), logo.name)
+    # serve static candidate directly (logo.png etc)
+    static_candidate = Path(app.static_folder) / "img" / file_id
+    if static_candidate.exists():
+        return send_from_directory(str(static_candidate.parent), static_candidate.name)
+
+    # Use drive helper if available
+    if DRIVE_API_AVAILABLE and gdrive:
+        try:
+            meta = {}
+            if hasattr(gdrive, "get_file_metadata"):
+                try:
+                    meta = gdrive.get_file_metadata(file_id) or {}
+                except Exception:
+                    meta = {}
+            # fallback to from_google_drive to get name
+            if not meta and hasattr(gdrive, "from_google_drive"):
+                try:
+                    listing = gdrive.from_google_drive(file_id) or []
+                    if listing and isinstance(listing, list) and len(listing) >= 1:
+                        # if user passed a folder id or file id, try first element
+                        meta = listing[0] if isinstance(listing[0], dict) else {}
+                except Exception:
+                    meta = {}
+
+            data = b""
+            try:
+                data = gdrive.download_file(file_id) or b""
+            except Exception:
+                data = b""
+
+            if data:
+                mime = meta.get("mimeType") or mimetypes.guess_type(meta.get("name", ""))[0] or "image/png"
+                file_name = meta.get("name") or f"{file_id}"
+                bio = io.BytesIO(data)
+                bio.seek(0)
+                resp = send_file(bio, mimetype=mime, download_name=file_name, as_attachment=False, conditional=True)
+                resp.cache_control.max_age = 3600
+                resp.cache_control.public = True
+                return resp
+            else:
+                logger.warning("Drive returned empty bytes for file_id=%s", file_id)
+        except Exception:
+            logger.exception("drive_image: error fetching %s from Drive", file_id)
+
+    # final fallback to static icons
+    fallback = Path(app.static_folder) / "img" / "icon-192.png"
+    if not fallback.exists():
+        fallback = Path(app.static_folder) / "img" / "logo.png"
+    if fallback.exists():
+        return send_from_directory(str(fallback.parent), fallback.name)
     return abort(404)
 
 @app.route("/")
 def home_page():
     return render_template("index.html", message=FOOTER_MESSAGE)
-# Add this route to app.py (near other page routes)
 
 @app.route("/rules", endpoint="rules_page")
 def rules_page():
-    """
-    Serve the rules page. Try reading from a sheets helper if available,
-    otherwise fall back to a local JSON file data/rules.json, or an empty list.
-    """
     rules = []
-    # try sheets.py first (if the app includes it)
+    # prefer sheets if available and has read_rules
     try:
-        import sheets as sheets_mod  # optional dependency
-        if hasattr(sheets_mod, "read_rules"):
+        if gsheets and hasattr(gsheets, "read_rules"):
             try:
-                rules = sheets_mod.read_rules() or []
+                rules = gsheets.read_rules() or []
             except Exception:
-                # sheet read failed; fallback below
                 rules = []
     except Exception:
-        # sheets not available — fall back to local JSON
+        rules = []
+    if not rules:
         try:
             rules = safe_load_json(DATA_DIR / "rules.json") or []
         except Exception:
             rules = []
-
-    # Ensure rules is a list for template safety
     if not isinstance(rules, list):
         rules = []
-
     return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
 
-# Explicit quiz_forms endpoint so templates using url_for('quiz_forms') succeed
 @app.route("/quiz-forms", endpoint="quiz_forms")
 def quiz_forms():
     forms = safe_load_json(QUIZ_LOCAL_PATH) or []
@@ -535,6 +569,7 @@ def content_page():
                                 hero_image_id=hero_image_id,
                                 hero_title=os.environ.get("HERO_TITLE", "Stay Consistent"),
                                 hero_subtitle=os.environ.get("HERO_SUBTITLE", "Success = small efforts repeated daily."))
+# app.py — Part 4A
 
 @app.route("/api/vapid")
 def api_vapid():
@@ -601,15 +636,11 @@ def questions_page():
 
 @app.route('/coding')
 def coding_page():
-    data_file = os.path.join(app.root_path, 'data', 'coding_exercises.json')
-    exercises = []
-    if os.path.exists(data_file):
-        with open(data_file, 'r', encoding='utf-8') as f:
-            try:
-                exercises = json.load(f)
-            except Exception as e:
-                app.logger.error(f"Failed to load exercises JSON: {e}")
-    return render_template('coding.html', exercises=exercises)
+    exercises = safe_load_json(CODING_LOCAL_PATH) or []
+    if not isinstance(exercises, list):
+        exercises = []
+    return render_template('coding.html', exercises=exercises, message=FOOTER_MESSAGE)
+
 @app.route("/health")
 def health_index():
     plants = safe_load_json(HEALTH_LOCAL_PATH) or []
@@ -681,19 +712,13 @@ def admin_announcement():
 @app.route("/admin/exercises", methods=["GET", "POST"])
 def admin_exercises():
     provided_key = request.args.get("key") or request.form.get("admin_key") or ""
-    # If GET without key, show empty admin entry view (same UX as other admin routes)
     if request.method == "GET" and not provided_key:
         return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
-
-    # Unauthorized key -> same behaviour as other admin routes
     if provided_key != ADMIN_KEY:
         flash("Unauthorized admin key.", "warning")
         return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
-
-    # POST: create or update (append if new) exercise
     if request.method == "POST":
         try:
-            # Collect form fields (keep original names used in your admin HTML)
             ex_id = (request.form.get("id") or "").strip()
             title = (request.form.get("title") or "").strip()
             language = (request.form.get("language") or "").strip()
@@ -701,22 +726,15 @@ def admin_exercises():
             description = (request.form.get("description") or "").strip()
             starter = (request.form.get("starter_code") or request.form.get("starter") or "").strip()
             solution = (request.form.get("solution_code") or request.form.get("solution") or "").strip()
-
-            # sample_data may be JSON text (optional)
             sample_raw = (request.form.get("sample_data") or "").strip()
             sample_data = None
             if sample_raw:
                 try:
                     sample_data = json.loads(sample_raw)
                 except Exception:
-                    # tolerate plain text or malformed JSON by keeping None
                     sample_data = None
-
-            # generate id if not provided (ms timestamp, string)
             if not ex_id:
                 ex_id = str(int(time.time() * 1000))
-
-            # normalize exercise object
             data = {
                 "id": ex_id,
                 "title": title,
@@ -728,13 +746,9 @@ def admin_exercises():
                 "sample_data": sample_data,
                 "created_at": datetime.utcnow().replace(microsecond=0).isoformat()
             }
-
-            # load existing exercises (JSON fallback)
             arr = safe_load_json(CODING_LOCAL_PATH) or []
             if not isinstance(arr, list):
                 arr = []
-
-            # If an exercise with same id exists -> update it; otherwise append (append behavior requested)
             existing_index = None
             for i, e in enumerate(arr):
                 try:
@@ -743,25 +757,20 @@ def admin_exercises():
                         break
                 except Exception:
                     continue
-
             if existing_index is not None:
                 arr[existing_index] = data
                 action = "updated"
             else:
                 arr.append(data)
                 action = "added"
-
-            # persist
             safe_write_json(CODING_LOCAL_PATH, arr)
             flash(f"Exercise {action} successfully.", "success")
         except Exception:
             logger.exception("Failed saving exercise")
             flash("Failed saving exercise", "danger")
-
         return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
-
-    # Fallback (shouldn't be reached) - render page
     return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
+# app.py — Part 4B
 
 @app.route("/admin/questions", methods=["GET", "POST"])
 def admin_questions():
@@ -771,7 +780,6 @@ def admin_questions():
     if provided != ADMIN_KEY:
         flash("Unauthorized admin key.", "warning")
         return render_template("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
-
     qfile = DATA_DIR / "questions_local.json"
     raw = json.loads(qfile.read_text(encoding="utf-8") or "[]") if qfile.exists() else []
     rows = []
@@ -785,7 +793,6 @@ def admin_questions():
         except Exception:
             continue
     subjects = sorted(list({r["subject"] for r in rows if r.get("subject")}))
-
     action = request.form.get("action") or ""
     if request.method == "POST" and action == "delete_selected":
         selected = request.form.getlist("selected")
@@ -809,7 +816,6 @@ def admin_questions():
                 logger.exception("Failed deleting subject")
                 flash("Failed deleting subject", "danger")
         return redirect(url_for("admin_questions", key=provided))
-
     return render_template("admin_questions.html", key=provided, questions=rows, subjects=subjects, message=FOOTER_MESSAGE)
 
 def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
@@ -860,66 +866,6 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
                     continue
     conn.commit()
     return conn, [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-
-@app.route("/drive-image/<path:file_id>")
-def drive_image(file_id: str):
-    """
-    Serve an image stored on Google Drive by file_id.
-    - If Drive API is available and the service account works, fetch the bytes + mimeType and return them.
-    - Otherwise fall back to static img/logo.png or icon-192.png.
-    """
-    # Quick sanity: if the client accidentally passed a filename (e.g. "logo.png"), serve static file directly.
-    static_candidate = Path(app.static_folder) / "img" / file_id
-    if static_candidate.exists():
-        return send_from_directory(str(static_candidate.parent), static_candidate.name)
-
-    # If drive helper available, try to fetch metadata and bytes
-    if DRIVE_API_AVAILABLE and gdrive:
-        try:
-            # get metadata (mimeType, name)
-            meta = {}
-            try:
-                meta = gdrive.get_file_metadata(file_id) or {}
-            except Exception:
-                meta = {}
-
-            # download file bytes
-            data = b""
-            try:
-                data = gdrive.download_file(file_id) or b""
-            except Exception:
-                data = b""
-
-            if data:
-                # decide mime type from metadata, fallback to guess by name, then to image/png
-                mime = (meta.get("mimeType") or mimetypes.guess_type(meta.get("name", ""))[0] or None)
-                if not mime:
-                    # try to guess image types heuristically (many drive images will be jpeg/png/webp)
-                    mime = "image/png"
-
-                file_name = meta.get("name") or f"{file_id}"
-                bio = io.BytesIO(data)
-                bio.seek(0)
-
-                # set caching headers: browser can cache images for an hour (adjust as needed)
-                resp = send_file(bio, mimetype=mime, download_name=file_name, as_attachment=False, conditional=True)
-                resp.cache_control.max_age = 3600
-                resp.cache_control.public = True
-                return resp
-            else:
-                logger.warning("Drive returned empty bytes for file_id=%s", file_id)
-        except Exception:
-            logger.exception("drive_image: error fetching %s from Drive", file_id)
-
-    # final fallback(s): try to serve icon-192 or logo
-    fallback = Path(app.static_folder) / "img" / "icon-192.png"
-    if not fallback.exists():
-        fallback = Path(app.static_folder) / "img" / "logo.png"
-    if fallback.exists():
-        return send_from_directory(str(fallback.parent), fallback.name)
-
-    # If nothing available, return 404
-    return abort(404)
 
 @app.route("/exercise-table/<path:name>", methods=["GET", "POST"])
 def exercise_table(name: str):
@@ -1060,7 +1006,6 @@ def notifications_ack():
 
 @app.errorhandler(404)
 def handle_404(e):
-    # try to render a 404 template if present
     try:
         return render_template("errors/404.html", message=FOOTER_MESSAGE), 404
     except Exception:

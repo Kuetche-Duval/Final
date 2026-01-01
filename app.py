@@ -666,38 +666,86 @@ def admin_announcement():
 @app.route("/admin/exercises", methods=["GET", "POST"])
 def admin_exercises():
     provided_key = request.args.get("key") or request.form.get("admin_key") or ""
+    # If GET without key, show empty admin entry view (same UX as other admin routes)
     if request.method == "GET" and not provided_key:
         return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
+
+    # Unauthorized key -> same behaviour as other admin routes
     if provided_key != ADMIN_KEY:
         flash("Unauthorized admin key.", "warning")
         return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
+
+    # POST: create or update (append if new) exercise
     if request.method == "POST":
-        data = {
-            "id": request.form.get("id"),
-            "title": request.form.get("title"),
-            "language": request.form.get("language"),
-            "difficulty": request.form.get("difficulty"),
-            "description": request.form.get("description"),
-            "starter": request.form.get("starter_code"),
-            "solution": request.form.get("solution_code"),
-            "sample_data": None
-        }
-        sample = request.form.get("sample_data")
-        if sample:
-            try:
-                data["sample_data"] = json.loads(sample)
-            except Exception:
-                data["sample_data"] = None
         try:
+            # Collect form fields (keep original names used in your admin HTML)
+            ex_id = (request.form.get("id") or "").strip()
+            title = (request.form.get("title") or "").strip()
+            language = (request.form.get("language") or "").strip()
+            difficulty = (request.form.get("difficulty") or "").strip()
+            description = (request.form.get("description") or "").strip()
+            starter = (request.form.get("starter_code") or request.form.get("starter") or "").strip()
+            solution = (request.form.get("solution_code") or request.form.get("solution") or "").strip()
+
+            # sample_data may be JSON text (optional)
+            sample_raw = (request.form.get("sample_data") or "").strip()
+            sample_data = None
+            if sample_raw:
+                try:
+                    sample_data = json.loads(sample_raw)
+                except Exception:
+                    # tolerate plain text or malformed JSON by keeping None
+                    sample_data = None
+
+            # generate id if not provided (ms timestamp, string)
+            if not ex_id:
+                ex_id = str(int(time.time() * 1000))
+
+            # normalize exercise object
+            data = {
+                "id": ex_id,
+                "title": title,
+                "language": language,
+                "difficulty": difficulty,
+                "description": description,
+                "starter": starter,
+                "solution": solution,
+                "sample_data": sample_data,
+                "created_at": datetime.utcnow().replace(microsecond=0).isoformat()
+            }
+
+            # load existing exercises (JSON fallback)
             arr = safe_load_json(CODING_LOCAL_PATH) or []
-            arr = [e for e in arr if str(e.get("id")) != str(data.get("id"))]
-            arr.append(data)
+            if not isinstance(arr, list):
+                arr = []
+
+            # If an exercise with same id exists -> update it; otherwise append (append behavior requested)
+            existing_index = None
+            for i, e in enumerate(arr):
+                try:
+                    if str(e.get("id")) == str(data.get("id")):
+                        existing_index = i
+                        break
+                except Exception:
+                    continue
+
+            if existing_index is not None:
+                arr[existing_index] = data
+                action = "updated"
+            else:
+                arr.append(data)
+                action = "added"
+
+            # persist
             safe_write_json(CODING_LOCAL_PATH, arr)
-            flash("Saved to local coding_exercises.json", "success")
+            flash(f"Exercise {action} successfully.", "success")
         except Exception:
             logger.exception("Failed saving exercise")
             flash("Failed saving exercise", "danger")
+
         return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
+
+    # Fallback (shouldn't be reached) - render page
     return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
 
 @app.route("/admin/questions", methods=["GET", "POST"])

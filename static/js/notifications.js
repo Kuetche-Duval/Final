@@ -1,199 +1,289 @@
-// Poller for pending notifications (keeps behaviour but is defensive).
-const siteNotifications = (function () {
-  const PENDING_ENDPOINT = '/notifications/pending';
-  const ACK_ENDPOINT = '/notifications/ack';
-  const POLL_INTERVAL = 30 * 1000; // 30s
-  const CONTAINER_ID = 'nn-notifications-container';
+/* notifications.js — part 1/4
+   Helpers, cookie funcs, and base64->Uint8 conversion.
+   Paste parts 1..4 in order into one file. */
+(function(window){
+  'use strict';
 
-async function checkAndShowPending() {
-  try {
-    const endpoint = (document.cookie.split('; ').find(c=>c.startsWith('nn_subscription='))||'').split('=')[1] || null;
-    if(!endpoint) return;
-    const res = await fetch('/notifications/pending?endpoint=' + encodeURIComponent(decodeURIComponent(endpoint)));
-    const j = await res.json();
-    if(!j.ok || !Array.isArray(j.items)) return;
-    const idsToAck = [];
-    for(const it of j.items) {
-      const title = it.title || 'Notification';
-      const body = it.body || '';
-      // show using Notification API (or forward to service-worker)
-      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type: 'show-notification', title, body, data: it.data || {} });
-      } else {
-        // fallback: use Notification API directly
-        if (Notification.permission === 'granted') {
-          new Notification(title, { body, data: it.data || {} });
-        }
-      }
-      idsToAck.push(it.id);
+  // -- config --
+  const POLL_INTERVAL_MS = 30000; // 30s while visible
+  const NN_SUB_COOKIE = 'nn_subscription';
+  const NN_USER_COOKIE = 'nn_user';
+  const NN_CATEGORY_COOKIE = 'nn_last_category';
+
+  // -- cookie helpers --
+  function getCookie(name){
+    const v = ("; " + document.cookie).split("; " + name + "=");
+    if(v.length === 2) return decodeURIComponent(v.pop().split(";").shift());
+    return null;
+  }
+  function setCookie(name, value, days = 365){
+    const maxAge = days * 24 * 60 * 60;
+    document.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${maxAge}`;
+  }
+
+  // base64url -> Uint8Array (for VAPID key)
+  function urlBase64ToUint8Array(base64String) {
+    if (!base64String) return new Uint8Array();
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
     }
-    if (idsToAck.length) {
-      await fetch('/notifications/ack', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint: decodeURIComponent(endpoint), ids: idsToAck })
-      });
-    }
-  } catch (e) {
-    console.warn('pending notifications check failed', e);
-  }
-}
-
-// poll on page load and then every 30s
-checkAndShowPending();
-setInterval(checkAndShowPending, 30000);
-
-  async function fetchPending(endpoint) {
-    const url = new URL(PENDING_ENDPOINT, window.location.origin);
-    if (endpoint) url.searchParams.set('endpoint', endpoint);
-    try {
-      const resp = await fetch(url.toString(), { credentials: 'same-origin' });
-      if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
-      const j = await resp.json();
-      if (!j.ok) throw new Error('Server returned ok=false');
-      return j.items || [];
-    } catch (err) {
-      console.error('fetchPending error:', err);
-      return [];
-    }
+    return outputArray;
   }
 
-  async function ackNotifications(endpoint, ids = []) {
-    try {
-      const resp = await fetch(ACK_ENDPOINT, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint, ids })
-      });
-      if (!resp.ok) {
-        console.warn('ackNotifications non-ok:', resp.status);
-      }
-      return resp;
-    } catch (err) {
-      console.error('ackNotifications error:', err);
-      throw err;
-    }
-  }
+  // small logger wrapper
+  function log(...args){ try{ console.log('[NN-notify]', ...args); }catch(e){} }
 
-  function getContainer() {
-    let c = document.getElementById(CONTAINER_ID);
-    if (c) return c;
-    c = document.createElement('div');
-    c.id = CONTAINER_ID;
-    Object.assign(c.style, {
-      position: 'fixed',
-      right: '18px',
-      bottom: '18px',
-      zIndex: 99999,
-      maxWidth: '360px',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '10px',
-      alignItems: 'flex-end'
-    });
-    document.body.appendChild(c);
-    return c;
-  }
-
-  function renderItem(item, container, onDismiss) {
-    const card = document.createElement('div');
-    card.className = 'card';
-    Object.assign(card.style, {
-      width: '100%',
-      boxShadow: '0 6px 18px rgba(0,0,0,0.12)',
-      padding: '12px',
-      borderRadius: '12px',
-      background: 'var(--card-bg, #fff)',
-      color: 'var(--text, #111)'
-    });
-
-    const title = document.createElement('div');
-    title.style.fontWeight = 700;
-    title.style.marginBottom = '6px';
-    title.textContent = item.title || 'Notification';
-
-    const body = document.createElement('div');
-    body.style.marginBottom = '10px';
-    body.style.whiteSpace = 'pre-wrap';
-    body.textContent = item.body || (item.data && item.data.announcement ? JSON.stringify(item.data || {}) : '');
-
-    const actions = document.createElement('div');
-    actions.style.display = 'flex';
-    actions.style.justifyContent = 'flex-end';
-    actions.style.gap = '8px';
-
-    const openBtn = document.createElement('button');
-    openBtn.className = 'btn btn-sm btn-primary';
-    openBtn.textContent = 'Open';
-    openBtn.addEventListener('click', () => {
-      const url = (item.data && item.data.url) || item.url || '/';
-      try { window.open(url, '_blank'); } catch (e) { window.location.href = url; }
-      onDismiss(item.id);
-    });
-
-    const dismissBtn = document.createElement('button');
-    dismissBtn.className = 'btn btn-sm btn-outline';
-    dismissBtn.textContent = 'Dismiss';
-    dismissBtn.addEventListener('click', () => onDismiss(item.id));
-
-    actions.appendChild(openBtn);
-    actions.appendChild(dismissBtn);
-
-    card.appendChild(title);
-    card.appendChild(body);
-    card.appendChild(actions);
-
-    container.appendChild(card);
-  }
-
-  let pollingHandle = null;
-  async function pollAndRender(opts = {}) {
-    const endpoint = opts.endpoint || '';
-    const container = getContainer();
-    const items = await fetchPending(endpoint);
-    if (!items || items.length === 0) {
-      return;
-    }
-    container.innerHTML = '';
-    items.forEach(item => {
-      const normalized = {
-        id: item.id,
-        title: item.title || (item.subject ? `New: ${item.subject}` : 'Notification'),
-        body: item.body || (item.data && item.data.preview ? JSON.stringify(item.data.preview) : ''),
-        data: item.data || {}
-      };
-      renderItem(normalized, container, async (nid) => {
-        try {
-          await ackNotifications(endpoint, [nid]);
-        } catch (e) {
-          console.warn('Ack failed', e);
-        }
-        container.innerHTML = '';
-      });
-    });
-  }
-
-  function startPolling(opts = {}) {
-    if (pollingHandle) clearInterval(pollingHandle);
-    pollAndRender(opts).catch(err => console.error(err));
-    pollingHandle = setInterval(() => {
-      pollAndRender(opts).catch(err => console.error(err));
-    }, opts.interval || POLL_INTERVAL);
-    return pollingHandle;
-  }
-
-  function stopPolling() {
-    if (pollingHandle) {
-      clearInterval(pollingHandle);
-      pollingHandle = null;
-    }
-  }
-
-  return {
-    fetchPending,
-    ackNotifications,
-    startPolling,
-    stopPolling
+  // expose minimal API container
+  const NNNotify = {
+    _reg: null,
+    _pollTimer: null,
+    _isVisible: document.visibilityState === 'visible',
+    _isSubscribed: false,
+    pollInterval: POLL_INTERVAL_MS
   };
-})();
+/* notifications.js — part 2/4
+   Registration and subscribe/unsubscribe logic */
+  // Register service worker and keep registration reference
+  async function registerServiceWorker(){
+    if(!('serviceWorker' in navigator)){
+      log('Service Worker not supported');
+      return null;
+    }
+    try{
+      const reg = await navigator.serviceWorker.register('/service-worker.js');
+      log('Service worker registered at', reg.scope);
+      NNNotify._reg = reg;
+      return reg;
+    } catch(err){
+      log('Service worker registration failed', err);
+      return null;
+    }
+  }
+
+  // Request permission, fetch VAPID key and subscribe
+  async function subscribePush(options = {}){
+    try{
+      if(!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)){
+        throw new Error('Push not supported in this browser');
+      }
+
+      // ensure SW registered
+      let reg = NNNotify._reg || await registerServiceWorker();
+      if(!reg) throw new Error('service-worker-registration-failed');
+
+      const perm = await Notification.requestPermission();
+      if(perm !== 'granted') throw new Error('Notification permission denied');
+
+      // get vapid
+      const vapidResp = await fetch('/api/vapid');
+      const vapidJson = await vapidResp.json().catch(()=>({ok:false}));
+      if(!vapidJson || !vapidJson.ok || !vapidJson.publicKey) throw new Error('vapid-not-configured');
+
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidJson.publicKey)
+      });
+
+      // send to server
+      const userName = getCookie(NN_USER_COOKIE) || options.client_id || '';
+      const subject = getCookie(NN_CATEGORY_COOKIE) || options.subject || 'Other';
+      const res = await fetch('/save-subscription', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ subscription: sub, client_id: userName, subject })
+      });
+      const json = await res.json().catch(()=>({ok:false}));
+      if(!json || !json.ok) log('save-subscription response', json);
+
+      if(sub && sub.endpoint) setCookie(NN_SUB_COOKIE, sub.endpoint, 365);
+      NNNotify._isSubscribed = true;
+      log('Subscribed:', sub.endpoint);
+      return {ok:true, subscription: sub, server: json};
+    }catch(err){
+      log('subscribePush error', err);
+      return {ok:false, error: (err && err.message) ? err.message : String(err)};
+    }
+  }
+
+  // Unsubscribe (local + server-side deletion is handled server when push fails; here we remove cookie and attempt to unsubscribe)
+  async function unsubscribePush(){
+    try{
+      if(!NNNotify._reg) await registerServiceWorker();
+      const reg = NNNotify._reg;
+      if(!reg) return {ok:false, error:'no-sw'};
+      const sub = await reg.pushManager.getSubscription();
+      if(sub){
+        await sub.unsubscribe().catch(()=>{});
+        log('Unsubscribed from push manager');
+      }
+      setCookie(NN_SUB_COOKIE, '', -1);
+      NNNotify._isSubscribed = false;
+      return {ok:true};
+    }catch(err){
+      log('unsubscribePush error', err);
+      return {ok:false, error: (err&&err.message)?err.message:String(err)};
+    }
+  }
+/* notifications.js — part 3/4
+   Poll pending notifications for this endpoint and show them,
+   then ack to server so they are marked delivered. */
+
+  // show notification using Notification API (if supported) or fallback alert
+  function showLocalNotification(item){
+    try{
+      if(!item) return;
+      const title = item.title || 'Notification';
+      const body = item.body || (item.data && JSON.stringify(item.data)) || '';
+      const url = (item.data && item.data.url) || '/';
+      // attempt to show via Service Worker if possible
+      if(NNNotify._reg && NNNotify._reg.showNotification){
+        NNNotify._reg.showNotification(title, { body, data: { url }, tag: `nn-${item.id}`});
+      } else if('Notification' in window && Notification.permission === 'granted'){
+        const n = new Notification(title, { body });
+        n.onclick = (ev) => { ev.preventDefault(); try{ window.focus(); window.location.href = url; }catch(e){} };
+      } else {
+        // fallback
+        console.log('Notification:', title, body);
+      }
+    }catch(err){
+      console.error('showLocalNotification error', err);
+    }
+  }
+
+  // fetch pending notifications for current endpoint (cookie)
+  async function pollPending(){
+    try{
+      const endpoint = getCookie(NN_SUB_COOKIE) || '';
+      if(!endpoint) return;
+
+      const resp = await fetch('/notifications/pending?endpoint=' + encodeURIComponent(endpoint));
+      if(!resp.ok) return;
+      const j = await resp.json().catch(()=>null);
+      if(!j || !j.ok) return;
+      const items = Array.isArray(j.items) ? j.items : [];
+      if(!items.length) return;
+
+      // show and collect ids to ack
+      const ids = [];
+      for(const it of items){
+        showLocalNotification(it);
+        if(it && it.id) ids.push(it.id);
+      }
+
+      // ack them
+      if(ids.length){
+        await fetch('/notifications/ack', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ endpoint, ids })
+        }).catch(()=>{});
+      }
+    }catch(err){
+      console.error('pollPending error', err);
+    }
+  }
+
+  // start/stop polling depending on visibility
+  function startPolling(){
+    if(NNNotify._pollTimer) return;
+    NNNotify._pollTimer = setInterval(()=> {
+      if(document.visibilityState === 'visible') pollPending();
+    }, NNNotify.pollInterval);
+    // do an immediate check
+    if(document.visibilityState === 'visible') pollPending();
+  }
+  function stopPolling(){
+    if(NNNotify._pollTimer){ clearInterval(NNNotify._pollTimer); NNNotify._pollTimer = null; }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'visible'){ startPolling(); }
+    else { stopPolling(); }
+  });
+/* notifications.js — part 4/4
+   Initialization, button hookup, and auto-recover of existing subscription. */
+
+  // check existing subscription
+  async function ensureSubscriptionState(){
+    try{
+      if(!('serviceWorker' in navigator)) return;
+      NNNotify._reg = NNNotify._reg || await registerServiceWorker();
+      if(!NNNotify._reg) return;
+      const existing = await NNNotify._reg.pushManager.getSubscription();
+      NNNotify._isSubscribed = !!existing;
+      if(existing && existing.endpoint){
+        setCookie(NN_SUB_COOKIE, existing.endpoint, 365);
+      }
+    }catch(err){
+      console.warn('ensureSubscriptionState', err);
+    }
+  }
+
+  // Hookup subscribe button (id default 'subscribe-btn')
+  function attachSubscribeButton(btnId = 'subscribe-btn'){
+    const btn = document.getElementById(btnId);
+    if(!btn) return;
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      btn.disabled = true;
+      btn.classList.add('btn-loading');
+      try{
+        await ensureSubscriptionState();
+        if(!NNNotify._isSubscribed){
+          const res = await subscribePush();
+          if(res && res.ok) btn.textContent = 'Subscribed ✓';
+          else btn.textContent = 'Subscribe (failed)';
+        } else {
+          // already subscribed — offer unsubscribe
+          const unsub = await unsubscribePush();
+          if(unsub && unsub.ok) btn.textContent = 'Subscribe';
+        }
+      }catch(err){
+        console.error('subscribe button:', err);
+        alert('Subscription failed: ' + (err && err.message ? err.message : String(err)));
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('btn-loading');
+      }
+    });
+  }
+
+  // auto-init: register sw, recover subscription, start polling if permitted
+  async function init(opts = {}){
+    try{
+      await ensureSubscriptionState();
+      attachSubscribeButton(opts.buttonId || 'subscribe-btn');
+      // only start polling if cookie exists and permission granted
+      const ep = getCookie(NN_SUB_COOKIE);
+      if(ep && Notification.permission === 'granted'){
+        startPolling();
+      } else {
+        // try to get subscription from server cookie or from service worker
+        if(NNNotify._isSubscribed && Notification.permission === 'granted'){ startPolling(); }
+      }
+      // if user has a name cookie, attempt a silent subscribe (optional)
+      if(getCookie(NN_USER_COOKIE) && !NNNotify._isSubscribed){
+        try{ await subscribePush(); }catch(e){ log('silent subscribe failed', e); }
+      }
+    }catch(err){
+      console.error('init notifications failed', err);
+    }
+  }
+
+  // expose to window
+  window.NNNotify = Object.assign(window.NNNotify || {}, {
+    init,
+    subscribePush,
+    unsubscribePush,
+    pollPending,
+    ensureSubscriptionState
+  });
+
+  // auto init on DOM ready
+  document.addEventListener('DOMContentLoaded', () => { init(); });
+
+})(window);

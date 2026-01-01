@@ -584,11 +584,17 @@ def questions_page():
         flash("Could not load questions", "danger")
         return render_template("questions.html", questions=[], categories=["Other"], selected_category="", message=FOOTER_MESSAGE)
 
-@app.route("/coding")
+@app.route('/coding')
 def coding_page():
-    exercises = safe_load_json(CODING_LOCAL_PATH) or []
-    return render_template("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
-
+    data_file = os.path.join(app.root_path, 'data', 'coding_exercises.json')
+    exercises = []
+    if os.path.exists(data_file):
+        with open(data_file, 'r', encoding='utf-8') as f:
+            try:
+                exercises = json.load(f)
+            except Exception as e:
+                app.logger.error(f"Failed to load exercises JSON: {e}")
+    return render_template('coding.html', exercises=exercises)
 @app.route("/health")
 def health_index():
     plants = safe_load_json(HEALTH_LOCAL_PATH) or []

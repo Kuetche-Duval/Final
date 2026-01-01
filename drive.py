@@ -154,3 +154,22 @@ def folders_and_images(parent_folder_id=None, sample_limit=12):
     except Exception:
         logger.exception("folders_and_images error")
         return []
+def get_file_metadata(file_id):
+    """
+    Return metadata dict for a single Drive file (id, name, mimeType, webContentLink, thumbnailLink).
+    Returns {} on error or if Google API is not available.
+    """
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - get_file_metadata fallback")
+        return {}
+    if not file_id:
+        return {}
+    try:
+        svc = _make_drive_service()
+        # request common useful fields
+        fields = "id, name, mimeType, webContentLink, thumbnailLink"
+        meta = svc.files().get(fileId=file_id, fields=fields).execute()
+        return meta or {}
+    except Exception:
+        logger.exception("get_file_metadata error for %s", file_id)
+        return {}

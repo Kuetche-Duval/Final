@@ -1,157 +1,132 @@
-// static/js/push-helper.js
-// Responsible for: registering service worker, subscribing for push with VAPID key,
-// sending subscription to server (/save-subscription), and utility helpers.
-//
-// Usage (example):
-//   import or include this script in your page. Then call:
-//     pushHelper.initPush({ subject: "Mathematics", clientId: "user-123" });
+/* static/js/push-helper.js
+   Lightweight helper for registering service worker and subscribing to Push API.
+   Usage (from any page):
+     await nnPush.init();                 // registers SW (if not registered)
+     const sub = await nnPush.subscribe(); // opens permission prompt and saves subscription to server
+     await nnPush.unsubscribe();          // unsubscribes locally and optionally tells server (not implemented server-side)
+*/
 
-const pushHelper = (function () {
-  const SW_PATH = '/service-worker.js';
-  const VAPID_ENDPOINT = '/api/vapid';
-  const SAVE_SUB_ENDPOINT = '/save-subscription';
-  const SUBSCRIBE_OPTIONS = { userVisibleOnly: true };
+(function(global){
+  const API_VAPID = '/api/vapid';
+  const SAVE_SUB = '/save-subscription';
+  const SERVICE_WORKER_URL = '/service-worker.js';
 
-  // Helper: base64 url -> Uint8Array (for vapid key)
+  function _log(...args){ try{ console.debug('[nnPush]', ...args); } catch(e){} }
+
+  function getCookie(name) {
+    const v = "; " + document.cookie;
+    const parts = v.split("; " + name + "=");
+    if (parts.length === 2) return decodeURIComponent(parts.pop().split(";").shift());
+    return null;
+  }
+
   function urlBase64ToUint8Array(base64String) {
-    // Pad base64 string
-    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
     const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
     const rawData = atob(base64);
     const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) {
-      outputArray[i] = rawData.charCodeAt(i);
-    }
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
     return outputArray;
   }
 
-  // Register service worker if supported
   async function registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) {
-      console.warn('Service workers unsupported in this browser.');
-      return null;
-    }
-    try {
-      const reg = await navigator.serviceWorker.register(SW_PATH, { scope: '/' });
-      console.info('Service worker registered:', reg);
-      return reg;
-    } catch (err) {
-      console.error('Service worker registration failed:', err);
-      return null;
-    }
+    if (!('serviceWorker' in navigator)) throw new Error('service-worker-not-supported');
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg) return reg;
+    return navigator.serviceWorker.register(SERVICE_WORKER_URL);
   }
 
-  // Get VAPID public key from server
-  async function fetchVapidPublicKey() {
-    try {
-      const resp = await fetch(VAPID_ENDPOINT, { method: 'GET', credentials: 'same-origin' });
-      if (!resp.ok) throw new Error(`Failed to fetch VAPID key: ${resp.status}`);
-      const j = await resp.json();
-      if (!j.ok || !j.publicKey) throw new Error('VAPID public key missing in response');
-      return j.publicKey;
-    } catch (err) {
-      console.error('Error fetching VAPID key:', err);
-      return null;
-    }
+  async function getVapidKey() {
+    const r = await fetch(API_VAPID);
+    if (!r.ok) throw new Error('vapid-fetch-failed');
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'vapid-missing');
+    return j.publicKey;
   }
 
-  // Subscribe to push with VAPID key
-  async function subscribeToPush(registration, vapidPublicKey) {
-    if (!registration || !registration.pushManager) {
-      throw new Error('Invalid service worker registration for push manager.');
-    }
-    // request permission first
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-      throw new Error('Notification permission not granted.');
-    }
-
-    const sub = await registration.pushManager.subscribe({
-      ...SUBSCRIBE_OPTIONS,
-      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
-    });
-
-    return sub;
-  }
-
-  // Send subscription object to your server endpoint
-  async function saveSubscriptionToServer(subscription, subject = 'Other', clientId = '') {
-    try {
-      const payload = { subscription, subject, client_id: clientId };
-      const resp = await fetch(SAVE_SUB_ENDPOINT, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!resp.ok) {
-        const txt = await resp.text();
-        console.warn('save-subscription returned non-ok:', resp.status, txt);
-      }
-      return resp;
-    } catch (err) {
-      console.error('Failed saving subscription to server:', err);
-      throw err;
-    }
-  }
-
-  // Public init function: registers SW, subscribes, saves
-  async function initPush(opts = {}) {
-    const { subject = 'Other', clientId = '' } = opts;
-    if (!('serviceWorker' in navigator)) {
-      console.warn('Push not supported (no serviceWorker).');
-      return { ok: false, reason: 'no-service-worker' };
-    }
+  async function currentSubscription() {
     try {
       const reg = await registerServiceWorker();
-      if (!reg) return { ok: false, reason: 'sw-register-failed' };
-
-      const vapidKey = await fetchVapidPublicKey();
-      if (!vapidKey) return { ok: false, reason: 'no-vapid' };
-
-      // Check if already subscribed
-      let existing = await reg.pushManager.getSubscription();
-      if (existing) {
-        console.info('Already subscribed to push:', existing.endpoint);
-        await saveSubscriptionToServer(existing, subject, clientId);
-        return { ok: true, subscription: existing };
-      }
-
-      const sub = await subscribeToPush(reg, vapidKey);
-      await saveSubscriptionToServer(sub, subject, clientId);
-      console.info('Push subscription successful.');
-      return { ok: true, subscription: sub };
-    } catch (err) {
-      console.error('initPush error:', err);
-      return { ok: false, error: String(err) };
+      if (!reg || !reg.pushManager) return null;
+      return await reg.pushManager.getSubscription();
+    } catch (e) {
+      return null;
     }
   }
 
-  // Optional unsubscribe helper (local + ask server to remove)
-  async function unsubscribe() {
-    if (!('serviceWorker' in navigator)) return { ok: false, reason: 'no-sw' };
-    const reg = await navigator.serviceWorker.ready;
-    const sub = await reg.pushManager.getSubscription();
+  async function subscribeToPush({ subject = 'Other', client_id = '' } = {}) {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      throw new Error('push-not-supported');
+    }
+    const reg = await registerServiceWorker();
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') throw new Error('permission-not-granted');
+
+    const vapid = await getVapidKey();
+    const applicationServerKey = urlBase64ToUint8Array(vapid);
+
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+    // Save to server
+    const res = await fetch(SAVE_SUB, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ subscription: sub, subject, client_id })
+    });
+    const json = await res.json();
+    return { ok: res.ok, saved: json, subscription: sub };
+  }
+
+  async function unsubscribeLocal() {
+    const sub = await currentSubscription();
     if (!sub) return { ok: true, message: 'no-subscription' };
     try {
-      // ask server to remove (best-effort)
-      await fetch('/notifications/unsubscribe', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint: sub.endpoint })
-      }).catch(() => {});
-      const ok = await sub.unsubscribe();
-      return { ok };
-    } catch (err) {
-      return { ok: false, error: String(err) };
+      const unsub = await sub.unsubscribe();
+      return { ok: true, unsubscribed: unsub };
+    } catch (e) {
+      return { ok: false, error: String(e) };
     }
   }
 
-  // Expose a simple API
-  return {
-    initPush,
-    unsubscribe,
-    registerServiceWorker // exposed for advanced usage
+  // small helper: ensure nn_subscription cookie is set (server also sets it on save)
+  function setEndpointCookie(endpoint) {
+    if (!endpoint) return;
+    const days = 365;
+    const d = new Date(); d.setTime(d.getTime() + days*24*60*60*1000);
+    document.cookie = 'nn_subscription=' + encodeURIComponent(endpoint) + ';path=/;max-age=' + (days*24*60*60);
+  }
+
+  // simple init that registers SW and returns current subscription (if any)
+  async function init() {
+    try {
+      const reg = await registerServiceWorker();
+      _log('service worker registered: ', reg.scope);
+      const sub = await (reg && reg.pushManager ? reg.pushManager.getSubscription() : null);
+      if (sub && sub.endpoint) setEndpointCookie(sub.endpoint);
+      return { registered: true, subscription: sub };
+    } catch (e) {
+      _log('init failed', e);
+      return { registered: false, error: String(e) };
+    }
+  }
+
+  // Expose API
+  global.nnPush = {
+    init,
+    registerServiceWorker,
+    getVapidKey,
+    subscribe: async (opts) => {
+      const res = await subscribeToPush(opts || { subject: (getCookie('nn_last_category') || 'Other'), client_id: (getCookie('nn_user')||'') });
+      try { if (res.subscription && res.subscription.endpoint) setEndpointCookie(res.subscription.endpoint); } catch(e){}
+      return res;
+    },
+    currentSubscription,
+    unsubscribe: unsubscribeLocal,
+    setEndpointCookie
   };
-})();
+
+  // auto-init (non-blocking)
+  (async () => {
+    try { await init(); } catch(e){ /* ignore */ }
+  })();
+
+})(window);

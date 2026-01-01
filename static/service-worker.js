@@ -51,3 +51,21 @@ self.addEventListener('fetch', function(event) {
   // default: let the request go to network (no caching here)
   // We do not call event.respondWith() for ordinary requests to keep things simple.
 });
+self.addEventListener('message', (ev) => {
+  if(!ev.data) return;
+  if (ev.data.type === 'show-notification') {
+    const title = ev.data.title || 'Notification';
+    self.registration.showNotification(title, { body: ev.data.body || '', data: ev.data.data || {} });
+  }
+});
+
+self.addEventListener('push', (ev) => {
+  try {
+    const data = ev.data ? ev.data.json() : {};
+    const title = data.title || 'New message';
+    const opts = { body: data.body || '', data: data };
+    ev.waitUntil(self.registration.showNotification(title, opts));
+  } catch (e) {
+    console.error('push event error', e);
+  }
+});

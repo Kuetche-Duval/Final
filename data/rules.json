@@ -1,3 +1,4 @@
-Rule 1
-Rule 2
-Rule 3
+[
+{"Rule 1" : "Something"},
+{"Rule 2" : "Something else"}
+]

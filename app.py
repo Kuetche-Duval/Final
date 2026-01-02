@@ -178,14 +178,22 @@ def normalize_endpoint(endpoint: str) -> str:
     except Exception:
         return endpoint.strip()
 
-def safe_load_json(path: Path):
+def safe_load_json(path: Path, default):
     try:
         if not path.exists():
-            return None
-        return json.loads(path.read_text(encoding="utf-8") or "null")
+            return default
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return default
+        return json.loads(raw)
     except Exception:
-        logger.exception("Failed loading JSON: %s", path)
-        return None
+        app.logger.error(f"Corrupted JSON detected, resetting: {path}")
+        try:
+            path.write_text(json.dumps(default, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return default
+
 
 def safe_write_json(path: Path, obj):
     try:
@@ -198,13 +206,13 @@ def safe_write_json(path: Path, obj):
 
 # JSON-backed subscriptions / notifications (fallback)
 def _read_subscriptions_json():
-    arr = safe_load_json(SUBSCRIPTIONS_FILE) or []
+    arr = safe_load_json(Path("data/subscriptions.json"))or []
     if not isinstance(arr, list):
         return []
     return arr
 
 def _write_subscriptions_json(arr):
-    return safe_write_json(SUBSCRIPTIONS_FILE, arr)
+    return safe_write_json(Path(SUBSCRIPTIONS_FILE), arr)
 
 def _read_notifications_json():
     arr = safe_load_json(NOTIFICATIONS_FILE) or []
@@ -541,7 +549,7 @@ def rules_page():
     except Exception:
         # sheets not available — fall back to local JSON
         try:
-            rules = safe_load_json(DATA_DIR / "rules.json") or []
+            rules = safe_load_json(Path("data/rules.json")) or []
         except Exception:
             rules = []
 
@@ -1076,11 +1084,23 @@ def subscriptions_check():
 
 @app.route("/notifications/pending", methods=["GET"])
 def notifications_pending():
-    endpoint = request.args.get("endpoint", "").strip() or (request.cookies.get('nn_subscription') or "").strip()
-    if not endpoint:
-        return make_response(jsonify({"ok": False, "error": "endpoint required"}), 400)
-    items = fetch_pending_notifications(endpoint)
-    return make_response(jsonify({"ok": True, "items": items}), 200)
+    try:
+        endpoint = (
+            request.args.get("endpoint", "").strip()
+            or (request.cookies.get("nn_subscription") or "").strip()
+        )
+
+        # IMPORTANT FIX: never return 400 here
+        if not endpoint:
+            return jsonify({"ok": True, "items": []}), 200
+
+        items = fetch_pending_notifications(endpoint)
+        return jsonify({"ok": True, "items": items}), 200
+
+    except Exception as e:
+        app.logger.exception("notifications_pending failed")
+        return jsonify({"ok": False, "items": []}), 200
+
 
 @app.route("/notifications/ack", methods=["POST"])
 def notifications_ack():

@@ -1,6 +1,8 @@
 # Unified app.py — JSON fallback storage by default (no nn_local.db unless USE_SQLITE=true)
 # Based on your latest snippet with improvements:
 import os
+import io
+import mimetypes
 import json
 import logging
 import traceback
@@ -8,12 +10,14 @@ import sqlite3
 import re
 import time
 import random
+import base64
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 from flask import (
-    Flask, render_template, request, redirect, url_for, flash,
+    Flask, render_template, request, redirect, url_for, flash, send_file,
     jsonify, send_from_directory, make_response, abort, Response
 )
 from dotenv import load_dotenv
@@ -43,6 +47,53 @@ except Exception:
     SHEETS_AVAILABLE = False
 
 load_dotenv()
+
+# --- Ensure Google credentials from base64 ---
+try:
+    GOOGLE_CREDS_PATH = os.environ.get("GOOGLE_CREDENTIALS_PATH", "service_account.json")
+    ensure_google_credentials_from_base64(
+        env_var_name="SERVICE_ACCOUNT_JSON_B64",
+        output_path=GOOGLE_CREDS_PATH
+    )
+    os.environ["SERVICE_ACCOUNT_JSON_PATH"] = GOOGLE_CREDS_PATH
+except Exception as e:
+    logger.warning("Google credentials not initialized: %s", e)
+
+def ensure_google_credentials_from_base64(
+    env_var_name: str,
+    output_path: str,
+    required_fields=("client_email", "private_key")
+):
+    """
+    Decode a base64-encoded Google service account JSON stored in an env var
+    and write it to output_path if it does not already exist.
+    """
+    if os.path.exists(output_path):
+        return output_path
+
+    b64 = os.environ.get(env_var_name, "").strip()
+    if not b64:
+        raise RuntimeError(f"Missing base64 credentials env var: {env_var_name}")
+
+    try:
+        raw = base64.b64decode(b64).decode("utf-8")
+        data = json.loads(raw)
+
+        # sanity check
+        for f in required_fields:
+            if f not in data:
+                raise RuntimeError(f"Invalid credentials JSON: missing {f}")
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        logger.info("Google credentials written to %s", output_path)
+        return output_path
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to decode base64 credentials: {e}")
+
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["JSON_SORT_KEYS"] = False
@@ -467,13 +518,6 @@ def favicon():
     svg = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="100%" height="100%" fill="#2b8cff"/></svg>'
     return make_response(svg, 200, {"Content-Type": "image/svg+xml"})
 
-@app.route("/drive-image/<path:file_id>")
-def drive_image(file_id: str):
-    logo = Path(app.static_folder) / "img" / "logo.png"
-    if logo.exists():
-        return send_from_directory(str(logo.parent), logo.name)
-    return abort(404)
-
 @app.route("/")
 def home_page():
     return render_template("index.html", message=FOOTER_MESSAGE, quote=get_random_quote(MOTIVATIONAL_QUOTES_VERSES))
@@ -601,18 +645,12 @@ def questions_page():
         logger.exception("questions_page failed")
         flash("Could not load questions", "danger")
         return render_template("questions.html", questions=[], categories=["Other"], selected_category="", message=FOOTER_MESSAGE)
-
+        
 @app.route('/coding')
 def coding_page():
-    data_file = os.path.join(app.root_path, 'data', 'coding_exercises.json')
-    exercises = []
-    if os.path.exists(data_file):
-        with open(data_file, 'r', encoding='utf-8') as f:
-            try:
-                exercises = json.load(f)
-            except Exception as e:
-                app.logger.error(f"Failed to load exercises JSON: {e}")
+    exercises = safe_load_json(CODING_LOCAL_PATH) or []
     return render_template('coding.html', exercises=exercises)
+
 @app.route("/health")
 def health_index():
     plants = safe_load_json(HEALTH_LOCAL_PATH) or []

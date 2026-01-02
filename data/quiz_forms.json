@@ -102,5 +102,35 @@
         "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdnSEAJGRhSG4F62_QufbUgVAHuubGIjyAuTJf-Oy_DaoUcPQ/viewform",
         "topics": ["Halogens (Group 7)", "Noble gases", "Oxidation states", "Displacement reactions", "Reactivity trends of nonmetals"],
         "notes": "Part 2 covers halogen chemistry, noble gases and redox basics applied to periodic trends and displacement reactions."
-    } 
+    },
+    {
+          "name": "AC Circuits — GCE A Level (Cameroon) — 20 MCQs",
+          "form_id": "https://docs.google.com/forms/d/1IskJr4fvydC5DFClntJdTXCAaQOv7AAa4hwXXDkcq68/edit",
+          "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdkIvdwRsQU66KuBv-I-UMVKW76wnvMNapUgJ8M00rXwmLf2A/viewform",
+          "subject": ["Physics"],
+          "topics": [
+            "Alternating current",
+            "RMS values",
+            "Reactance and impedance",
+            "Resonance",
+            "Power factor",
+            "Transformers"
+          ],
+          "notes": "20 MCQs on AC circuits with very explicit option-by-option explanations."
+    },
+    {
+    "name": Communications Physics — GCE A Level (Cameroon) — 20 MCQs,
+    "form_id": https://docs.google.com/forms/d/1E8QLiNnRVD09FKUHcRsn3eAKHR78DFCJHdFN8htG_Iw/edit,
+    "form_answer_link": https://docs.google.com/forms/d/e/1FAIpQLSeNXrC8MF2LMWXnGr3wfVhi5YNNElg8-CYdJ4_BvwM54zNx5g/viewform?usp=header,
+    "subject": ["Physics"],
+    "topics": [
+      "Communication systems",
+      "Analogue and digital signals",
+      "Modulation",
+      "Noise",
+      "Bandwidth",
+      "Optical fibre"
+    ],
+    "notes": "20 MCQs on communications physics with very explicit option-by-option explanations."
+  }
 ]

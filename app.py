@@ -1,28 +1,23 @@
-"""
-Flask app for Newton's Nerds (push subscriptions, questions, exercises runner, admin tools).
-This file consolidates the 5 parts you supplied, with defensive checks and small fixes.
-"""
-
+# Unified app.py — JSON fallback storage by default (no nn_local.db unless USE_SQLITE=true)
+# Based on your latest snippet with improvements:
 import os
 import json
-import time
 import logging
 import traceback
 import sqlite3
-import base64
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
-import io
 
 from flask import (
     Flask, render_template, request, redirect, url_for, flash,
-    jsonify, send_from_directory, make_response, abort
+    jsonify, send_from_directory, make_response, abort, Response
 )
 from dotenv import load_dotenv
 
-# Optional push support
+# Optional pywebpush
 try:
     from pywebpush import webpush, WebPushException
     PYWEBPUSH_AVAILABLE = True
@@ -31,211 +26,57 @@ except Exception:
     WebPushException = Exception
     PYWEBPUSH_AVAILABLE = False
 
-# Try to import Google client libs (optional)
-GOOGLE_LIBS_AVAILABLE = False
+# Drive & Sheets helpers (optional; forgiving if missing)
 try:
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseDownload
-    GOOGLE_LIBS_AVAILABLE = True
+    import drive as gdrive
+    DRIVE_API_AVAILABLE = getattr(gdrive, "GOOGLEAPI_AVAILABLE", False)
 except Exception:
-    # libs not installed; later code will gracefully handle that
-    GOOGLE_LIBS_AVAILABLE = False
+    gdrive = None
+    DRIVE_API_AVAILABLE = False
 
-# load .env if present
+try:
+    import sheets as gsheets
+    SHEETS_AVAILABLE = True
+except Exception:
+    gsheets = None
+    SHEETS_AVAILABLE = False
+
 load_dotenv()
 
-# App init
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["JSON_SORT_KEYS"] = False
-_secret = os.environ.get("FLASK_SECRET_KEY")
-if _secret:
-    app.secret_key = _secret
-else:
-    # fallback to a secure random secret
-    app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
 
-# Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("nn_app")
+logger = logging.getLogger("newtons_nerds")
 
-# Constants
+# Paths & config
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+CODING_LOCAL_PATH = Path(os.environ.get("CODING_EXERCISES_PATH", DATA_DIR / "coding_exercises.json"))
+HEALTH_LOCAL_PATH = Path(os.environ.get("HEALTH_DATA_PATH", DATA_DIR / "health_data.json"))
+QUIZ_LOCAL_PATH = Path(os.environ.get("QUIZ_FORMS_PATH", DATA_DIR / "quiz_forms.json"))
+NOTIFICATIONS_FILE = Path(os.environ.get("NOTIFICATIONS_FILE", DATA_DIR / "notifications.json"))
+SUBSCRIPTIONS_FILE = Path(os.environ.get("SUBSCRIPTIONS_FILE", DATA_DIR / "subscriptions.json"))
+
+# DB choice: by default use JSON files, unless USE_SQLITE env var is true
+USE_SQLITE = str(os.environ.get("USE_SQLITE", "")).lower() in ("1", "true", "yes")
+NN_LOCAL_DB = Path(os.environ.get("NN_LOCAL_DB", "nn_local.db")).resolve() if USE_SQLITE else None
+
 FOOTER_MESSAGE = os.environ.get("FOOTER_MESSAGE", "Love one another ❤")
-STATIC_CATEGORIES = [
-    "Mathematics", "Biology", "Computer Science", "Further Mathematics",
-    "Chemistry", "Physics", "Coding", "Other"
-]
 COOKIE_MAX_AGE = 365 * 24 * 60 * 60
 
-# Service account support (optional base64)
-SERVICE_ACCOUNT_B64 = os.environ.get("SERVICE_ACCOUNT_JSON_B64")
-SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_account.json")
-
-# We'll keep an in-memory parsed service account dict (preferred).
-SERVICE_ACCOUNT_INFO = None
-if SERVICE_ACCOUNT_B64:
-    try:
-        decoded = base64.b64decode(SERVICE_ACCOUNT_B64)
-        # validate JSON and keep in-memory
-        SERVICE_ACCOUNT_INFO = json.loads(decoded.decode("utf-8"))
-        logger.info("Loaded service account JSON into memory (SERVICE_ACCOUNT_INFO).")
-        # Also write to SERVICE_ACCOUNT_PATH for backwards compatibility with code
-        # that expects a file. If environment explicitly disallows file writes you can
-        # set SERVICE_ACCOUNT_DONT_WRITE=1 to avoid writing the file.
-        if os.environ.get("SERVICE_ACCOUNT_DONT_WRITE", "").strip() not in ("1", "true", "yes"):
-            try:
-                with open(SERVICE_ACCOUNT_PATH, "wb") as fh:
-                    fh.write(decoded)
-                try:
-                    os.chmod(SERVICE_ACCOUNT_PATH, 0o600)
-                except Exception:
-                    pass
-                logger.info("Wrote service account JSON to %s", SERVICE_ACCOUNT_PATH)
-            except Exception:
-                logger.exception("Failed to write service account JSON to path; continuing with in-memory credentials")
-    except Exception:
-        SERVICE_ACCOUNT_INFO = None
-        logger.exception("Failed to parse SERVICE_ACCOUNT_JSON_B64 into SERVICE_ACCOUNT_INFO")
-
-# Helper: produce google credentials from memory or file
-def get_google_credentials(scopes):
-    """
-    Return a google.oauth2.service_account.Credentials object.
-    Prefers SERVICE_ACCOUNT_INFO (in-memory) then falls back to SERVICE_ACCOUNT_PATH file.
-    scopes: list of scope strings.
-    Requires google-auth installed.
-    """
-    if not GOOGLE_LIBS_AVAILABLE:
-        raise RuntimeError("Google client libraries are not installed (google-auth / google-api-python-client).")
-    if SERVICE_ACCOUNT_INFO:
-        try:
-            return service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=scopes)
-        except Exception:
-            logger.exception("from_service_account_info failed; will try from file fallback.")
-    sa_path = Path(SERVICE_ACCOUNT_PATH)
-    if sa_path.exists():
-        try:
-            return service_account.Credentials.from_service_account_file(str(sa_path), scopes=scopes)
-        except Exception:
-            logger.exception("from_service_account_file failed")
-    raise FileNotFoundError("No usable service account credentials (SERVICE_ACCOUNT_INFO or SERVICE_ACCOUNT_PATH)")
-
-# Convenience factory for building Google API clients (sheets/drive/etc.)
-_service_cache = {}
-def get_google_service(api_name, api_version, scopes):
-    """
-    Build and return a googleapiclient service client.
-    Example: get_google_service('sheets', 'v4', ['https://www.googleapis.com/auth/spreadsheets.readonly'])
-    """
-    if not GOOGLE_LIBS_AVAILABLE:
-        raise RuntimeError("Google client libraries are not installed (google-auth / google-api-python-client).")
-    key = (api_name, api_version, tuple(sorted(scopes)))
-    if key in _service_cache:
-        return _service_cache[key]
-    creds = get_google_credentials(scopes)
-    svc = build(api_name, api_version, credentials=creds, cache_discovery=False)
-    _service_cache[key] = svc
-    return svc
-
-# Helper to read sheet values (returns list of rows)
-def read_sheet_values(spreadsheet_id, range_name):
-    """
-    Read sheet values using the service account.
-    Returns list of rows (each row is a list of strings).
-    """
-    try:
-        sheets = get_google_service('sheets', 'v4', ['https://www.googleapis.com/auth/spreadsheets.readonly'])
-        resp = sheets.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
-        return resp.get('values', [])
-    except Exception:
-        logger.exception("read_sheet_values failed")
-        return []
-
-# Helper to download a Drive file to local path
-def download_drive_file(file_id, dest_path):
-    """
-    Download a file from Google Drive by fileId and write to dest_path.
-    Returns Path(dest_path).resolve() on success.
-    """
-    try:
-        drive = get_google_service('drive', 'v3', ['https://www.googleapis.com/auth/drive.readonly'])
-        request = drive.files().get_media(fileId=file_id)
-        fh = open(dest_path, "wb")
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-        fh.close()
-        return Path(dest_path).resolve()
-    except Exception:
-        logger.exception("download_drive_file failed")
-        raise
-
-# VAPID keys for push (optional)
 VAPID_PUBLIC_KEY = (os.environ.get("VAPID_PUBLIC_KEY") or "").strip()
 VAPID_PRIVATE_KEY = (os.environ.get("VAPID_PRIVATE_KEY") or "").strip()
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com").strip()
-if not (VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY):
-    logger.info("VAPID keys not fully configured. Push sending will be disabled until both are provided.")
 
-# Admin keys
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
-EXERCISES_ADMIN_KEY = os.environ.get("EXERCISES_ADMIN_KEY", ADMIN_KEY)
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "") or ""
 
-# Optional Sheets keys (if you supply sheets.py later)
-QUESTIONS_SUBSCRIPTION_KEY = (os.environ.get("QUESTIONS_SUBSCRIPTION_KEY") or "").strip()
-QUESTIONS_SHEET_KEY = (os.environ.get("QUESTIONS_SHEET_KEY") or "").strip()
-TIMETABLE_SHEET_KEY = (os.environ.get("TIMETABLE_SHEET_KEY") or "").strip()
-GROUP_RULES_SHEET_KEY = (os.environ.get("GROUP_RULES_SHEET_KEY") or "").strip()
-
-# coding exercises files
-CODING_LOCAL_PATH = os.environ.get("CODING_EXERCISES_PATH", "coding_exercises.json")
-CODING_DRIVE_FILE_ID = (os.environ.get("CODING_EXERCISES_DRIVE_FILE_ID") or "").strip()
-
-# Data dir and DB path
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-NN_LOCAL_DB = os.environ.get("NN_LOCAL_DB", "nn_local.db")
-DB_PATH = Path(NN_LOCAL_DB).resolve()
-
-# Try to import sheets.py if the repo includes one (optional)
-SHEETS_AVAILABLE = False
-sheets_mod = None
-try:
-    import sheets as sheets_mod_candidate  # type: ignore
-    sheets_mod = sheets_mod_candidate
-    if all(hasattr(sheets_mod, fn) for fn in ("save_subscription", "list_subscriptions", "get_questions", "append_row")):
-        SHEETS_AVAILABLE = True
-        logger.info("sheets.py loaded — Sheets-backed storage enabled where configured.")
-    else:
-        logger.info("sheets.py loaded but missing required helpers; falling back to local storage.")
-        SHEETS_AVAILABLE = False
-except Exception:
-    sheets_mod = None
-    SHEETS_AVAILABLE = False
-    logger.debug("sheets.py not present; using local sqlite / data/ JSON fallback.")
-
-# At startup: if CODING_DRIVE_FILE_ID provided, try to download coding_exercises.json (best-effort)
-if CODING_DRIVE_FILE_ID and not Path(CODING_LOCAL_PATH).exists():
+# If sqlite desired, initialize DB
+def _init_sqlite_db(db_path: Path):
     try:
-        if GOOGLE_LIBS_AVAILABLE:
-            logger.info("Attempting to download coding exercises from Drive file id %s", CODING_DRIVE_FILE_ID)
-            try:
-                download_drive_file(CODING_DRIVE_FILE_ID, CODING_LOCAL_PATH)
-                logger.info("Downloaded coding exercises to %s", CODING_LOCAL_PATH)
-            except Exception:
-                logger.exception("Failed downloading coding exercises from Drive; continuing without them.")
-        else:
-            logger.info("CODING_DRIVE_FILE_ID set but Google libs not installed; skipping download.")
-    except Exception:
-        logger.exception("Startup download attempt failed")
-
-# --- Local DB init ---
-def _init_local_db():
-    """Ensure local sqlite DB and tables exist."""
-    try:
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(db_path))
         c = conn.cursor()
         c.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (
@@ -246,8 +87,7 @@ def _init_local_db():
                 auth TEXT,
                 raw_json TEXT,
                 created_at TEXT
-            )
-        """)
+            )""")
         c.execute("""
             CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -259,644 +99,448 @@ def _init_local_db():
                 created_at TEXT,
                 delivered INTEGER DEFAULT 0,
                 delivered_at TEXT
-            )
-        """)
+            )""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_notifications_endpoint_delivered ON notifications(endpoint, delivered)")
         conn.commit()
         conn.close()
-        logger.info("Local SQLite DB ensured at %s", str(DB_PATH))
+        logger.info("SQLite DB initialized at %s", db_path)
     except Exception:
-        logger.exception("Failed initializing local DB")
+        logger.exception("DB init failed")
 
-_init_local_db()
+if USE_SQLITE and NN_LOCAL_DB:
+    _init_sqlite_db(NN_LOCAL_DB)
+else:
+    logger.info("Using JSON storage for subscriptions / notifications (no sqlite). Set USE_SQLITE=true to enable SQLite.")
 
-# --- helpers ---
-
+# Helpers
 def normalize_endpoint(endpoint: str) -> str:
     if not endpoint:
         return ""
     try:
         u = urlparse(endpoint)
         scheme = u.scheme or "https"
-        netloc = u.netloc or u.path.split("/")[0]
+        netloc = u.netloc or (u.path.split("/")[0] if u.path else "")
         path = u.path or ""
-        normalized = f"{scheme}://{netloc}{path}".rstrip("/")
-        return normalized
+        return f"{scheme}://{netloc}{path}".rstrip("/")
     except Exception:
         return endpoint.strip()
 
-
-def _is_valid_subscription_obj(sub) -> bool:
-    if not sub or not isinstance(sub, dict):
-        return False
-    ep = sub.get("endpoint") or sub.get("url")
-    if not ep or not isinstance(ep, str):
-        return False
-    return True
-
-
-def _normalize_subject(s: str) -> str:
-    return (s or "Other").strip()
-
-# wrapper to safely render templates (avoid TemplateNotFound crashes)
-def render_template_safe(template_name, **kwargs):
+def safe_load_json(path: Path):
     try:
-        # verify template exists by trying to load it
-        app.jinja_env.get_or_select_template(template_name)
-        return render_template(template_name, **kwargs)
-    except Exception as e:
-        logger.warning("Template %s missing or failed to render: %s", template_name, e)
-        # If error.html exists, render it; else return plain fallback.
-        try:
-            app.jinja_env.get_or_select_template("error.html")
-            return render_template("error.html", message=FOOTER_MESSAGE, error=f"Missing template: {template_name}"), 500
-        except Exception:
-            return f"<h1>Template missing: {template_name}</h1><pre>{str(e)}</pre>", 500
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8") or "null")
+    except Exception:
+        logger.exception("Failed loading JSON: %s", path)
+        return None
 
-# --- persistence helpers: subscriptions & notifications ---
-def _save_subscription(subject, client_id, subscription_obj) -> bool:
-    subject = _normalize_subject(subject)
+def safe_write_json(path: Path, obj):
     try:
-        # prefer Sheets if configured
-        if SHEETS_AVAILABLE and QUESTIONS_SUBSCRIPTION_KEY:
-            try:
-                sheets_mod.save_subscription(subject, client_id, subscription_obj)
-                logger.debug("Saved subscription to Sheets for subject %s", subject)
-                return True
-            except Exception:
-                logger.exception("sheets.save_subscription failed, falling back to sqlite")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        logger.exception("Failed writing JSON: %s", path)
+        return False
 
+# JSON-backed subscriptions / notifications (fallback)
+def _read_subscriptions_json():
+    arr = safe_load_json(SUBSCRIPTIONS_FILE) or []
+    if not isinstance(arr, list):
+        return []
+    return arr
+
+def _write_subscriptions_json(arr):
+    return safe_write_json(SUBSCRIPTIONS_FILE, arr)
+
+def _read_notifications_json():
+    arr = safe_load_json(NOTIFICATIONS_FILE) or []
+    if not isinstance(arr, list):
+        return []
+    return arr
+
+def _write_notifications_json(arr):
+    return safe_write_json(NOTIFICATIONS_FILE, arr)
+
+# Subscription persistence (sqlite or json)
+def save_subscription(subject, client_id, subscription_obj):
+    try:
         if isinstance(subscription_obj, str):
             try:
                 subscription_obj = json.loads(subscription_obj)
             except Exception:
                 subscription_obj = {"endpoint": subscription_obj}
-
         endpoint = subscription_obj.get("endpoint") or subscription_obj.get("url")
         if not endpoint:
-            logger.warning("Subscription missing endpoint; skipping save")
+            logger.warning("Subscription missing endpoint")
             return False
-
-        # normalize endpoint for consistent storage
         endpoint_norm = normalize_endpoint(endpoint)
-
         keys = subscription_obj.get("keys", {}) if isinstance(subscription_obj, dict) else {}
         p256 = keys.get("p256dh", "")
         auth = keys.get("auth", "")
         now = datetime.utcnow().replace(microsecond=0).isoformat()
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            # store using normalized endpoint as primary key
-            c.execute("""REPLACE INTO subscriptions
-                         (endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
-                         VALUES (?,?,?,?,?,?,?)""",
-                      (endpoint_norm, subject, client_id or "", p256, auth, json.dumps(subscription_obj), now))
-            conn.commit()
-        logger.debug("Saved subscription to sqlite for %s", endpoint_norm)
+
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("""REPLACE INTO subscriptions
+                             (endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
+                             VALUES (?,?,?,?,?,?,?)""",
+                          (endpoint_norm, subject or "Other", client_id or "", p256, auth, json.dumps(subscription_obj), now))
+                conn.commit()
+            return True
+
+        # JSON fallback: deduplicate by endpoint+subject
+        arr = _read_subscriptions_json()
+        # remove existing with same endpoint and subject
+        arr = [r for r in arr if not (r.get("subscription", {}).get("endpoint") and normalize_endpoint(r.get("subscription", {}).get("endpoint")) == endpoint_norm and r.get("subject") == (subject or "Other"))]
+        arr.append({
+            "endpoint": endpoint_norm,
+            "subject": subject or "Other",
+            "client_id": client_id or "",
+            "keys": {"p256dh": p256, "auth": auth},
+            "subscription": subscription_obj,
+            "created_at": now
+        })
+        _write_subscriptions_json(arr)
         return True
     except Exception:
-        logger.exception("_save_subscription failed")
+        logger.exception("save_subscription failed")
         return False
 
-
-def _list_subscriptions(subject=None):
+def list_subscriptions(subject=None):
     try:
-        if SHEETS_AVAILABLE and QUESTIONS_SUBSCRIPTION_KEY:
-            try:
-                rows = sheets_mod.list_subscriptions(subject)
-                out = []
-                for r in (rows or []):
-                    if isinstance(r, dict) and r.get("subscription"):
-                        out.append({
-                            "subject": r.get("subject"),
-                            "client_id": r.get("client_id"),
-                            "subscription": r.get("subscription"),
-                            "created_at": r.get("created_at")
-                        })
-                return out
-            except Exception:
-                logger.exception("sheets.list_subscriptions failed; falling back to sqlite")
+        if USE_SQLITE and NN_LOCAL_DB:
+            out = []
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                if subject:
+                    c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions WHERE lower(subject)=?", (subject.lower(),))
+                else:
+                    c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions")
+                rows = c.fetchall()
+            for subj, client_id, raw_json, created_at in rows:
+                try:
+                    parsed = json.loads(raw_json) if raw_json else {}
+                except Exception:
+                    parsed = {}
+                out.append({"subject": subj, "client_id": client_id, "subscription": parsed, "created_at": created_at})
+            return out
 
+        arr = _read_subscriptions_json()
         out = []
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            if subject:
-                c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions WHERE lower(subject)=?", (subject.lower(),))
-            else:
-                c.execute("SELECT subject, client_id, raw_json, created_at FROM subscriptions")
-            rows = c.fetchall()
-        for subj, client_id, raw_json, created_at in rows:
+        for r in arr:
             try:
-                parsed = json.loads(raw_json) if raw_json else {}
+                if subject and r.get("subject") != subject:
+                    continue
+                out.append({"subject": r.get("subject"), "client_id": r.get("client_id"), "subscription": r.get("subscription"), "created_at": r.get("created_at")})
             except Exception:
-                parsed = {}
-            out.append({"subject": subj, "client_id": client_id, "subscription": parsed, "created_at": created_at})
+                continue
         return out
     except Exception:
-        logger.exception("_list_subscriptions failed")
+        logger.exception("list_subscriptions failed")
         return []
 
-
-def _delete_subscriptions_by_endpoint(endpoint):
+def delete_subscriptions_by_endpoint(endpoint):
     try:
         if not endpoint:
             return
-        if SHEETS_AVAILABLE and QUESTIONS_SUBSCRIPTION_KEY:
-            try:
-                sheets_mod.delete_subscriptions_by_endpoint(endpoint)
-                logger.debug("Deleted subscription from sheets for endpoint %s", endpoint)
-                return
-            except Exception:
-                logger.exception("sheets.delete_subscriptions_by_endpoint failed; falling back to sqlite")
-        normalized = normalize_endpoint(endpoint)
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            # delete by raw or normalized endpoint variants to be robust
-            c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint, normalized))
-            conn.commit()
-        logger.debug("Deleted local subscription(s) for endpoint %s (normalized=%s)", endpoint, normalized)
+        endpoint_norm = normalize_endpoint(endpoint)
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint_norm, endpoint))
+                conn.commit()
+            return
+        arr = _read_subscriptions_json()
+        new = [r for r in arr if not (r.get("subscription", {}).get("endpoint") and normalize_endpoint(r.get("subscription", {}).get("endpoint")) == endpoint_norm)]
+        _write_subscriptions_json(new)
     except Exception:
-        logger.exception("_delete_subscriptions_by_endpoint failed")
+        logger.exception("delete_subscriptions_by_endpoint failed")
 
-# notifications persistence
-
-def save_notification_for_endpoint(endpoint, subject, title, body, data_obj=None):
+# Notifications persistence (sqlite or json)
+def save_notification(endpoint, subject, title, body, data_obj=None):
     try:
         if not endpoint:
-            logger.debug("Not saving notification: missing endpoint")
+            logger.debug("save_notification skipped: no endpoint")
             return None
         endpoint_norm = normalize_endpoint(endpoint)
         now = datetime.utcnow().replace(microsecond=0).isoformat()
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            c.execute("""INSERT INTO notifications (endpoint, subject, title, body, data, created_at, delivered)
-                         VALUES (?,?,?,?,?,?,0)""",
-                      (endpoint_norm or "", subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
-            nid = c.lastrowid
-            conn.commit()
+
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("""INSERT INTO notifications (endpoint, subject, title, body, data, created_at, delivered)
+                             VALUES (?,?,?,?,?,?,0)""",
+                          (endpoint_norm, subject or "", title or "", body or "", json.dumps(data_obj or {}), now))
+                nid = c.lastrowid
+                conn.commit()
+            return nid
+
+        arr = _read_notifications_json()
+        # generate id
+        max_id = max([it.get("id", 0) for it in arr], default=0)
+        nid = int(max_id) + 1
+        arr.append({
+            "id": nid,
+            "endpoint": endpoint_norm,
+            "subject": subject or "",
+            "title": title or "",
+            "body": body or "",
+            "data": data_obj or {},
+            "created_at": now,
+            "delivered": False
+        })
+        _write_notifications_json(arr)
         return nid
     except Exception:
-        logger.exception("save_notification_for_endpoint failed")
+        logger.exception("save_notification failed")
         return None
 
-
-def fetch_pending_notifications_for_endpoint(endpoint):
+def fetch_pending_notifications(endpoint):
     try:
         if not endpoint:
             return []
         endpoint_norm = normalize_endpoint(endpoint)
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint_norm,))
-            rows = c.fetchall()
-        out = []
-        for nid, subj, title, body, data_text, created_at in rows:
-            try:
-                data_obj = json.loads(data_text) if data_text else {}
-            except Exception:
-                data_obj = {}
-            out.append({"id": nid, "subject": subj, "title": title, "body": body, "data": data_obj, "created_at": created_at})
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("SELECT id, subject, title, body, data, created_at FROM notifications WHERE endpoint=? AND delivered=0 ORDER BY created_at ASC", (endpoint_norm,))
+                rows = c.fetchall()
+            out = []
+            for nid, subj, title, body, data_text, created_at in rows:
+                try:
+                    data_obj = json.loads(data_text or "{}")
+                except Exception:
+                    data_obj = {}
+                out.append({"id": nid, "subject": subj, "title": title, "body": body, "data": data_obj, "created_at": created_at})
+            return out
+
+        arr = _read_notifications_json()
+        out = [it for it in arr if normalize_endpoint(it.get("endpoint")) == endpoint_norm and not it.get("delivered")]
         return out
     except Exception:
-        logger.exception("fetch_pending_notifications_for_endpoint failed")
+        logger.exception("fetch_pending_notifications failed")
         return []
 
-def ack_notifications_by_ids(endpoint, ids):
+def ack_notifications(endpoint, ids):
     try:
         if not endpoint or not ids:
             return 0
         endpoint_norm = normalize_endpoint(endpoint)
         now = datetime.utcnow().replace(microsecond=0).isoformat()
         changed = 0
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            c = conn.cursor()
-            for nid in ids:
-                try:
-                    c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint_norm))
-                    if c.rowcount:
-                        changed += 1
-                except Exception:
-                    continue
-            conn.commit()
+
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                for nid in ids:
+                    try:
+                        c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE id=? AND endpoint=?", (now, nid, endpoint_norm))
+                        if c.rowcount:
+                            changed += 1
+                    except Exception:
+                        continue
+                conn.commit()
+            return changed
+
+        arr = _read_notifications_json()
+        updated = False
+        for it in arr:
+            if it.get("id") in ids and normalize_endpoint(it.get("endpoint")) == endpoint_norm and not it.get("delivered"):
+                it["delivered"] = True
+                it["delivered_at"] = now
+                changed += 1
+                updated = True
+        if updated:
+            _write_notifications_json(arr)
         return changed
     except Exception:
-        logger.exception("ack_notifications_by_ids failed")
+        logger.exception("ack_notifications failed")
         return 0
 
-# --- push sending ---
-
-def _send_push_to_single(sub, payload):
+# Push sending helper (optional)
+def _send_push_single(subscription, payload):
     if not PYWEBPUSH_AVAILABLE:
         return {"ok": False, "error": "pywebpush-not-available"}
     if not (VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY):
         return {"ok": False, "error": "vapid-not-configured"}
-    if not isinstance(sub, dict):
-        return {"ok": False, "error": "invalid-sub"}
     try:
-        webpush(subscription_info=sub, data=json.dumps(payload), vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims={"sub": VAPID_SUBJECT})
+        webpush(subscription_info=subscription, data=json.dumps(payload), vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims={"sub": VAPID_SUBJECT})
         return {"ok": True}
     except WebPushException as ex:
-        status = None
-        try:
-            resp = getattr(ex, "response", None)
-            status = getattr(resp, "status_code", None) if resp else None
-        except Exception:
-            status = None
+        status = getattr(ex, "response", None) and getattr(ex.response, "status_code", None)
         return {"ok": False, "error": str(ex), "status": status}
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
 
 def send_push_to_subject(subject, question_text, attempt_text):
-    try:
-        subs = _list_subscriptions(subject) or []
-    except Exception:
-        subs = []
+    subs = list_subscriptions(subject) or []
     if not subs:
         return {"sent": 0, "errors": ["no subscribers"], "detail": []}
-
     title = f"New message in {subject}"
     q_preview = (question_text or "")[:140]
     a_preview = (attempt_text or "")[:180]
     body = f"Q: {q_preview}\nA: {a_preview}"
-    payload_template = {"title": title, "body": body, "url": "/questions", "subject": subject, "preview": {"question": q_preview, "attempt": a_preview}}
-
+    try:
+        icon_url = url_for('static', filename='img/icon-192.png', _external=True)
+    except Exception:
+        icon_url = None
+    payload_template = {"title": title, "body": body, "url": "/questions", "subject": subject, "icon": icon_url, "badge": icon_url, "preview": {"question": q_preview, "attempt": a_preview}}
     detail = []
     sent = 0
-
-    # persist notifications for offline clients (use normalized endpoints)
+    # persist notifications
     for r in subs:
-        try:
-            sub = r.get("subscription") if isinstance(r, dict) else None
-            endpoint = None
-            if sub and isinstance(sub, dict):
-                endpoint = sub.get("endpoint")
-            save_notification_for_endpoint(endpoint, subject, payload_template["title"], payload_template["body"], payload_template.get("preview"))
-        except Exception:
-            continue
-
-    # if sending disabled, return persisted info only
+        sub = r.get("subscription") if isinstance(r, dict) else None
+        ep = sub.get("endpoint") if sub else None
+        save_notification(ep, subject, title, body, payload_template.get("preview"))
     if (not PYWEBPUSH_AVAILABLE) or (not VAPID_PRIVATE_KEY):
         for r in subs:
-            try:
-                sub = r.get("subscription") if isinstance(r, dict) else None
-                ep = sub.get("endpoint") if sub else None
-            except Exception:
-                ep = None
+            sub = r.get("subscription") if isinstance(r, dict) else None
+            ep = sub.get("endpoint") if sub else None
             detail.append({"endpoint": ep, "ok": False, "error": "sending-disabled"})
         return {"sent": 0, "errors": [d for d in detail if not d.get("ok")], "detail": detail}
-
-    # attempt delivery
     for r in subs:
-        try:
-            sub = r.get("subscription") if isinstance(r, dict) else None
-            if not sub:
-                detail.append({"endpoint": None, "ok": False, "error": "no-sub"})
-                continue
-            endpoint = sub.get("endpoint")
-            if not endpoint:
-                detail.append({"endpoint": None, "ok": False, "error": "no-endpoint"})
-                continue
-
-            payload = dict(payload_template)
-            parsed = urlparse(endpoint)
-            domain = parsed.netloc.lower() if parsed.netloc else ""
-            if "windows" in domain or "wns" in domain:
-                payload = {"title": payload_template["title"], "body": (q_preview or a_preview)[:80], "url": "/questions"}
-
-            data_bytes = json.dumps(payload).encode("utf-8")
-            if len(data_bytes) > 2000:
-                payload["preview"] = None
-                payload["body"] = (payload.get("body","")[:200] + "…")
-
-            ok = False
-            for attempt in range(2):
-                res = _send_push_to_single(sub, payload)
-                if res.get("ok"):
-                    ok = True
-                    sent += 1
-                    detail.append({"endpoint": normalize_endpoint(endpoint), "ok": True})
+        sub = r.get("subscription") if isinstance(r, dict) else None
+        if not sub:
+            detail.append({"endpoint": None, "ok": False, "error": "no-sub"})
+            continue
+        endpoint = sub.get("endpoint")
+        if not endpoint:
+            detail.append({"endpoint": None, "ok": False, "error": "no-endpoint"})
+            continue
+        payload = dict(payload_template)
+        if len(json.dumps(payload).encode("utf-8")) > 2000:
+            payload["preview"] = None
+            payload["body"] = payload.get("body","")[:200] + "…"
+        ok = False
+        for attempt in range(2):
+            res = _send_push_single(sub, payload)
+            if res.get("ok"):
+                ok = True
+                sent += 1
+                detail.append({"endpoint": normalize_endpoint(endpoint), "ok": True})
+                try:
+                    now = datetime.utcnow().replace(microsecond=0).isoformat()
+                    # mark delivered in storage
+                    ack_notifications(endpoint, [it.get("id") for it in []])  # noop; we already persisted
+                except Exception:
+                    logger.exception("mark delivered failed")
+                break
+            else:
+                status = res.get("status")
+                err = res.get("error")
+                logger.warning("Push failure to %s (status=%s): %s", endpoint, status, err)
+                if status in (404, 410) or (err and "unsubscribed" in str(err).lower()):
                     try:
-                        now = datetime.utcnow().replace(microsecond=0).isoformat()
-                        with sqlite3.connect(str(DB_PATH)) as conn:
-                            c = conn.cursor()
-                            # mark delivered for normalized endpoint
-                            c.execute("UPDATE notifications SET delivered=1, delivered_at=? WHERE endpoint=? AND delivered=0", (now, normalize_endpoint(endpoint)))
-                            conn.commit()
+                        delete_subscriptions_by_endpoint(endpoint)
                     except Exception:
-                        logger.exception("Failed to mark delivered for %s", endpoint)
+                        logger.exception("deleting stale subscription failed")
+                    detail.append({"endpoint": normalize_endpoint(endpoint), "ok": False, "status": status, "error": err, "deleted": True})
+                    ok = False
                     break
-                else:
-                    status = res.get("status")
-                    err = res.get("error")
-                    logger.warning("Push failure to %s (status=%s): %s", endpoint, status, err)
-                    # stale subscription cleanup
-                    if status in (404, 410) or (err and "unsubscribed" in str(err).lower()):
-                        try:
-                            _delete_subscriptions_by_endpoint(endpoint)
-                        except Exception:
-                            logger.exception("Failed removing stale subscription %s", endpoint)
-                        detail.append({"endpoint": normalize_endpoint(endpoint), "ok": False, "status": status, "error": err, "deleted": True})
-                        ok = False
-                        break
-                    time.sleep(0.12)
-            if not ok:
-                detail.append({"endpoint": normalize_endpoint(endpoint), "ok": False, "error": "final-failure"})
-        except Exception:
-            logger.exception("Exception sending push to subscription row")
-            detail.append({"endpoint": None, "ok": False, "error": "processing-exception"})
-
+        if not ok:
+            detail.append({"endpoint": normalize_endpoint(endpoint), "ok": False, "error": "final-failure"})
     return {"sent": sent, "errors": [d for d in detail if not d.get("ok")], "detail": detail}
 
-# --- HTTP endpoints for subscription + notifications ---
-@app.route("/save-subscription", methods=["POST"])
-def save_subscription_route():
-    try:
-        payload = request.get_json(force=True, silent=True) or {}
-        subscription = payload.get("subscription") or payload.get("push") or payload
-        if isinstance(subscription, str):
-            try:
-                subscription = json.loads(subscription)
-            except Exception:
-                subscription = {"endpoint": subscription}
-        subject = (payload.get("subject") or request.args.get("subject") or "Other")
-        client_id = payload.get("client_id") or ""
-        if not subscription or not _is_valid_subscription_obj(subscription):
-            return jsonify({"ok": False, "error": "subscription required"}), 400
-        ok = _save_subscription(subject, client_id, subscription)
-        endpoint = subscription.get("endpoint")
-        subjects_for_endpoint = []
-        try:
-            subs = _list_subscriptions()
-            for r in subs:
-                try:
-                    sub = r.get("subscription") if isinstance(r, dict) else None
-                    subj = r.get("subject") if isinstance(r, dict) else None
-                    if sub and subj:
-                        if normalize_endpoint(sub.get("endpoint")) == normalize_endpoint(endpoint):
-                            subjects_for_endpoint.append(_normalize_subject(subj))
-                except Exception:
-                    continue
-            subjects_for_endpoint = sorted(list(dict.fromkeys(subjects_for_endpoint)))
-        except Exception:
-            subjects_for_endpoint = []
-        resp = jsonify({"ok": ok, "subjects": subjects_for_endpoint})
-        try:
-            if endpoint:
-                resp.set_cookie('nn_subscription', normalize_endpoint(endpoint), max_age=COOKIE_MAX_AGE, samesite='Lax')
-        except Exception:
-            pass
-        return resp, (200 if ok else 500)
-    except Exception:
-        logger.exception("save-subscription failed: %s", traceback.format_exc())
-        return jsonify({"ok": False, "error": "server-error"}), 500
+# --- Routes ---
 
-
-@app.route("/subscriptions/check", methods=["GET"])
-def subscriptions_check():
-    try:
-        endpoint = request.args.get("endpoint", "").strip() or (request.cookies.get('nn_subscription') or "").strip()
-        if not endpoint:
-            return jsonify({"ok": False, "error": "endpoint required"}), 400
-        out_subjects = []
-        try:
-            subs = _list_subscriptions()
-            for r in subs:
-                try:
-                    sub = r.get("subscription") if isinstance(r, dict) else None
-                    subj = r.get("subject") if isinstance(r, dict) else None
-                    if sub and subj and normalize_endpoint(sub.get("endpoint")) == normalize_endpoint(endpoint):
-                        out_subjects.append(_normalize_subject(subj))
-                except Exception:
-                    continue
-        except Exception:
-            logger.exception("subscriptions_check list failed")
-        return jsonify({"ok": True, "subjects": sorted(list(dict.fromkeys(out_subjects)))})
-    except Exception:
-        logger.exception("subscriptions_check top-level failed")
-        return jsonify({"ok": False, "error": "server-error"}), 500
-
-
-@app.route("/notifications/pending", methods=["GET"])
-def notifications_pending():
-    try:
-        endpoint = request.args.get("endpoint", "").strip() or (request.cookies.get('nn_subscription') or "").strip()
-        if not endpoint:
-            return jsonify({"ok": False, "error": "endpoint required"}), 400
-        items = fetch_pending_notifications_for_endpoint(endpoint)
-        return jsonify({"ok": True, "items": items})
-    except Exception:
-        logger.exception("notifications_pending failed")
-        return jsonify({"ok": False, "error": "server-error"}), 500
-
-
-@app.route("/notifications/ack", methods=["POST"])
-def notifications_ack():
-    try:
-        payload = request.get_json(force=True, silent=True) or {}
-        endpoint = (payload.get("endpoint") or "").strip() or (request.cookies.get('nn_subscription') or "").strip()
-        ids = payload.get("ids") or []
-        if not endpoint:
-            return jsonify({"ok": False, "error": "endpoint required"}), 400
-        if not isinstance(ids, list):
-            return jsonify({"ok": False, "error": "ids must be a list"}), 400
-        n = ack_notifications_by_ids(endpoint, ids)
-        return jsonify({"ok": True, "count": n})
-    except Exception:
-        logger.exception("notifications_ack failed")
-        return jsonify({"ok": False, "error": "server-error"}), 500
-
-
-# expose vapid public key
-@app.route("/api/vapid")
-def api_vapid():
-    if not VAPID_PUBLIC_KEY:
-        return jsonify({"ok": False, "error": "vapid-not-configured"}), 503
-    return jsonify({"ok": True, "publicKey": VAPID_PUBLIC_KEY})
-
-# --- pages and app features ---
-# Serve service worker if present
 @app.route("/service-worker.js")
 def service_worker():
     try:
         return send_from_directory(app.static_folder, "service-worker.js")
     except Exception:
         logger.exception("service-worker not found")
-        abort(404)
+        return abort(404)
 
-# Core pages (ensure endpoints referenced in templates)
+@app.route("/favicon.ico")
+def favicon():
+    candidate = Path(app.static_folder) / "img" / "icon-192.png"
+    if candidate.exists():
+        return send_from_directory(str(candidate.parent), candidate.name)
+    logo = Path(app.static_folder) / "img" / "logo.png"
+    if logo.exists():
+        return send_from_directory(str(logo.parent), logo.name)
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="100%" height="100%" fill="#2b8cff"/></svg>'
+    return make_response(svg, 200, {"Content-Type": "image/svg+xml"})
+
+@app.route("/drive-image/<path:file_id>")
+def drive_image(file_id: str):
+    logo = Path(app.static_folder) / "img" / "logo.png"
+    if logo.exists():
+        return send_from_directory(str(logo.parent), logo.name)
+    return abort(404)
+
 @app.route("/")
 def home_page():
-    return render_template_safe("index.html", message=FOOTER_MESSAGE)
+    return render_template("index.html", message=FOOTER_MESSAGE)
+# Add this route to app.py (near other page routes)
 
-# alias for templates using url_for('index')
-@app.route("/index", endpoint="index")
-def index_alias():
+@app.route("/rules", endpoint="rules_page")
+def rules_page():
+    """
+    Serve the rules page. Try reading from a sheets helper if available,
+    otherwise fall back to a local JSON file data/rules.json, or an empty list.
+    """
+    rules = []
+    # try sheets.py first (if the app includes it)
     try:
-        return home_page()
+        import sheets as sheets_mod  # optional dependency
+        if hasattr(sheets_mod, "read_rules"):
+            try:
+                rules = sheets_mod.read_rules() or []
+            except Exception:
+                # sheet read failed; fallback below
+                rules = []
     except Exception:
-        logger.exception("index_alias failed")
-        return render_template_safe("index.html", message=FOOTER_MESSAGE)
+        # sheets not available — fall back to local JSON
+        try:
+            rules = safe_load_json(DATA_DIR / "rules.json") or []
+        except Exception:
+            rules = []
 
+    # Ensure rules is a list for template safety
+    if not isinstance(rules, list):
+        rules = []
+
+    return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
+
+# Explicit quiz_forms endpoint so templates using url_for('quiz_forms') succeed
+@app.route("/quiz-forms", endpoint="quiz_forms")
+def quiz_forms():
+    forms = safe_load_json(QUIZ_LOCAL_PATH) or []
+    return render_template("quiz_forms.html", forms=forms, message=FOOTER_MESSAGE)
+
+@app.route("/quizzes")
+def quizzes_redirect():
+    return redirect(url_for("quiz_forms"))
 
 @app.route("/content")
 def content_page():
-    return render_template_safe("content.html", message=FOOTER_MESSAGE)
+    timetable_today = []
+    sheet_title = None
+    sheet_content = None
+    dr_values = []
+    form_list = safe_load_json(QUIZ_LOCAL_PATH) or []
+    hero_image_id = os.environ.get("HERO_IMAGE_ID", "")
+    notes_drive_url = os.environ.get("NOTES_DRIVE_URL", "")
+    return render_template("content.html",
+                                message=FOOTER_MESSAGE,
+                                timetable_today=timetable_today,
+                                sheet_title=sheet_title,
+                                sheet_content=sheet_content,
+                                dr_values=dr_values,
+                                form_list=form_list,
+                                notes_drive_url=notes_drive_url,
+                                hero_image_id=hero_image_id,
+                                hero_title=os.environ.get("HERO_TITLE", "Stay Consistent"),
+                                hero_subtitle=os.environ.get("HERO_SUBTITLE", "Success = small efforts repeated daily."))
 
-@app.route("/drive_image/<file_id>")
-def drive_image(file_id):
-    """
-    Serve an image/file from Google Drive by file_id, with a small on-disk cache.
-    - If cached file exists in data/drive_images, serve it.
-    - If Google libs/credentials are available, download and cache then serve.
-    - Otherwise return 404.
-    """
-    try:
-        if not file_id:
-            abort(404)
-        cache_dir = DATA_DIR / "drive_images"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        # Try cached file first
-        # Use file_id as the base name; we may append an extension after metadata lookup.
-        def cached_path_for(name):
-            return cache_dir / name
-
-        # If an exact cached file exists (with or without extension), serve it
-        candidates = [cached_path_for(file_id)]
-        # also check any files that start with file_id (previous cached with extension)
-        candidates += list(cache_dir.glob(f"{file_id}*"))
-        for cand in candidates:
-            if cand.exists() and cand.is_file():
-                guessed_type, _ = mimetypes.guess_type(str(cand))
-                return send_from_directory(str(cache_dir), cand.name, mimetype=guessed_type)
-
-        # If Google libs are not available or no credentials, abort 404
-        if not GOOGLE_LIBS_AVAILABLE:
-            logger.warning("drive_image requested but google client libs not available")
-            abort(404)
-
-        # Attempt to download file using Drive API
-        try:
-            drive = get_google_service('drive', 'v3', ['https://www.googleapis.com/auth/drive.readonly'])
-            # fetch metadata so we can determine extension/mime
-            meta = drive.files().get(fileId=file_id, fields='name, mimeType').execute()
-            name = meta.get('name') or file_id
-            mime = meta.get('mimeType') or None
-            suffix = Path(name).suffix or ""
-            filename = f"{file_id}{suffix}"
-            dest = cache_dir / filename
-
-            # stream download
-            fh = io.BytesIO()
-            request_g = drive.files().get_media(fileId=file_id)
-            downloader = MediaIoBaseDownload(fh, request_g)
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
-            fh.seek(0)
-            # write to cache
-            with open(dest, "wb") as out_f:
-                out_f.write(fh.read())
-
-            guessed_type = mime or mimetypes.guess_type(str(dest))[0] or 'application/octet-stream'
-            return send_from_directory(str(cache_dir), dest.name, mimetype=guessed_type)
-        except Exception:
-            logger.exception("drive_image: failed to download or serve file %s", file_id)
-            # don't leak internal errors to user -- return 404 to template
-            abort(404)
-    except Exception:
-        logger.exception("drive_image top-level exception")
-        abort(500)
-
-@app.route("/drive_image/<file_id>")
-def drive_image(file_id):
-    """
-    Serve an image/file from Google Drive by file_id, with a small on-disk cache.
-    - If cached file exists in data/drive_images, serve it.
-    - If Google libs/credentials are available, download and cache then serve.
-    - Otherwise return 404.
-    """
-    try:
-        if not file_id:
-            abort(404)
-        cache_dir = DATA_DIR / "drive_images"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        # Try cached file first
-        # Use file_id as the base name; we may append an extension after metadata lookup.
-        def cached_path_for(name):
-            return cache_dir / name
-
-        # If an exact cached file exists (with or without extension), serve it
-        candidates = [cached_path_for(file_id)]
-        # also check any files that start with file_id (previous cached with extension)
-        candidates += list(cache_dir.glob(f"{file_id}*"))
-        for cand in candidates:
-            if cand.exists() and cand.is_file():
-                guessed_type, _ = mimetypes.guess_type(str(cand))
-                return send_from_directory(str(cache_dir), cand.name, mimetype=guessed_type)
-
-        # If Google libs are not available or no credentials, abort 404
-        if not GOOGLE_LIBS_AVAILABLE:
-            logger.warning("drive_image requested but google client libs not available")
-            abort(404)
-
-        # Attempt to download file using Drive API
-        try:
-            drive = get_google_service('drive', 'v3', ['https://www.googleapis.com/auth/drive.readonly'])
-            # fetch metadata so we can determine extension/mime
-            meta = drive.files().get(fileId=file_id, fields='name, mimeType').execute()
-            name = meta.get('name') or file_id
-            mime = meta.get('mimeType') or None
-            suffix = Path(name).suffix or ""
-            filename = f"{file_id}{suffix}"
-            dest = cache_dir / filename
-
-            # stream download
-            fh = io.BytesIO()
-            request_g = drive.files().get_media(fileId=file_id)
-            downloader = MediaIoBaseDownload(fh, request_g)
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
-            fh.seek(0)
-            # write to cache
-            with open(dest, "wb") as out_f:
-                out_f.write(fh.read())
-
-            guessed_type = mime or mimetypes.guess_type(str(dest))[0] or 'application/octet-stream'
-            return send_from_directory(str(cache_dir), dest.name, mimetype=guessed_type)
-        except Exception:
-            logger.exception("drive_image: failed to download or serve file %s", file_id)
-            # don't leak internal errors to user -- return 404 to template
-            abort(404)
-    except Exception:
-        logger.exception("drive_image top-level exception")
-        abort(500)
-
-
-# Optional: make notifications/pending return empty list instead of 400 when no endpoint
-@app.route("/notifications/pending", methods=["GET"])
-def notifications_pending():
-    try:
-        endpoint = request.args.get("endpoint", "").strip() or (request.cookies.get('nn_subscription') or "").strip()
-        # If there's no endpoint, return empty list (avoids 400 when pages poll without a subscription)
-        if not endpoint:
-            return jsonify({"ok": True, "items": []})
-        items = fetch_pending_notifications_for_endpoint(endpoint)
-        return jsonify({"ok": True, "items": items})
-    except Exception:
-        logger.exception("notifications_pending failed")
-        return jsonify({"ok": False, "error": "server-error"}), 500
-
-@app.route("/quizzes")
-def quizzes_page():
-    return render_template_safe("quizzes.html", message=FOOTER_MESSAGE)
-
-@app.route("/quiz-forms")
-def quiz_forms():
-    return render_template_safe("quiz_forms.html", message=FOOTER_MESSAGE)
-
+@app.route("/api/vapid")
+def api_vapid():
+    if not VAPID_PUBLIC_KEY:
+        return jsonify({"ok": False, "error": "vapid-not-configured"}), 503
+    return jsonify({"ok": True, "publicKey": VAPID_PUBLIC_KEY})
 
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
@@ -910,171 +554,273 @@ def questions_page():
             name = (request.form.get("name") or "Anonymous").strip()
             category = (request.form.get("category") or "Other").strip()
             timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
+            qfile = DATA_DIR / "questions_local.json"
             try:
-                if SHEETS_AVAILABLE and QUESTIONS_SHEET_KEY:
-                    sheets_mod.append_row([category, name, question, attempt, timestamp])
-                else:
-                    qpath = DATA_DIR / "questions_local.json"
-                    try:
-                        arr = json.loads(qpath.read_text(encoding="utf-8")) if qpath.exists() else []
-                    except Exception:
-                        arr = []
-                    arr.append([category, name, question, attempt, timestamp])
-                    qpath.write_text(json.dumps(arr, ensure_ascii=False, indent=2), encoding="utf-8")
+                arr = json.loads(qfile.read_text(encoding="utf-8") or "[]") if qfile.exists() else []
             except Exception:
-                logger.exception("Failed appending question; continuing")
-
+                arr = []
+            arr.append([category, name, question, attempt, timestamp])
+            try:
+                qfile.write_text(json.dumps(arr, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                logger.exception("writing questions file failed")
             flash("Question submitted. Thank you!", "success")
             try:
                 send_push_to_subject(category, question, attempt)
             except Exception:
                 logger.exception("send_push_to_subject failed")
             resp = redirect(url_for("questions_page"))
-            try:
-                resp.set_cookie("nn_user", name, max_age=COOKIE_MAX_AGE, samesite='Lax')
-                resp.set_cookie("nn_last_category", category, max_age=COOKIE_MAX_AGE, samesite='Lax')
-            except Exception:
-                pass
+            resp.set_cookie("nn_user", name, max_age=COOKIE_MAX_AGE, samesite='Lax')
+            resp.set_cookie("nn_last_category", category, max_age=COOKIE_MAX_AGE, samesite='Lax')
             return resp
 
-        # GET
-        raw = []
-        try:
-            if SHEETS_AVAILABLE and QUESTIONS_SHEET_KEY:
-                raw = sheets_mod.get_questions()
-            else:
-                qpath = DATA_DIR / "questions_local.json"
-                raw = json.loads(qpath.read_text(encoding="utf-8") or "[]") if qpath.exists() else []
-        except Exception:
-            logger.exception("Failed loading questions")
-            raw = []
-
+        qfile = DATA_DIR / "questions_local.json"
+        raw = json.loads(qfile.read_text(encoding="utf-8") or "[]") if qfile.exists() else []
         questions = []
-        for r in (raw or []):
+        for row in raw:
             try:
-                row = list(r)
-                while len(row) < 5:
-                    row.append("")
-                if len(row) > 0 and str(row[0]).strip() == "__subscription__":
+                lst = list(row) if isinstance(row, (list, tuple)) else [row]
+                while len(lst) < 5:
+                    lst.append("")
+                if lst and str(lst[0]).strip() == "__subscription__":
                     continue
-                questions.append(row)
+                questions.append(lst)
             except Exception:
                 continue
-
         derived = {str(q[0]).strip() for q in questions if q and q[0]}
+        STATIC_CATEGORIES = ["Mathematics", "Biology", "Computer Science", "Further Mathematics", "Chemistry", "Physics", "Coding", "Other"]
         categories_for_ui = STATIC_CATEGORIES + [c for c in sorted(derived) if c not in STATIC_CATEGORIES]
         selected_category = request.args.get("categoryFilter", "")
         if selected_category:
             questions = [q for q in questions if str(q[0]).strip() == selected_category]
-        return render_template_safe("questions.html", questions=questions, categories=categories_for_ui, selected_category=selected_category, message=FOOTER_MESSAGE, vapid_public_key=VAPID_PUBLIC_KEY)
+        return render_template("questions.html", questions=questions, categories=categories_for_ui, selected_category=selected_category, message=FOOTER_MESSAGE)
     except Exception:
-        logger.exception("questions_page exception")
+        logger.exception("questions_page failed")
         flash("Could not load questions", "danger")
-        return render_template_safe("questions.html", questions=[], categories=STATIC_CATEGORIES, selected_category="", message=FOOTER_MESSAGE, vapid_public_key=VAPID_PUBLIC_KEY)
+        return render_template("questions.html", questions=[], categories=["Other"], selected_category="", message=FOOTER_MESSAGE)
 
-
-@app.route("/coding")
+@app.route('/coding')
 def coding_page():
+    data_file = os.path.join(app.root_path, 'data', 'coding_exercises.json')
     exercises = []
-    try:
-        p = Path(CODING_LOCAL_PATH)
-        if p.exists():
-            exercises = json.loads(p.read_text(encoding="utf-8") or "[]")
-    except Exception:
-        logger.exception("Failed loading coding_exercises.json")
-    return render_template_safe("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
-
-
+    if os.path.exists(data_file):
+        with open(data_file, 'r', encoding='utf-8') as f:
+            try:
+                exercises = json.load(f)
+            except Exception as e:
+                app.logger.error(f"Failed to load exercises JSON: {e}")
+    return render_template('coding.html', exercises=exercises)
 @app.route("/health")
 def health_index():
-    return render_template_safe("health.html", message=FOOTER_MESSAGE)
-
+    plants = safe_load_json(HEALTH_LOCAL_PATH) or []
+    return render_template("health.html", plants=plants, message=FOOTER_MESSAGE)
 
 @app.route("/health/<path:slug>")
-def health_detail(slug):
-    # Render health_detail.html with slug; templates should load content by slug or show fallback
-    return render_template_safe("health_detail.html", slug=slug, message=FOOTER_MESSAGE)
+def health_detail(slug: str):
+    plants = safe_load_json(HEALTH_LOCAL_PATH) or []
+    plant = None
+    for p in plants:
+        try:
+            if p.get("slug") == slug or p.get("name","").lower().replace(" ", "-") == slug:
+                plant = p
+                break
+        except Exception:
+            continue
+    if not plant:
+        plant = {"name": slug.replace("-", " ").title(), "virtues": [], "uses": "No details available.", "notes": "", "slug": slug}
+    return render_template("health_detail.html", plant=plant, message=FOOTER_MESSAGE)
 
-
-@app.route("/rules")
-def rules_page():
-    rules = []
-    try:
-        if SHEETS_AVAILABLE and GROUP_RULES_SHEET_KEY:
-            rules = sheets_mod.read_rules()
-    except Exception:
-        logger.exception("Failed reading group rules")
-    return render_template_safe("rules.html", rules=rules, message=FOOTER_MESSAGE)
-
-
-@app.route("/admin/questions")
-def admin_questions():
-    return render_template_safe("admin_questions.html", message=FOOTER_MESSAGE)
-
-
-# admin announcement route (protected by ADMIN_KEY)
 @app.route("/admin/announcement", methods=["GET", "POST"])
 def admin_announcement():
-    provided_key = request.args.get("key") or request.form.get("admin_key") or request.form.get("key") or ""
+    provided_key = request.args.get("key") or request.form.get("admin_key") or ""
     if request.method == "GET" and not provided_key:
-        return render_template_safe("admin_announcement.html", key="", message=FOOTER_MESSAGE)
+        return render_template("admin_announcement.html", key="", message=FOOTER_MESSAGE)
     if provided_key != ADMIN_KEY:
         flash("Unauthorized admin key.", "warning")
-        return render_template_safe("admin_announcement.html", key="", message=FOOTER_MESSAGE)
+        return render_template("admin_announcement.html", key="", message=FOOTER_MESSAGE)
     if request.method == "POST":
         subject = (request.form.get("subject") or "All").strip()
         title = (request.form.get("title") or "Announcement").strip()
         body = (request.form.get("body") or "").strip()
         results = []
         try:
-            if subject.lower() in ("all", "everyone", "any"):
-                subs = _list_subscriptions()
+            if subject.lower() in ("all","everyone","any"):
+                subs = list_subscriptions()
                 uniq = {}
                 for r in subs:
-                    try:
-                        sub = r.get("subscription") if isinstance(r, dict) else None
-                        if not sub:
-                            continue
-                        ep = sub.get("endpoint")
-                        if ep:
-                            epn = normalize_endpoint(ep)
-                            if epn and epn not in uniq:
-                                uniq[epn] = sub
-                    except Exception:
+                    sub = r.get("subscription") if isinstance(r, dict) else None
+                    if not sub:
                         continue
+                    ep = sub.get("endpoint")
+                    if ep:
+                        epn = normalize_endpoint(ep)
+                        if epn and epn not in uniq:
+                            uniq[epn] = sub
                 for sub in uniq.values():
                     try:
-                        save_notification_for_endpoint(sub.get("endpoint"), subject, title, body, {"announcement": True})
+                        save_notification(sub.get("endpoint"), subject, title, body, {"announcement": True})
                         if PYWEBPUSH_AVAILABLE and VAPID_PRIVATE_KEY:
-                            res = _send_push_to_single(sub, {"title": title, "body": body, "url": "/"})
+                            res = _send_push_single(sub, {"title": title, "body": body, "url": "/"})
                             results.append({"endpoint": normalize_endpoint(sub.get("endpoint")), **res})
                         else:
                             results.append({"endpoint": normalize_endpoint(sub.get("endpoint")), "ok": False, "error": "push-not-configured"})
                     except Exception:
                         results.append({"endpoint": None, "ok": False, "error": "exception"})
                 flash(f"Announcement queued/sent to {len(results)} endpoints.", "success")
-                return render_template_safe("admin_announcement.html", key=provided_key, result=results, message=FOOTER_MESSAGE)
+                return render_template("admin_announcement.html", key=provided_key, result=results, message=FOOTER_MESSAGE)
             else:
                 res = send_push_to_subject(subject, title, body)
                 flash("Announcement attempted.", "success")
-                return render_template_safe("admin_announcement.html", key=provided_key, result=res, message=FOOTER_MESSAGE)
+                return render_template("admin_announcement.html", key=provided_key, result=res, message=FOOTER_MESSAGE)
         except Exception:
             logger.exception("admin_announcement failed")
             flash("Failed to send announcement.", "danger")
-            return render_template_safe("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
-    return render_template_safe("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
+            return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
+    return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
 
+@app.route("/admin/exercises", methods=["GET", "POST"])
+def admin_exercises():
+    provided_key = request.args.get("key") or request.form.get("admin_key") or ""
+    # If GET without key, show empty admin entry view (same UX as other admin routes)
+    if request.method == "GET" and not provided_key:
+        return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
 
-# Safe multi-statement SQL runner helper
+    # Unauthorized key -> same behaviour as other admin routes
+    if provided_key != ADMIN_KEY:
+        flash("Unauthorized admin key.", "warning")
+        return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
+
+    # POST: create or update (append if new) exercise
+    if request.method == "POST":
+        try:
+            # Collect form fields (keep original names used in your admin HTML)
+            ex_id = (request.form.get("id") or "").strip()
+            title = (request.form.get("title") or "").strip()
+            language = (request.form.get("language") or "").strip()
+            difficulty = (request.form.get("difficulty") or "").strip()
+            description = (request.form.get("description") or "").strip()
+            starter = (request.form.get("starter_code") or request.form.get("starter") or "").strip()
+            solution = (request.form.get("solution_code") or request.form.get("solution") or "").strip()
+
+            # sample_data may be JSON text (optional)
+            sample_raw = (request.form.get("sample_data") or "").strip()
+            sample_data = None
+            if sample_raw:
+                try:
+                    sample_data = json.loads(sample_raw)
+                except Exception:
+                    # tolerate plain text or malformed JSON by keeping None
+                    sample_data = None
+
+            # generate id if not provided (ms timestamp, string)
+            if not ex_id:
+                ex_id = str(int(time.time() * 1000))
+
+            # normalize exercise object
+            data = {
+                "id": ex_id,
+                "title": title,
+                "language": language,
+                "difficulty": difficulty,
+                "description": description,
+                "starter": starter,
+                "solution": solution,
+                "sample_data": sample_data,
+                "created_at": datetime.utcnow().replace(microsecond=0).isoformat()
+            }
+
+            # load existing exercises (JSON fallback)
+            arr = safe_load_json(CODING_LOCAL_PATH) or []
+            if not isinstance(arr, list):
+                arr = []
+
+            # If an exercise with same id exists -> update it; otherwise append (append behavior requested)
+            existing_index = None
+            for i, e in enumerate(arr):
+                try:
+                    if str(e.get("id")) == str(data.get("id")):
+                        existing_index = i
+                        break
+                except Exception:
+                    continue
+
+            if existing_index is not None:
+                arr[existing_index] = data
+                action = "updated"
+            else:
+                arr.append(data)
+                action = "added"
+
+            # persist
+            safe_write_json(CODING_LOCAL_PATH, arr)
+            flash(f"Exercise {action} successfully.", "success")
+        except Exception:
+            logger.exception("Failed saving exercise")
+            flash("Failed saving exercise", "danger")
+
+        return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
+
+    # Fallback (shouldn't be reached) - render page
+    return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
+
+@app.route("/admin/questions", methods=["GET", "POST"])
+def admin_questions():
+    provided = request.args.get("key") or request.form.get("admin_key") or ""
+    if request.method == "GET" and not provided:
+        return render_template("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
+    if provided != ADMIN_KEY:
+        flash("Unauthorized admin key.", "warning")
+        return render_template("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
+
+    qfile = DATA_DIR / "questions_local.json"
+    raw = json.loads(qfile.read_text(encoding="utf-8") or "[]") if qfile.exists() else []
+    rows = []
+    for idx, r in enumerate(raw):
+        try:
+            if isinstance(r, dict):
+                rows.append({"index": idx, "subject": r.get("subject",""), "user": r.get("name", r.get("user","")), "text": r.get("question", r.get("text","")), "attempt": r.get("attempt","")})
+            else:
+                lst = list(r) if isinstance(r, (list, tuple)) else [r]
+                rows.append({"index": idx, "subject": lst[0] if len(lst)>0 else "", "user": lst[1] if len(lst)>1 else "", "text": lst[2] if len(lst)>2 else "", "attempt": lst[3] if len(lst)>3 else ""})
+        except Exception:
+            continue
+    subjects = sorted(list({r["subject"] for r in rows if r.get("subject")}))
+
+    action = request.form.get("action") or ""
+    if request.method == "POST" and action == "delete_selected":
+        selected = request.form.getlist("selected")
+        selected_idx = set(int(x) for x in selected if str(x).isdigit())
+        new = [r for i,r in enumerate(raw) if i not in selected_idx]
+        try:
+            qfile.write_text(json.dumps(new, ensure_ascii=False, indent=2), encoding="utf-8")
+            flash(f"Deleted {len(selected_idx)} rows.", "success")
+        except Exception:
+            logger.exception("Failed deleting selected")
+            flash("Failed deleting selected", "danger")
+        return redirect(url_for("admin_questions", key=provided))
+    if request.method == "POST" and request.form.get("action") == "delete_subject":
+        subj = request.form.get("subject_to_delete") or ""
+        if subj:
+            new = [r for r in raw if not ((isinstance(r, (list,tuple)) and str(r[0])==str(subj)) or (isinstance(r, dict) and str(r.get("subject",""))==str(subj)))]
+            try:
+                qfile.write_text(json.dumps(new, ensure_ascii=False, indent=2), encoding="utf-8")
+                flash(f"Deleted questions for subject {subj}.", "success")
+            except Exception:
+                logger.exception("Failed deleting subject")
+                flash("Failed deleting subject", "danger")
+        return redirect(url_for("admin_questions", key=provided))
+
+    return render_template("admin_questions.html", key=provided, questions=rows, subjects=subjects, message=FOOTER_MESSAGE)
+
 def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
+    import sqlite3 as _sqlite
+    conn = _sqlite.connect(":memory:")
+    conn.row_factory = _sqlite.Row
     cur = conn.cursor()
     if schema_sql:
         try:
             cur.executescript(schema_sql)
         except Exception:
-            # fallback split
             stmts = [s.strip() for s in re.split(r';\s*(?=\b)', schema_sql) if s.strip()]
             for s in stmts:
                 try:
@@ -1097,7 +843,7 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
             if not cols:
                 continue
             try:
-                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name?", (table,))
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
                 if not cur.fetchone():
                     cols_def = ", ".join([f'"{c}" TEXT' for c in cols])
                     cur.execute(f'CREATE TABLE "{table}" ({cols_def});')
@@ -1115,13 +861,70 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
     conn.commit()
     return conn, [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
 
+@app.route("/drive-image/<path:file_id>")
+def drive_image(file_id: str):
+    """
+    Serve an image stored on Google Drive by file_id.
+    - If Drive API is available and the service account works, fetch the bytes + mimeType and return them.
+    - Otherwise fall back to static img/logo.png or icon-192.png.
+    """
+    # Quick sanity: if the client accidentally passed a filename (e.g. "logo.png"), serve static file directly.
+    static_candidate = Path(app.static_folder) / "img" / file_id
+    if static_candidate.exists():
+        return send_from_directory(str(static_candidate.parent), static_candidate.name)
 
-# exercise-table route (accepts POST - form or JSON body)
-@app.route("/exercise-table/<path:name>", methods=["POST", "GET"])
-def exercise_table(name):
+    # If drive helper available, try to fetch metadata and bytes
+    if DRIVE_API_AVAILABLE and gdrive:
+        try:
+            # get metadata (mimeType, name)
+            meta = {}
+            try:
+                meta = gdrive.get_file_metadata(file_id) or {}
+            except Exception:
+                meta = {}
+
+            # download file bytes
+            data = b""
+            try:
+                data = gdrive.download_file(file_id) or b""
+            except Exception:
+                data = b""
+
+            if data:
+                # decide mime type from metadata, fallback to guess by name, then to image/png
+                mime = (meta.get("mimeType") or mimetypes.guess_type(meta.get("name", ""))[0] or None)
+                if not mime:
+                    # try to guess image types heuristically (many drive images will be jpeg/png/webp)
+                    mime = "image/png"
+
+                file_name = meta.get("name") or f"{file_id}"
+                bio = io.BytesIO(data)
+                bio.seek(0)
+
+                # set caching headers: browser can cache images for an hour (adjust as needed)
+                resp = send_file(bio, mimetype=mime, download_name=file_name, as_attachment=False, conditional=True)
+                resp.cache_control.max_age = 3600
+                resp.cache_control.public = True
+                return resp
+            else:
+                logger.warning("Drive returned empty bytes for file_id=%s", file_id)
+        except Exception:
+            logger.exception("drive_image: error fetching %s from Drive", file_id)
+
+    # final fallback(s): try to serve icon-192 or logo
+    fallback = Path(app.static_folder) / "img" / "icon-192.png"
+    if not fallback.exists():
+        fallback = Path(app.static_folder) / "img" / "logo.png"
+    if fallback.exists():
+        return send_from_directory(str(fallback.parent), fallback.name)
+
+    # If nothing available, return 404
+    return abort(404)
+
+@app.route("/exercise-table/<path:name>", methods=["GET", "POST"])
+def exercise_table(name: str):
     if request.method == "GET":
-        return jsonify({"ok": True, "endpoint": f"/exercise-table/{name}", "note": "POST SQL to this URL using form-data or JSON with key 'schema'"}), 200
-
+        return make_response(jsonify({"ok": True, "endpoint": f"/exercise-table/{name}", "note": "POST SQL to this URL using form-data or JSON with key 'schema'"}), 200)
     payload_schema = ""
     payload_sample = None
     if request.is_json:
@@ -1132,10 +935,8 @@ def exercise_table(name):
         except Exception:
             payload_schema = ""
             payload_sample = None
-
     if not payload_schema:
         payload_schema = (request.form.get("schema") or request.form.get("sql") or "").strip()
-
     if not payload_schema:
         try:
             raw = (request.get_data(as_text=True) or "").strip()
@@ -1151,17 +952,14 @@ def exercise_table(name):
                     payload_schema = raw
         except Exception:
             pass
-
     if not payload_schema:
-        return jsonify({"ok": False, "error": "schema (SQL) required in 'schema' form field or JSON body"}), 400
-
+        return make_response(jsonify({"ok": False, "error": "schema (SQL) required"}), 400)
     if payload_sample is None:
         try:
             sample_text = (request.form.get("sample") or request.form.get("sample_data") or "").strip()
             payload_sample = json.loads(sample_text) if sample_text else {}
         except Exception:
             payload_sample = {}
-
     try:
         conn, tables = _safe_create_and_populate_sqlite(payload_schema, payload_sample)
         preview = {}
@@ -1172,64 +970,115 @@ def exercise_table(name):
             except Exception:
                 preview[t] = []
         conn.close()
-        return jsonify({"ok": True, "name": name, "tables": tables, "preview": preview}), 200
+        return make_response(jsonify({"ok": True, "name": name, "tables": tables, "preview": preview}), 200)
     except Exception as e:
-        logger.exception("exercise_table execution error")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        logger.exception("exercise_table error")
+        return make_response(jsonify({"ok": False, "error": str(e)}), 500)
 
-
-# admin-run-sql endpoint
-@app.route("/admin/run-sql", methods=["POST"])
-def admin_run_sql():
-    provided = request.args.get("key") or request.form.get("admin_key") or ""
-    if provided != EXERCISES_ADMIN_KEY:
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
-    payload = request.get_json(force=True, silent=True) or {}
-    schema = payload.get("schema") or payload.get("sql") or ""
-    sample = payload.get("sample") or {}
+@app.route("/save-subscription", methods=["POST"])
+def save_subscription_route():
     try:
-        conn, tables = _safe_create_and_populate_sqlite(schema, sample)
-        rows_preview = {}
-        for t in tables:
+        payload = request.get_json(force=True, silent=True) or {}
+        subscription = payload.get("subscription") or payload.get("push") or payload
+        if isinstance(subscription, str):
             try:
-                cur = conn.execute(f"SELECT * FROM \"{t}\" LIMIT 20")
-                rows_preview[t] = [dict(row) for row in cur.fetchall()]
+                subscription = json.loads(subscription)
             except Exception:
-                rows_preview[t] = []
-        conn.close()
-        return jsonify({"ok": True, "tables": tables, "preview": rows_preview})
+                subscription = {"endpoint": subscription}
+        subject = (payload.get("subject") or request.args.get("subject") or "Other")
+        client_id = payload.get("client_id") or ""
+        if not subscription or not isinstance(subscription, dict) or not (subscription.get("endpoint") or subscription.get("url")):
+            return make_response(jsonify({"ok": False, "error": "subscription required"}), 400)
+        ok = save_subscription(subject, client_id, subscription)
+        endpoint = subscription.get("endpoint")
+        subjects_for_endpoint = []
+        try:
+            subs = list_subscriptions()
+            for r in subs:
+                sub = r.get("subscription") if isinstance(r, dict) else None
+                subj = r.get("subject") if isinstance(r, dict) else None
+                if sub and subj and normalize_endpoint(sub.get("endpoint")) == normalize_endpoint(endpoint):
+                    subjects_for_endpoint.append((subj or "Other"))
+            subjects_for_endpoint = sorted(list(dict.fromkeys(subjects_for_endpoint)))
+        except Exception:
+            subjects_for_endpoint = []
+        resp = make_response(jsonify({"ok": ok, "subjects": subjects_for_endpoint}), (200 if ok else 500))
+        try:
+            if endpoint:
+                resp.set_cookie('nn_subscription', normalize_endpoint(endpoint), max_age=COOKIE_MAX_AGE, samesite='Lax')
+        except Exception:
+            pass
+        return resp
     except Exception:
-        logger.exception("admin_run_sql failed")
-        return jsonify({"ok": False, "error": "execution-failed"}), 500
+        logger.exception("save-subscription failed")
+        return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
 
+@app.route("/subscriptions/check", methods=["GET"])
+def subscriptions_check():
+    try:
+        endpoint = request.args.get("endpoint", "").strip() or (request.cookies.get('nn_subscription') or "").strip()
+        if not endpoint:
+            return make_response(jsonify({"ok": False, "error": "endpoint required"}), 400)
+        out_subjects = []
+        try:
+            subs = list_subscriptions()
+            for r in subs:
+                sub = r.get("subscription") if isinstance(r, dict) else None
+                subj = r.get("subject") if isinstance(r, dict) else None
+                if sub and subj and normalize_endpoint(sub.get("endpoint")) == normalize_endpoint(endpoint):
+                    out_subjects.append((subj or "Other"))
+        except Exception:
+            logger.exception("subscriptions_check failed")
+        return make_response(jsonify({"ok": True, "subjects": sorted(list(dict.fromkeys(out_subjects)))}), 200)
+    except Exception:
+        logger.exception("subscriptions_check top-level failed")
+        return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
 
-# Error handlers
+@app.route("/notifications/pending", methods=["GET"])
+def notifications_pending():
+    endpoint = request.args.get("endpoint", "").strip() or (request.cookies.get('nn_subscription') or "").strip()
+    if not endpoint:
+        return make_response(jsonify({"ok": False, "error": "endpoint required"}), 400)
+    items = fetch_pending_notifications(endpoint)
+    return make_response(jsonify({"ok": True, "items": items}), 200)
+
+@app.route("/notifications/ack", methods=["POST"])
+def notifications_ack():
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        endpoint = (payload.get("endpoint") or "").strip() or (request.cookies.get('nn_subscription') or "").strip()
+        ids = payload.get("ids") or []
+        if not endpoint:
+            return make_response(jsonify({"ok": False, "error": "endpoint required"}), 400)
+        if not isinstance(ids, list):
+            return make_response(jsonify({"ok": False, "error": "ids must be a list"}), 400)
+        n = ack_notifications(endpoint, ids)
+        return make_response(jsonify({"ok": True, "count": n}), 200)
+    except Exception:
+        logger.exception("notifications_ack failed")
+        return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
+
 @app.errorhandler(404)
 def handle_404(e):
+    # try to render a 404 template if present
     try:
-        return render_template_safe("errors/404.html", message=FOOTER_MESSAGE), 404
+        return render_template("errors/404.html", message=FOOTER_MESSAGE), 404
     except Exception:
-        return render_template_safe("error.html", message=FOOTER_MESSAGE, error=str(e)), 404
-
+        return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 404
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    logger.error("Unhandled Exception: %s\n%s", e, traceback.format_exc())
-    # If request is JSON or API path, return JSON
-    if request.path.startswith("/api/") or request.path.startswith("/admin/run-sql") or request.is_json:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return render_template_safe("error.html", message=FOOTER_MESSAGE, error=str(e)), 500
+    logger.error("Unhandled exception: %s\n%s", e, traceback.format_exc())
+    if request.is_json or request.path.startswith("/api/"):
+        return make_response(jsonify({"ok": False, "error": str(e)}), 500)
+    return render_template("error.html", status=500, message=FOOTER_MESSAGE, error=str(e)), 500
 
-
-# At startup: log which templates are present / missing (helps debugging)
-def _log_template_inventory():
-    needed = [
-        "base.html", "index.html", "content.html", "questions.html", "quiz_forms.html",
-        "quizzes.html", "coding.html", "health.html", "health_detail.html", "rules.html",
-        "error.html", "admin_announcement.html", "admin_questions.html", "errors/404.html"
-    ]
-    present = []
-    missing = []
+def _log_templates():
+    needed = ["base.html", "index.html", "content.html", "questions.html", "quiz_forms.html",
+              "coding.html", "health.html", "health_detail.html", "rules.html",
+              "error.html", "admin_announcement.html", "admin_questions.html", "errors/404.html",
+              "admin_exercises.html"]
+    present, missing = [], []
     for t in needed:
         try:
             app.jinja_env.get_or_select_template(t)
@@ -1238,13 +1087,12 @@ def _log_template_inventory():
             missing.append(t)
     logger.info("Templates present: %s", present)
     if missing:
-        logger.warning("Templates missing (render_template_safe will fallback): %s", missing)
+        logger.warning("Templates missing: %s", missing)
 
-_log_template_inventory()
+_log_templates()
 
-# Run
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
-    logger.info("Starting app on port %s (debug=%s)", port, debug_mode)
+    logger.info("Starting app on port %s (debug=%s, use_sqlite=%s)", port, debug_mode, USE_SQLITE)
     app.run(host="0.0.0.0", port=port, debug=debug_mode)

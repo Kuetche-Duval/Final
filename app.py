@@ -1,4 +1,5 @@
-# app.py — part 1/4
+# Unified app.py — JSON fallback storage by default (no nn_local.db unless USE_SQLITE=true)
+# Merged with Drive + lightweight Sheets helper functions (embedded)
 import os
 import json
 import logging
@@ -7,14 +8,13 @@ import sqlite3
 import re
 import time
 import io
-import mimetypes
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 from flask import (
     Flask, render_template, request, redirect, url_for, flash,
-    jsonify, send_from_directory, make_response, abort, Response, send_file
+    jsonify, send_from_directory, make_response, abort, Response
 )
 from dotenv import load_dotenv
 
@@ -27,20 +27,14 @@ except Exception:
     WebPushException = Exception
     PYWEBPUSH_AVAILABLE = False
 
-# Optional Drive & Sheets helpers (for graceful degradation)
+# Optional Google APIs for Drive/Sheets (used if available and configured)
 try:
-    import drive as gdrive
-    DRIVE_API_AVAILABLE = getattr(gdrive, "GOOGLEAPI_AVAILABLE", False)
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+    GOOGLEAPI_AVAILABLE = True
 except Exception:
-    gdrive = None
-    DRIVE_API_AVAILABLE = False
-
-try:
-    import sheets as gsheets
-    SHEETS_AVAILABLE = True
-except Exception:
-    gsheets = None
-    SHEETS_AVAILABLE = False
+    GOOGLEAPI_AVAILABLE = False
 
 load_dotenv()
 
@@ -74,7 +68,17 @@ VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com").stri
 
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "") or ""
 
-# If sqlite desired, initialize DB
+# Google Drive / Sheets configuration envs
+SERVICE_ACCOUNT_PATH = os.environ.get("SERVICE_ACCOUNT_JSON_PATH", "service_account.json")
+DRIVE_PARENT_FOLDER_ID = os.environ.get("DRIVE_PARENT_FOLDER_ID", "")
+# optional spreadsheet envs (if you want to configure reading from Sheets)
+RULES_SHEET_ID = os.environ.get("RULES_SHEET_ID", "")
+RULES_SHEET_RANGE = os.environ.get("RULES_SHEET_RANGE", "Sheet1!A1:A")
+TIMETABLE_SHEET_ID = os.environ.get("TIMETABLE_SHEET_ID", "")
+TIMETABLE_SHEET_RANGE = os.environ.get("TIMETABLE_SHEET_RANGE", "Sheet1!A1:Z")
+GALLERY_PARENT_FOLDER_ID = os.environ.get("GALLERY_PARENT_FOLDER_ID", DRIVE_PARENT_FOLDER_ID)
+
+# If sqlite desired, initialize DB (only if USE_SQLITE)
 def _init_sqlite_db(db_path: Path):
     try:
         conn = sqlite3.connect(str(db_path))
@@ -143,7 +147,235 @@ def safe_write_json(path: Path, obj):
     except Exception:
         logger.exception("Failed writing JSON: %s", path)
         return False
-# app.py — part 2/4
+
+# Drive helpers (embedded from drive.py)
+def _make_drive_service():
+    if not GOOGLEAPI_AVAILABLE:
+        raise RuntimeError("google-api-python-client or google-auth not installed")
+    if not os.path.exists(SERVICE_ACCOUNT_PATH):
+        raise RuntimeError("service account json not found at " + SERVICE_ACCOUNT_PATH)
+    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH, scopes=["https://www.googleapis.com/auth/drive"])
+    service = build("drive", "v3", credentials=creds, cache_discovery=False)
+    return service
+
+def download_file(file_id):
+    """Return bytes or b'' on error."""
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - download_file fallback")
+        return b""
+    try:
+        svc = _make_drive_service()
+        request = svc.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        fh.seek(0)
+        return fh.read()
+    except Exception:
+        logger.exception("download_file error for %s", file_id)
+        return b""
+
+def update_file(file_id, content_bytes, mime_type="application/json"):
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - update_file fallback")
+        return False
+    try:
+        svc = _make_drive_service()
+        fh = io.BytesIO(content_bytes)
+        media = MediaIoBaseUpload(fh, mimetype=mime_type, resumable=True)
+        svc.files().update(fileId=file_id, media_body=media).execute()
+        return True
+    except Exception:
+        logger.exception("update_file failed for %s", file_id)
+        return False
+
+def create_file_in_folder(folder_id, name, content_bytes, mime_type="application/json"):
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - create_file_in_folder fallback")
+        return None
+    try:
+        svc = _make_drive_service()
+        fh = io.BytesIO(content_bytes)
+        media = MediaIoBaseUpload(fh, mimetype=mime_type, resumable=True)
+        body = {"name": name, "parents": [folder_id], "mimeType": mime_type}
+        file = svc.files().create(body=body, media_body=media, fields="id").execute()
+        return file.get("id")
+    except Exception:
+        logger.exception("create_file_in_folder failed for folder %s", folder_id)
+        return None
+
+def from_google_drive(base_folder_id, mimeType=None):
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - from_google_drive returns []")
+        return []
+    if not base_folder_id:
+        logger.debug("from_google_drive called with empty folder id")
+        return []
+    try:
+        svc = _make_drive_service()
+        q = f"'{base_folder_id}' in parents and trashed=false"
+        if mimeType:
+            q += f" and mimeType = '{mimeType}'"
+        files = []
+        page_token = None
+        while True:
+            resp = svc.files().list(q=q,
+                                    spaces='drive',
+                                    fields="nextPageToken, files(id, name, description, mimeType, webViewLink)",
+                                    pageSize=200,
+                                    pageToken=page_token).execute()
+            for f in resp.get("files", []):
+                files.append({
+                    "id": f.get("id"),
+                    "name": f.get("name") or "",
+                    "description": f.get("description") or "",
+                    "mimeType": f.get("mimeType") or "",
+                    "webViewLink": f.get("webViewLink") or ""
+                })
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return files
+    except Exception:
+        logger.exception("from_google_drive error")
+        return []
+
+def folders_and_images(parent_folder_id=None, sample_limit=12):
+    parent_folder_id = parent_folder_id or DRIVE_PARENT_FOLDER_ID
+    if not parent_folder_id or not GOOGLEAPI_AVAILABLE:
+        return []
+    try:
+        svc = _make_drive_service()
+        q_folders = f"'{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        folders_resp = svc.files().list(q=q_folders, pageSize=200, fields="files(id, name)").execute()
+        folders = folders_resp.get("files", [])
+        to_return = {}
+        for folder in folders:
+            folder_id = folder.get("id")
+            folder_name = folder.get("name")
+            q_items = f"'{folder_id}' in parents and trashed=false"
+            items_resp = svc.files().list(q=q_items, pageSize=200, fields="files(id, name, mimeType)").execute()
+            items = items_resp.get("files", [])
+            for item in items:
+                to_return[item.get("name")] = (folder_name, item.get("id"))
+        items = list(to_return.items())
+        if len(items) <= sample_limit:
+            return items
+        import random
+        return random.sample(items, sample_limit)
+    except Exception:
+        logger.exception("folders_and_images error")
+        return []
+
+def get_file_metadata(file_id):
+    if not GOOGLEAPI_AVAILABLE:
+        logger.debug("Google API not available - get_file_metadata fallback")
+        return {}
+    if not file_id:
+        return {}
+    try:
+        svc = _make_drive_service()
+        fields = "id, name, mimeType, webContentLink, thumbnailLink"
+        meta = svc.files().get(fileId=file_id, fields=fields).execute()
+        return meta or {}
+    except Exception:
+        logger.exception("get_file_metadata error for %s", file_id)
+        return {}
+
+# Lightweight Sheets helpers (safe fallbacks to local JSON)
+def read_rules():
+    """
+    Return a list of rules.
+    Preference:
+      - data/rules.json if present
+      - optional Google Sheets if RULES_SHEET_ID is set and Google API available (reads a single column)
+      - otherwise empty list
+    """
+    # Local JSON first
+    local = safe_load_json(DATA_DIR / "rules.json")
+    if isinstance(local, list):
+        return local
+    # Try Google Sheets if configured
+    if GOOGLEAPI_AVAILABLE and RULES_SHEET_ID:
+        try:
+            creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+            sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
+            rng = RULES_SHEET_RANGE or "Sheet1!A1:A"
+            res = sheets.spreadsheets().values().get(spreadsheetId=RULES_SHEET_ID, range=rng).execute()
+            values = res.get("values", []) or []
+            # flatten first column
+            return [row[0] for row in values if row and row[0] is not None]
+        except Exception:
+            logger.exception("read_rules via Sheets failed")
+    return []
+
+def get_timetable_for_today():
+    """
+    Return a list representing today's timetable.
+    Preference:
+      - data/timetable.json if present
+      - optional Google Sheets if TIMETABLE_SHEET_ID configured (returns all rows)
+      - otherwise []
+    """
+    local = safe_load_json(DATA_DIR / "timetable.json")
+    if isinstance(local, list):
+        return local
+    if GOOGLEAPI_AVAILABLE and TIMETABLE_SHEET_ID:
+        try:
+            creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+            sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
+            rng = TIMETABLE_SHEET_RANGE or "Sheet1!A1:Z"
+            res = sheets.spreadsheets().values().get(spreadsheetId=TIMETABLE_SHEET_ID, range=rng).execute()
+            values = res.get("values", []) or []
+            return values
+        except Exception:
+            logger.exception("get_timetable_for_today via Sheets failed")
+    return []
+
+def get_timetable_sheet_content():
+    """
+    Return (title, content) tuple when available.
+    Fallback reads data/timetable_sheet.json which should be {"title": "...", "content": "..."}
+    """
+    local = safe_load_json(DATA_DIR / "timetable_sheet.json")
+    if isinstance(local, dict):
+        return local.get("title"), local.get("content")
+    # No remote fetch implemented beyond this simple local fallback
+    return None, None
+
+def list_gallery(sample_limit=12):
+    """
+    Return a list of (name, (folder_name, file_id)) pairs for gallery images.
+    Uses DRIVE_PARENT_FOLDER_ID or GALLERY_PARENT_FOLDER_ID if set and Google API available.
+    """
+    parent = GALLERY_PARENT_FOLDER_ID or DRIVE_PARENT_FOLDER_ID
+    if not parent:
+        return []
+    try:
+        return folders_and_images(parent, sample_limit=sample_limit)
+    except Exception:
+        logger.exception("list_gallery failed")
+        return []
+
+def fetch_drive_image_bytes(file_id):
+    """
+    Fetch binary bytes and mime-type for a Drive file. Returns (data_bytes, mime_type) or (b'', None).
+    Uses get_file_metadata + download_file if Google API available; otherwise returns (b'', None).
+    """
+    try:
+        if not file_id:
+            return b"", None
+        meta = get_file_metadata(file_id) or {}
+        mime = meta.get("mimeType")
+        data = download_file(file_id)
+        if data:
+            return data, (mime or "application/octet-stream")
+        return b"", mime or None
+    except Exception:
+        logger.exception("fetch_drive_image_bytes failed for %s", file_id)
+        return b"", None
 
 # JSON-backed subscriptions / notifications (fallback)
 def _read_subscriptions_json():
@@ -195,8 +427,16 @@ def save_subscription(subject, client_id, subscription_obj):
         # JSON fallback: deduplicate by endpoint+subject
         arr = _read_subscriptions_json()
         # remove existing with same endpoint and subject
-        arr = [r for r in arr if not (r.get("subscription", {}).get("endpoint") and normalize_endpoint(r.get("subscription", {}).get("endpoint")) == endpoint_norm and r.get("subject") == (subject or "Other"))]
-        arr.append({
+        new_arr = []
+        for r in arr:
+            try:
+                ep = r.get("subscription", {}).get("endpoint")
+                if ep and normalize_endpoint(ep) == endpoint_norm and r.get("subject") == (subject or "Other"):
+                    continue
+            except Exception:
+                pass
+            new_arr.append(r)
+        new_arr.append({
             "endpoint": endpoint_norm,
             "subject": subject or "Other",
             "client_id": client_id or "",
@@ -204,7 +444,7 @@ def save_subscription(subject, client_id, subscription_obj):
             "subscription": subscription_obj,
             "created_at": now
         })
-        _write_subscriptions_json(arr)
+        _write_subscriptions_json(new_arr)
         return True
     except Exception:
         logger.exception("save_subscription failed")
@@ -360,7 +600,6 @@ def ack_notifications(endpoint, ids):
     except Exception:
         logger.exception("ack_notifications failed")
         return 0
-# app.py — part 3/4
 
 # Push sending helper (optional)
 def _send_push_single(subscription, payload):
@@ -386,7 +625,7 @@ def send_push_to_subject(subject, question_text, attempt_text):
     a_preview = (attempt_text or "")[:180]
     body = f"Q: {q_preview}\nA: {a_preview}"
     try:
-        icon_url = url_for('static', filename='img/icon-192.png', _external=True)
+        icon_url = url_for('static', filename='img/logo.png', _external=True)
     except Exception:
         icon_url = None
     payload_template = {"title": title, "body": body, "url": "/questions", "subject": subject, "icon": icon_url, "badge": icon_url, "preview": {"question": q_preview, "attempt": a_preview}}
@@ -423,6 +662,12 @@ def send_push_to_subject(subject, question_text, attempt_text):
                 ok = True
                 sent += 1
                 detail.append({"endpoint": normalize_endpoint(endpoint), "ok": True})
+                try:
+                    now = datetime.utcnow().replace(microsecond=0).isoformat()
+                    # mark delivered in storage
+                    ack_notifications(endpoint, [it.get("id") for it in []])  # noop; we already persisted
+                except Exception:
+                    logger.exception("mark delivered failed")
                 break
             else:
                 status = res.get("status")
@@ -463,56 +708,16 @@ def favicon():
 
 @app.route("/drive-image/<path:file_id>")
 def drive_image(file_id: str):
-    # serve static candidate directly (logo.png etc)
-    static_candidate = Path(app.static_folder) / "img" / file_id
-    if static_candidate.exists():
-        return send_from_directory(str(static_candidate.parent), static_candidate.name)
-
-    # Use drive helper if available
-    if DRIVE_API_AVAILABLE and gdrive:
-        try:
-            meta = {}
-            if hasattr(gdrive, "get_file_metadata"):
-                try:
-                    meta = gdrive.get_file_metadata(file_id) or {}
-                except Exception:
-                    meta = {}
-            # fallback to from_google_drive to get name
-            if not meta and hasattr(gdrive, "from_google_drive"):
-                try:
-                    listing = gdrive.from_google_drive(file_id) or []
-                    if listing and isinstance(listing, list) and len(listing) >= 1:
-                        # if user passed a folder id or file id, try first element
-                        meta = listing[0] if isinstance(listing[0], dict) else {}
-                except Exception:
-                    meta = {}
-
-            data = b""
-            try:
-                data = gdrive.download_file(file_id) or b""
-            except Exception:
-                data = b""
-
-            if data:
-                mime = meta.get("mimeType") or mimetypes.guess_type(meta.get("name", ""))[0] or "image/png"
-                file_name = meta.get("name") or f"{file_id}"
-                bio = io.BytesIO(data)
-                bio.seek(0)
-                resp = send_file(bio, mimetype=mime, download_name=file_name, as_attachment=False, conditional=True)
-                resp.cache_control.max_age = 3600
-                resp.cache_control.public = True
-                return resp
-            else:
-                logger.warning("Drive returned empty bytes for file_id=%s", file_id)
-        except Exception:
-            logger.exception("drive_image: error fetching %s from Drive", file_id)
-
-    # final fallback to static icons
-    fallback = Path(app.static_folder) / "img" / "icon-192.png"
-    if not fallback.exists():
-        fallback = Path(app.static_folder) / "img" / "logo.png"
-    if fallback.exists():
-        return send_from_directory(str(fallback.parent), fallback.name)
+    # Try to fetch binary image bytes via embedded helper; fallback to static logo
+    try:
+        data, content_type = fetch_drive_image_bytes(file_id)
+        if data:
+            return Response(data, mimetype=(content_type or "application/octet-stream"))
+    except Exception:
+        logger.exception("drive_image failed")
+    logo = Path(app.static_folder) / "img" / "logo.png"
+    if logo.exists():
+        return send_from_directory(str(logo.parent), logo.name)
     return abort(404)
 
 @app.route("/")
@@ -521,25 +726,20 @@ def home_page():
 
 @app.route("/rules", endpoint="rules_page")
 def rules_page():
+    """
+    Serve the rules page. Try reading from embedded sheets helper if available,
+    otherwise fall back to a local JSON file data/rules.json, or an empty list.
+    """
     rules = []
-    # prefer sheets if available and has read_rules
     try:
-        if gsheets and hasattr(gsheets, "read_rules"):
-            try:
-                rules = gsheets.read_rules() or []
-            except Exception:
-                rules = []
+        rules = read_rules() or []
     except Exception:
         rules = []
-    if not rules:
-        try:
-            rules = safe_load_json(DATA_DIR / "rules.json") or []
-        except Exception:
-            rules = []
     if not isinstance(rules, list):
         rules = []
     return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
 
+# Explicit quiz_forms endpoint so templates using url_for('quiz_forms') succeed
 @app.route("/quiz-forms", endpoint="quiz_forms")
 def quiz_forms():
     forms = safe_load_json(QUIZ_LOCAL_PATH) or []
@@ -551,6 +751,7 @@ def quizzes_redirect():
 
 @app.route("/content")
 def content_page():
+    # Provide the same UX as older working version, but attempt to populate with lightweight helpers
     timetable_today = []
     sheet_title = None
     sheet_content = None
@@ -558,6 +759,30 @@ def content_page():
     form_list = safe_load_json(QUIZ_LOCAL_PATH) or []
     hero_image_id = os.environ.get("HERO_IMAGE_ID", "")
     notes_drive_url = os.environ.get("NOTES_DRIVE_URL", "")
+
+    # Try to use embedded helpers (safe)
+    try:
+        tt = get_timetable_for_today()
+        if tt:
+            timetable_today = tt
+    except Exception:
+        logger.exception("get_timetable_for_today failed")
+
+    try:
+        st_title, st_content = get_timetable_sheet_content()
+        if st_title or st_content:
+            sheet_title = st_title
+            sheet_content = st_content
+    except Exception:
+        logger.exception("get_timetable_sheet_content failed")
+
+    try:
+        gallery = list_gallery()
+        if gallery:
+            dr_values = gallery
+    except Exception:
+        logger.exception("list_gallery failed")
+
     return render_template("content.html",
                                 message=FOOTER_MESSAGE,
                                 timetable_today=timetable_today,
@@ -569,7 +794,6 @@ def content_page():
                                 hero_image_id=hero_image_id,
                                 hero_title=os.environ.get("HERO_TITLE", "Stay Consistent"),
                                 hero_subtitle=os.environ.get("HERO_SUBTITLE", "Success = small efforts repeated daily."))
-# app.py — Part 4A
 
 @app.route("/api/vapid")
 def api_vapid():
@@ -636,10 +860,15 @@ def questions_page():
 
 @app.route('/coding')
 def coding_page():
-    exercises = safe_load_json(CODING_LOCAL_PATH) or []
-    if not isinstance(exercises, list):
-        exercises = []
-    return render_template('coding.html', exercises=exercises, message=FOOTER_MESSAGE)
+    data_file = os.path.join(app.root_path, 'data', 'coding_exercises.json')
+    exercises = []
+    if os.path.exists(data_file):
+        with open(data_file, 'r', encoding='utf-8') as f:
+            try:
+                exercises = json.load(f)
+            except Exception as e:
+                app.logger.error(f"Failed to load exercises JSON: {e}")
+    return render_template('coding.html', exercises=exercises)
 
 @app.route("/health")
 def health_index():
@@ -718,59 +947,33 @@ def admin_exercises():
         flash("Unauthorized admin key.", "warning")
         return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
     if request.method == "POST":
+        data = {
+            "id": request.form.get("id"),
+            "title": request.form.get("title"),
+            "language": request.form.get("language"),
+            "difficulty": request.form.get("difficulty"),
+            "description": request.form.get("description"),
+            "starter": request.form.get("starter_code"),
+            "solution": request.form.get("solution_code"),
+            "sample_data": None
+        }
+        sample = request.form.get("sample_data")
+        if sample:
+            try:
+                data["sample_data"] = json.loads(sample)
+            except Exception:
+                data["sample_data"] = None
         try:
-            ex_id = (request.form.get("id") or "").strip()
-            title = (request.form.get("title") or "").strip()
-            language = (request.form.get("language") or "").strip()
-            difficulty = (request.form.get("difficulty") or "").strip()
-            description = (request.form.get("description") or "").strip()
-            starter = (request.form.get("starter_code") or request.form.get("starter") or "").strip()
-            solution = (request.form.get("solution_code") or request.form.get("solution") or "").strip()
-            sample_raw = (request.form.get("sample_data") or "").strip()
-            sample_data = None
-            if sample_raw:
-                try:
-                    sample_data = json.loads(sample_raw)
-                except Exception:
-                    sample_data = None
-            if not ex_id:
-                ex_id = str(int(time.time() * 1000))
-            data = {
-                "id": ex_id,
-                "title": title,
-                "language": language,
-                "difficulty": difficulty,
-                "description": description,
-                "starter": starter,
-                "solution": solution,
-                "sample_data": sample_data,
-                "created_at": datetime.utcnow().replace(microsecond=0).isoformat()
-            }
             arr = safe_load_json(CODING_LOCAL_PATH) or []
-            if not isinstance(arr, list):
-                arr = []
-            existing_index = None
-            for i, e in enumerate(arr):
-                try:
-                    if str(e.get("id")) == str(data.get("id")):
-                        existing_index = i
-                        break
-                except Exception:
-                    continue
-            if existing_index is not None:
-                arr[existing_index] = data
-                action = "updated"
-            else:
-                arr.append(data)
-                action = "added"
+            arr = [e for e in arr if str(e.get("id")) != str(data.get("id"))]
+            arr.append(data)
             safe_write_json(CODING_LOCAL_PATH, arr)
-            flash(f"Exercise {action} successfully.", "success")
+            flash("Saved to local coding_exercises.json", "success")
         except Exception:
             logger.exception("Failed saving exercise")
             flash("Failed saving exercise", "danger")
         return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
     return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
-# app.py — Part 4B
 
 @app.route("/admin/questions", methods=["GET", "POST"])
 def admin_questions():
@@ -780,6 +983,7 @@ def admin_questions():
     if provided != ADMIN_KEY:
         flash("Unauthorized admin key.", "warning")
         return render_template("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
+
     qfile = DATA_DIR / "questions_local.json"
     raw = json.loads(qfile.read_text(encoding="utf-8") or "[]") if qfile.exists() else []
     rows = []
@@ -816,6 +1020,7 @@ def admin_questions():
                 logger.exception("Failed deleting subject")
                 flash("Failed deleting subject", "danger")
         return redirect(url_for("admin_questions", key=provided))
+
     return render_template("admin_questions.html", key=provided, questions=rows, subjects=subjects, message=FOOTER_MESSAGE)
 
 def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
@@ -1006,6 +1211,7 @@ def notifications_ack():
 
 @app.errorhandler(404)
 def handle_404(e):
+    # try to render a 404 template if present
     try:
         return render_template("errors/404.html", message=FOOTER_MESSAGE), 404
     except Exception:

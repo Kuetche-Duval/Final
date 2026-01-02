@@ -7,6 +7,7 @@ import traceback
 import sqlite3
 import re
 import time
+import random
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -64,6 +65,8 @@ SUBSCRIPTIONS_FILE = Path(os.environ.get("SUBSCRIPTIONS_FILE", DATA_DIR / "subsc
 USE_SQLITE = str(os.environ.get("USE_SQLITE", "")).lower() in ("1", "true", "yes")
 NN_LOCAL_DB = Path(os.environ.get("NN_LOCAL_DB", "nn_local.db")).resolve() if USE_SQLITE else None
 
+MOTIVATIONAL_QUOTES_VERSES = [{"verse": "I can do all things through Christ who strengthens me.", "reference": "Philippians 4:13"}, {"verse": "If any of you lacks wisdom, let him ask God, who gives generously to all without reproach, and it will be given him.", "reference": "James 1:5"}, {"verse": "Trust in the Lord with all your heart, and do not lean on your own understanding. In all your ways acknowledge him, and he will make straight your paths.", "reference": "Proverbs 3:5-6"}, {"verse": "For I know the plans I have for you, declares the Lord, plans for welfare and not for evil, to give you a future and a hope.", "reference": "Jeremiah 29:11"}, {"verse": "Whatever you do, work heartily, as for the Lord and not for men.", "reference": "Colossians 3:23"}, {"verse": "Have I not commanded you? Be strong and courageous. Do not be frightened, and do not be dismayed, for the Lord your God is with you wherever you go.", "reference": "Joshua 1:9"}, {"verse": "Do not be anxious about anything, but in everything by prayer and supplication with thanksgiving let your requests be made known to God.", "reference": "Philippians 4:6"}, {"verse": "For God gave us a spirit not of fear but of power and love and self-control.", "reference": "2 Timothy 1:7"}, {"verse": "But they who wait for the Lord shall renew their strength; they shall mount up with wings like eagles; they shall run and not be weary; they shall walk and not faint.", "reference": "Isaiah 40:31"}, {"verse": "Let no one despise you for your youth, but set the believers an example in speech, in conduct, in love, in faith, in purity.", "reference": "1 Timothy 4:12"}]
+get_random_quote = lambda arr: random.choice(arr)
 FOOTER_MESSAGE = os.environ.get("FOOTER_MESSAGE", "Love one another ❤")
 COOKIE_MAX_AGE = 365 * 24 * 60 * 60
 
@@ -473,7 +476,7 @@ def drive_image(file_id: str):
 
 @app.route("/")
 def home_page():
-    return render_template("index.html", message=FOOTER_MESSAGE)
+    return render_template("index.html", message=FOOTER_MESSAGE, quote=get_random_quote(MOTIVATIONAL_QUOTES_VERSES))
 # Add this route to app.py (near other page routes)
 
 @app.route("/rules", endpoint="rules_page")

@@ -742,6 +742,87 @@ def index_alias():
 def content_page():
     return render_template_safe("content.html", message=FOOTER_MESSAGE)
 
+@app.route("/drive_image/<file_id>")
+def drive_image(file_id):
+    """
+    Serve an image/file from Google Drive by file_id, with a small on-disk cache.
+    - If cached file exists in data/drive_images, serve it.
+    - If Google libs/credentials are available, download and cache then serve.
+    - Otherwise return 404.
+    """
+    try:
+        if not file_id:
+            abort(404)
+        cache_dir = DATA_DIR / "drive_images"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Try cached file first
+        # Use file_id as the base name; we may append an extension after metadata lookup.
+        def cached_path_for(name):
+            return cache_dir / name
+
+        # If an exact cached file exists (with or without extension), serve it
+        candidates = [cached_path_for(file_id)]
+        # also check any files that start with file_id (previous cached with extension)
+        candidates += list(cache_dir.glob(f"{file_id}*"))
+        for cand in candidates:
+            if cand.exists() and cand.is_file():
+                guessed_type, _ = mimetypes.guess_type(str(cand))
+                return send_from_directory(str(cache_dir), cand.name, mimetype=guessed_type)
+
+        # If Google libs are not available or no credentials, abort 404
+        if not GOOGLE_LIBS_AVAILABLE:
+            logger.warning("drive_image requested but google client libs not available")
+            abort(404)
+
+        # Attempt to download file using Drive API
+        try:
+            drive = get_google_service('drive', 'v3', ['https://www.googleapis.com/auth/drive.readonly'])
+            # fetch metadata so we can determine extension/mime
+            meta = drive.files().get(fileId=file_id, fields='name, mimeType').execute()
+            name = meta.get('name') or file_id
+            mime = meta.get('mimeType') or None
+            suffix = Path(name).suffix or ""
+            filename = f"{file_id}{suffix}"
+            dest = cache_dir / filename
+
+            # stream download
+            fh = io.BytesIO()
+            request_g = drive.files().get_media(fileId=file_id)
+            downloader = MediaIoBaseDownload(fh, request_g)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+            fh.seek(0)
+            # write to cache
+            with open(dest, "wb") as out_f:
+                out_f.write(fh.read())
+
+            guessed_type = mime or mimetypes.guess_type(str(dest))[0] or 'application/octet-stream'
+            return send_from_directory(str(cache_dir), dest.name, mimetype=guessed_type)
+        except Exception:
+            logger.exception("drive_image: failed to download or serve file %s", file_id)
+            # don't leak internal errors to user -- return 404 to template
+            abort(404)
+    except Exception:
+        logger.exception("drive_image top-level exception")
+        abort(500)
+
+
+# Optional: make notifications/pending return empty list instead of 400 when no endpoint
+@app.route("/notifications/pending", methods=["GET"])
+def notifications_pending():
+    try:
+        endpoint = request.args.get("endpoint", "").strip() or (request.cookies.get('nn_subscription') or "").strip()
+        # If there's no endpoint, return empty list (avoids 400 when pages poll without a subscription)
+        if not endpoint:
+            return jsonify({"ok": True, "items": []})
+        items = fetch_pending_notifications_for_endpoint(endpoint)
+        return jsonify({"ok": True, "items": items})
+    except Exception:
+        logger.exception("notifications_pending failed")
+        return jsonify({"ok": False, "error": "server-error"}), 500
+
 @app.route("/quizzes")
 def quizzes_page():
     return render_template_safe("quizzes.html", message=FOOTER_MESSAGE)

@@ -178,7 +178,7 @@ def normalize_endpoint(endpoint: str) -> str:
     except Exception:
         return endpoint.strip()
 
-def safe_load_json(path: Path, default):
+def safe_load_json(path: Path, default=None):
     try:
         if not path.exists():
             return default

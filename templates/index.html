@@ -38,7 +38,7 @@ Newton's Nerds
       </div>
       <div class="card-body">
         <blockquote class="blockquote">
-          {{ quote[0] }} – {{ quote[1] }}
+          {{ quote.keys() }} – {{ quote.value() }}
         </blockquote>
         <a href="{{ url_for('content_page') }}#daily_motivation" class="btn btn-outline-success">See More Quotes</a>
       </div>

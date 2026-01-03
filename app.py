@@ -12,6 +12,7 @@ import time
 import random
 import base64
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -58,6 +59,9 @@ logger = logging.getLogger("newtons_nerds")
 # Paths & config
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# lock to serialize subscription file writes
+SUBS_LOCK = threading.Lock()
 
 CODING_LOCAL_PATH = Path(os.environ.get("CODING_EXERCISES_PATH", DATA_DIR / "coding_exercises.json"))
 HEALTH_LOCAL_PATH = Path(os.environ.get("HEALTH_DATA_PATH", DATA_DIR / "health_data.json"))
@@ -194,19 +198,32 @@ def safe_load_json(path: Path, default=None):
             pass
         return default
 
-
 def safe_write_json(path: Path, obj):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+        # atomic write to temp file then replace
+        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tf:
+                json.dump(obj, tf, ensure_ascii=False, indent=2)
+                tf.flush()
+                os.fsync(tf.fileno())
+            os.replace(tmp_path, str(path))
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
         return True
     except Exception:
         logger.exception("Failed writing JSON: %s", path)
         return False
 
+
 # JSON-backed subscriptions / notifications (fallback)
 def _read_subscriptions_json():
-    arr = safe_load_json(Path("data/subscriptions.json"))or []
+    arr = safe_load_json(SUBSCRIPTIONS_FILE)or []
     if not isinstance(arr, list):
         return []
     return arr
@@ -231,40 +248,70 @@ def save_subscription(subject, client_id, subscription_obj):
                 subscription_obj = json.loads(subscription_obj)
             except Exception:
                 subscription_obj = {"endpoint": subscription_obj}
+
         endpoint = subscription_obj.get("endpoint") or subscription_obj.get("url")
         if not endpoint:
             logger.warning("Subscription missing endpoint")
             return False
+
         endpoint_norm = normalize_endpoint(endpoint)
         keys = subscription_obj.get("keys", {}) if isinstance(subscription_obj, dict) else {}
         p256 = keys.get("p256dh", "")
         auth = keys.get("auth", "")
         now = datetime.utcnow().replace(microsecond=0).isoformat()
 
+        # =========================
+        # SQLITE BACKEND (unchanged)
+        # =========================
         if USE_SQLITE and NN_LOCAL_DB:
             with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
                 c = conn.cursor()
-                c.execute("""REPLACE INTO subscriptions
-                             (endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
-                             VALUES (?,?,?,?,?,?,?)""",
-                          (endpoint_norm, subject or "Other", client_id or "", p256, auth, json.dumps(subscription_obj), now))
+                c.execute(
+                    """REPLACE INTO subscriptions
+                       (endpoint, subject, client_id, p256dh, auth, raw_json, created_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (
+                        endpoint_norm,
+                        subject or "Other",
+                        client_id or "",
+                        p256,
+                        auth,
+                        json.dumps(subscription_obj),
+                        now,
+                    ),
+                )
                 conn.commit()
             return True
 
-        # JSON fallback: deduplicate by endpoint+subject
-        arr = _read_subscriptions_json()
-        # remove existing with same endpoint and subject
-        arr = [r for r in arr if not (r.get("subscription", {}).get("endpoint") and normalize_endpoint(r.get("subscription", {}).get("endpoint")) == endpoint_norm and r.get("subject") == (subject or "Other"))]
-        arr.append({
-            "endpoint": endpoint_norm,
-            "subject": subject or "Other",
-            "client_id": client_id or "",
-            "keys": {"p256dh": p256, "auth": auth},
-            "subscription": subscription_obj,
-            "created_at": now
-        })
-        _write_subscriptions_json(arr)
+        # =========================
+        # JSON BACKEND (FIXED)
+        # =========================
+        with SUBS_LOCK:
+            arr = _read_subscriptions_json() or []
+
+            # remove existing with same endpoint + subject
+            arr = [
+                r for r in arr
+                if not (
+                    r.get("subscription", {}).get("endpoint")
+                    and normalize_endpoint(r.get("subscription", {}).get("endpoint")) == endpoint_norm
+                    and r.get("subject") == (subject or "Other")
+                )
+            ]
+
+            arr.append({
+                "endpoint": endpoint_norm,
+                "subject": subject or "Other",
+                "client_id": client_id or "",
+                "keys": {"p256dh": p256, "auth": auth},
+                "subscription": subscription_obj,
+                "created_at": now
+            })
+
+            _write_subscriptions_json(arr)
+
         return True
+
     except Exception:
         logger.exception("save_subscription failed")
         return False
@@ -1022,7 +1069,52 @@ def exercise_table(name: str):
     except Exception as e:
         logger.exception("exercise_table error")
         return make_response(jsonify({"ok": False, "error": str(e)}), 500)
+# -----------------------------
+# Helper: get subjects for an endpoint (returns list of subject strings)
+# -----------------------------
+def get_subjects_for_endpoint(endpoint_norm):
+    subjects = []
+    try:
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("SELECT DISTINCT subject FROM subscriptions WHERE endpoint = ?", (endpoint_norm,))
+                rows = c.fetchall()
+                subjects = [r[0] for r in rows if r and r[0]]
+            return sorted(list(dict.fromkeys(subjects)))
+        # JSON backend:
+        with SUBS_LOCK:
+            if SUBSCRIPTIONS_FILE.exists():
+                try:
+                    with SUBSCRIPTIONS_FILE.open("r", encoding="utf-8") as f:
+                        arr = json.load(f) or []
+                        if not isinstance(arr, list):
+                            arr = []
+                except Exception:
+                    logger.exception("Failed reading subscriptions.json in get_subjects_for_endpoint")
+                    arr = []
+            else:
+                arr = []
+        for r in arr:
+            if not isinstance(r, dict):
+                continue
+            subj = r.get("subject") or "Other"
+            sub = r.get("subscription") or {}
+            ep = sub.get("endpoint") or sub.get("url")
+            try:
+                if ep and normalize_endpoint(ep) == endpoint_norm:
+                    subjects.append(subj)
+            except Exception:
+                continue
+        return sorted(list(dict.fromkeys(subjects)))
+    except Exception:
+        logger.exception("get_subjects_for_endpoint failed")
+        return []
 
+# -----------------------------
+# Route: /save-subscription (keeps the same route name)
+# This route now delegates to save_subscription() and returns subjects for the endpoint.
+# -----------------------------
 @app.route("/save-subscription", methods=["POST"])
 def save_subscription_route():
     try:
@@ -1035,25 +1127,29 @@ def save_subscription_route():
                 subscription = {"endpoint": subscription}
         subject = (payload.get("subject") or request.args.get("subject") or "Other")
         client_id = payload.get("client_id") or ""
-        if not subscription or not isinstance(subscription, dict) or not (subscription.get("endpoint") or subscription.get("url")):
+
+        # Basic validation
+        if (not subscription or not isinstance(subscription, dict)
+                or not (subscription.get("endpoint") or subscription.get("url"))):
             return make_response(jsonify({"ok": False, "error": "subscription required"}), 400)
-        ok = save_subscription(subject, client_id, subscription)
-        endpoint = subscription.get("endpoint")
-        subjects_for_endpoint = []
+
+        endpoint = subscription.get("endpoint") or subscription.get("url")
         try:
-            subs = list_subscriptions()
-            for r in subs:
-                sub = r.get("subscription") if isinstance(r, dict) else None
-                subj = r.get("subject") if isinstance(r, dict) else None
-                if sub and subj and normalize_endpoint(sub.get("endpoint")) == normalize_endpoint(endpoint):
-                    subjects_for_endpoint.append((subj or "Other"))
-            subjects_for_endpoint = sorted(list(dict.fromkeys(subjects_for_endpoint)))
+            normalized_endpoint = normalize_endpoint(endpoint)
         except Exception:
-            subjects_for_endpoint = []
+            normalized_endpoint = endpoint
+
+        # Save using existing helper (this will handle SQLite or JSON)
+        ok = save_subscription(subject, client_id, subscription)
+
+        # Build subjects list for this endpoint (fresh)
+        subjects_for_endpoint = get_subjects_for_endpoint(normalized_endpoint)
+
         resp = make_response(jsonify({"ok": ok, "subjects": subjects_for_endpoint}), (200 if ok else 500))
         try:
-            if endpoint:
-                resp.set_cookie('nn_subscription', normalize_endpoint(endpoint), max_age=COOKIE_MAX_AGE, samesite='Lax')
+            if ok and normalized_endpoint:
+                # set cookie only on successful save
+                resp.set_cookie('nn_subscription', normalized_endpoint, max_age=COOKIE_MAX_AGE, samesite='Lax', path='/')
         except Exception:
             pass
         return resp
@@ -1061,6 +1157,246 @@ def save_subscription_route():
         logger.exception("save-subscription failed")
         return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
 
+# -----------------------------
+# Persistence helper: save_subscription (sqlite OR json)
+# This is the corrected version we discussed earlier.
+# -----------------------------
+def save_subscription(subject, client_id, subscription_obj):
+    try:
+        # Normalize incoming subscription object
+        if isinstance(subscription_obj, str):
+            try:
+                subscription_obj = json.loads(subscription_obj)
+            except Exception:
+                subscription_obj = {"endpoint": subscription_obj}
+
+        if not isinstance(subscription_obj, dict):
+            logger.warning("Invalid subscription object")
+            return False
+
+        endpoint = subscription_obj.get("endpoint") or subscription_obj.get("url")
+        if not endpoint:
+            logger.warning("Subscription missing endpoint")
+            return False
+
+        endpoint_norm = normalize_endpoint(endpoint)
+        subject = subject or "Other"
+        client_id = client_id or ""
+
+        keys = subscription_obj.get("keys") or {}
+        p256 = keys.get("p256dh", "")
+        auth = keys.get("auth", "")
+
+        now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+        # SQLITE BACKEND
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                # Ensure table exists schema should include updated_at (adjust if necessary)
+                c.execute(
+                    """REPLACE INTO subscriptions
+                       (endpoint, subject, client_id, p256dh, auth, raw_json, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,COALESCE(
+                           (SELECT created_at FROM subscriptions WHERE endpoint=? AND subject=?),
+                           ?
+                       ), ?)""",
+                    (
+                        endpoint_norm,
+                        subject,
+                        client_id,
+                        p256,
+                        auth,
+                        json.dumps(subscription_obj, ensure_ascii=False),
+                        endpoint_norm,
+                        subject,
+                        now,
+                        now
+                    )
+                )
+                conn.commit()
+            return True
+
+        # JSON BACKEND (atomic + locked)
+        with SUBS_LOCK:
+            arr = []
+            try:
+                if SUBSCRIPTIONS_FILE.exists():
+                    with SUBSCRIPTIONS_FILE.open("r", encoding="utf-8") as f:
+                        arr = json.load(f) or []
+                        if not isinstance(arr, list):
+                            arr = []
+            except Exception:
+                logger.exception("Failed reading subscriptions.json, starting fresh")
+                arr = []
+
+            new_arr = []
+            replaced = False
+
+            for r in arr:
+                if not isinstance(r, dict):
+                    continue
+
+                sub = r.get("subscription") or {}
+                ep = sub.get("endpoint") or sub.get("url")
+
+                try:
+                    ep_norm = normalize_endpoint(ep) if ep else None
+                except Exception:
+                    ep_norm = None
+
+                # Same endpoint + subject → replace
+                if ep_norm == endpoint_norm and r.get("subject") == subject:
+                    new_arr.append({
+                        "endpoint": endpoint_norm,
+                        "subject": subject,
+                        "client_id": client_id,
+                        "keys": {"p256dh": p256, "auth": auth},
+                        "subscription": subscription_obj,
+                        "created_at": r.get("created_at", now),
+                        "updated_at": now
+                    })
+                    replaced = True
+                else:
+                    new_arr.append(r)
+
+            if not replaced:
+                new_arr.append({
+                    "endpoint": endpoint_norm,
+                    "subject": subject,
+                    "client_id": client_id,
+                    "keys": {"p256dh": p256, "auth": auth},
+                    "subscription": subscription_obj,
+                    "created_at": now,
+                    "updated_at": now
+                })
+
+            # Atomic write
+            SUBSCRIPTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(SUBSCRIPTIONS_FILE.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as tf:
+                    json.dump(new_arr, tf, ensure_ascii=False, indent=2)
+                    tf.flush()
+                    os.fsync(tf.fileno())
+                os.replace(tmp_path, SUBSCRIPTIONS_FILE)
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+
+        return True
+
+    except Exception:
+        logger.exception("save_subscription failed")
+        return False
+
+# -----------------------------
+# Deletion helper: delete_subscription (symmetric to save_subscription)
+# -----------------------------
+def delete_subscription(subject, subscription_obj):
+    try:
+        if isinstance(subscription_obj, str):
+            try:
+                subscription_obj = json.loads(subscription_obj)
+            except Exception:
+                subscription_obj = {"endpoint": subscription_obj}
+
+        if not isinstance(subscription_obj, dict):
+            return False
+
+        endpoint = subscription_obj.get("endpoint") or subscription_obj.get("url")
+        if not endpoint:
+            return False
+
+        endpoint_norm = normalize_endpoint(endpoint)
+        subject = subject or "Other"
+
+        # SQLITE BACKEND
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute(
+                    "DELETE FROM subscriptions WHERE endpoint=? AND subject=?",
+                    (endpoint_norm, subject)
+                )
+                conn.commit()
+            return True
+
+        # JSON BACKEND
+        with SUBS_LOCK:
+            arr = []
+            try:
+                if SUBSCRIPTIONS_FILE.exists():
+                    with SUBSCRIPTIONS_FILE.open("r", encoding="utf-8") as f:
+                        arr = json.load(f) or []
+                        if not isinstance(arr, list):
+                            arr = []
+            except Exception:
+                logger.exception("Failed reading subscriptions.json in delete_subscription")
+                arr = []
+
+            filtered = []
+            for r in arr:
+                try:
+                    sub = r.get("subscription") or {}
+                    ep = sub.get("endpoint") or sub.get("url")
+                    ep_norm = normalize_endpoint(ep) if ep else None
+                except Exception:
+                    ep_norm = None
+
+                # keep entries that do NOT match the endpoint+subject
+                if not (ep_norm == endpoint_norm and r.get("subject") == subject):
+                    filtered.append(r)
+
+            # Atomic write of filtered list
+            SUBSCRIPTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(SUBSCRIPTIONS_FILE.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as tf:
+                    json.dump(filtered, tf, ensure_ascii=False, indent=2)
+                    tf.flush()
+                    os.fsync(tf.fileno())
+                os.replace(tmp_path, SUBSCRIPTIONS_FILE)
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+
+        return True
+
+    except Exception:
+        logger.exception("delete_subscription failed")
+        return False
+
+# -----------------------------
+# Route: /unsubscribe (symmetric server endpoint)
+# This is optional to call from client; it deletes the subscription and clears cookie.
+# -----------------------------
+@app.route("/unsubscribe", methods=["POST"])
+def unsubscribe_route():
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        subscription = payload.get("subscription") or payload
+        subject = (payload.get("subject") or "Other")
+
+        ok = delete_subscription(subject, subscription)
+
+        resp = make_response(jsonify({"ok": ok}), (200 if ok else 500))
+        # clear cookie (best-effort)
+        try:
+            resp.delete_cookie("nn_subscription", path='/')
+        except Exception:
+            pass
+        return resp
+    except Exception:
+        logger.exception("unsubscribe failed")
+        return make_response(jsonify({"ok": False}), 500)
+             
 @app.route("/subscriptions/check", methods=["GET"])
 def subscriptions_check():
     try:

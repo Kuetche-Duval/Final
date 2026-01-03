@@ -1,18 +1,12 @@
 [
   {
-    "id": 1,
-    "title": "Sum of Two Numbers",
-    "description": "Write a JS function to sum two numbers.",
-    "language": "js",
-    "starter_js": "function sum(a, b) {\n  return 0;\n}",
-    "solution_js": "function sum(a, b) {\n  return a + b;\n}"
-  },
-  {
-    "id": 2,
-    "title": "Hello World HTML",
-    "description": "Show 'Hello World' on the page using HTML + JS",
-    "language": "html",
-    "starter_html": "<h1></h1>",
-    "solution_html": "<h1>Hello World</h1>"
+    "id": "1",
+    "title": "Hello World",
+    "language": "Python",
+    "difficulty": "Easy",
+    "description": "Print Hello World",
+    "starter": "print()",
+    "solution": "print('Hello World')",
+    "sample_data": null
   }
 ]

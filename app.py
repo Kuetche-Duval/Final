@@ -136,14 +136,16 @@ def ensure_google_credentials_from_base64(
 
 
 # --- Drive / Sheets initialization ---
+# --- Drive / Sheets initialization ---
 def initialize_drive_helpers():
     """
-    Try to import and initialize drive and sheets helpers, returning a dict with status.
-    This will not raise but will return reasons why Drive/Sheets are unavailable.
+    Import and initialize drive and sheets helpers once.
+    Returns a dict with status and error messages.
     """
     global gdrive, gsheets, DRIVE_API_AVAILABLE, SHEETS_AVAILABLE
     info = {"gdrive_available": False, "gsheets_available": False, "errors": []}
-    # Check credentials file env var
+
+    # Check credentials file
     cred_path = os.environ.get("SERVICE_ACCOUNT_JSON_PATH") or os.environ.get("GOOGLE_CREDENTIALS_PATH")
     if not cred_path:
         info["errors"].append("No SERVICE_ACCOUNT_JSON_PATH or GOOGLE_CREDENTIALS_PATH set.")
@@ -156,35 +158,46 @@ def initialize_drive_helpers():
         logger.warning("Credentials file not found at %s", cred_path)
         return info
 
-    # Try to import drive helper
+    # ----- Drive helper -----
     try:
         import drive as local_drive
-        # optional: call an init function if present
-        if hasattr(local_drive, "initialize") and callable(local_drive.initialize):
+        gdrive = local_drive
+        if hasattr(gdrive, "initialize") and callable(gdrive.initialize):
             try:
-                local_drive.initialize(str(cp))
+                gdrive.initialize(str(cp))
             except Exception as e:
                 logger.exception("drive.initialize failed: %s", e)
                 info["errors"].append(f"drive.initialize failed: {e}")
             else:
                 info["gdrive_available"] = True
+                DRIVE_API_AVAILABLE = True
         else:
-            # still mark available; module can implement functions directly
+            # module exists but has no initialize; still usable
             info["gdrive_available"] = True
-        gdrive = local_drive
-        DRIVE_API_AVAILABLE = True
-        logger.info("Drive helper loaded from %s", getattr(local_drive, "__file__", "<module>"))
+            DRIVE_API_AVAILABLE = True
+        logger.info("Drive helper loaded from %s", getattr(gdrive, "__file__", "<module>"))
     except Exception as e:
         info["errors"].append(f"drive import failed: {e}")
         logger.warning("Drive helper import failed: %s", e)
 
-    # Try to import sheets helper
+    # ----- Sheets helper -----
     try:
         import sheets as local_sheets
         gsheets = local_sheets
-        SHEETS_AVAILABLE = True
-        info["gsheets_available"] = True
-        logger.info("Sheets helper loaded from %s", getattr(local_sheets, "__file__", "<module>"))
+        if hasattr(gsheets, "initialize") and callable(gsheets.initialize):
+            try:
+                gsheets.initialize(str(cp))
+            except Exception as e:
+                logger.exception("sheets.initialize failed: %s", e)
+                info["errors"].append(f"sheets.initialize failed: {e}")
+            else:
+                info["gsheets_available"] = True
+                SHEETS_AVAILABLE = True
+        else:
+            # module exists but has no initialize; still usable
+            info["gsheets_available"] = True
+            SHEETS_AVAILABLE = True
+        logger.info("Sheets helper loaded from %s", getattr(gsheets, "__file__", "<module>"))
     except Exception as e:
         info["errors"].append(f"sheets import failed: {e}")
         logger.warning("Sheets helper import failed: %s", e)
@@ -851,24 +864,25 @@ def favicon():
 def home_page():
     return render_template("index.html", message=FOOTER_MESSAGE, quote=get_random_quote(MOTIVATIONAL_QUOTES_VERSES))
 
-
 @app.route("/rules", endpoint="rules_page")
 def rules_page():
     """
-    Serve the rules page. Try reading from a sheets helper if available,
-    otherwise fall back to a local JSON file data/rules.json, or an empty list.
+    Serve the rules page.
+    - Try gsheets.read_rules() if available
+    - Else fall back to local JSON data/rules.json
     """
     rules = []
-    # try sheets.py first (if the app includes it)
-    try:
-        import sheets as sheets_mod  # optional dependency
-        if hasattr(sheets_mod, "read_rules"):
-            try:
-                rules = sheets_mod.read_rules() or []
-            except Exception:
-                rules = []
-    except Exception:
-        # sheets not available — fall back to local JSON
+
+    # Use gsheets global
+    if gsheets and SHEETS_AVAILABLE and hasattr(gsheets, "read_rules"):
+        try:
+            rules = gsheets.read_rules() or []
+        except Exception:
+            logger.exception("gsheets.read_rules failed")
+            rules = []
+
+    # fallback to JSON if no rules
+    if not rules:
         try:
             rules = safe_load_json(Path("data/rules.json")) or []
         except Exception:
@@ -878,7 +892,6 @@ def rules_page():
         rules = []
 
     return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
-
 
 @app.route("/quiz-forms", endpoint="quiz_forms")
 def quiz_forms():
@@ -1173,41 +1186,26 @@ def admin_questions():
 # drive image route
 @app.route("/drive-image/<path:file_id>")
 def drive_image(file_id: str):
-    static_candidate = Path(app.static_folder) / "img" / file_id
-    if static_candidate.exists():
-        return send_from_directory(str(static_candidate.parent), static_candidate.name)
-    if DRIVE_API_AVAILABLE and gdrive:
-        try:
-            meta = {}
+    """
+    Serve an image stored on Google Drive by file_id.
+    - If gdrive.fetch_drive_image_bytes is present and returns bytes, send them.
+    - Otherwise fall back to static img/logo.png.
+    """
+    try:
+        if gdrive and hasattr(gdrive, "fetch_drive_image_bytes"):
             try:
-                meta = gdrive.get_file_metadata(file_id) or {}
+                data, content_type = gdrive.fetch_drive_image_bytes(file_id)
+                if data:
+                    return Response(data, mimetype=content_type)
             except Exception:
-                meta = {}
-            data = b""
-            try:
-                data = gdrive.download_file(file_id) or b""
-            except Exception:
-                data = b""
-            if data:
-                mime = (meta.get("mimeType") or mimetypes.guess_type(meta.get("name", ""))[0] or None)
-                if not mime:
-                    mime = "image/png"
-                file_name = meta.get("name") or f"{file_id}"
-                bio = io.BytesIO(data)
-                bio.seek(0)
-                resp = send_file(bio, mimetype=mime, download_name=file_name, as_attachment=False, conditional=True)
-                resp.cache_control.max_age = 3600
-                resp.cache_control.public = True
-                return resp
-            else:
-                logger.warning("Drive returned empty bytes for file_id=%s", file_id)
-        except Exception:
-            logger.exception("drive_image: error fetching %s from Drive", file_id)
-    fallback = Path(app.static_folder) / "img" / "icon-192.png"
-    if not fallback.exists():
-        fallback = Path(app.static_folder) / "img" / "logo.png"
-    if fallback.exists():
-        return send_from_directory(str(fallback.parent), fallback.name)
+                logger.exception("drive_image via gdrive failed")
+    except Exception:
+        logger.exception("drive_image top-level error")
+
+    # fallback to static logo
+    logo = Path(app.static_folder) / "img" / "logo.png"
+    if logo.exists():
+        return send_from_directory(str(logo.parent), logo.name)
     return abort(404)
 
 

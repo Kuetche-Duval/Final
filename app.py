@@ -450,6 +450,21 @@ def safe_write_json(path: Path, obj):
         logger.exception("Failed writing JSON: %s", path)
         return False
 
+def render_template_safe(template_name: str, status: int = 200, **context) -> Response:
+    try:
+        html = render_template(template_name, **context)
+        return make_response(html, status)
+    except Exception as e:
+        logger.warning("Template %s failed to render: %s", template_name, e)
+        try:
+            # fallback to error.html if present
+            html = render_template("error.html", message=FOOTER_MESSAGE, error=str(e), traceback=traceback.format_exc())
+            return make_response(html, 500)
+        except Exception:
+            # last-resort plaintext
+            body = f"Template rendering error: {template_name}\n\n{e}\n\n{traceback.format_exc()}"
+            return make_response(body, 500)
+
 # JSON-backed subscriptions / notifications (fallback)
 def _read_subscriptions_json():
     arr = safe_load_json(SUBSCRIPTIONS_FILE) or []
@@ -876,6 +891,7 @@ def home_page():
     return render_template("index.html", message=FOOTER_MESSAGE, quote=get_random_quote(MOTIVATIONAL_QUOTES_VERSES))
 
 @app.route("/rules", endpoint="rules_page")
+@admin_required
 def rules_page():
     """
     Serve the rules page.
@@ -916,6 +932,7 @@ def quizzes_redirect():
 
 
 @app.route("/content")
+@admin_required
 def content_page():
     timetable_today = []
     sheet_title = None
@@ -1001,12 +1018,10 @@ def questions_page():
         flash("Could not load questions", "danger")
         return render_template("questions.html", questions=[], categories=["Other"], selected_category="", message=FOOTER_MESSAGE)
         
-
-@app.route('/coding')
+@app.route("/coding")
 def coding_page():
-    exercises = load_coding_exercises()
-    return render_template('coding.html', exercises=exercises, message=FOOTER_MESSAGE)
-
+    exercises = safe_load_json(CODING_LOCAL_PATH) or []
+    return render_template_safe("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
 
 @app.route("/health")
 def health_index():
@@ -1031,6 +1046,7 @@ def health_detail(slug: str):
 
 
 @app.route("/admin/announcement", methods=["GET", "POST"])
+@admin_required
 def admin_announcement():
     provided_key = request.args.get("key") or request.form.get("admin_key") or ""
     if request.method == "GET" and not provided_key:

@@ -95,6 +95,17 @@ gsheets = None
 DRIVE_API_AVAILABLE = False
 SHEETS_AVAILABLE = False
 
+def admin_required(f):
+    """Decorator to protect routes with the admin key"""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        provided = request.args.get("key") or request.form.get("admin_key") or ""
+        if provided != ADMIN_KEY:
+            abort(403)  # Forbidden
+        return f(*args, **kwargs)
+    return decorated
+
 # ----------------------------
 # Helpers
 # ----------------------------
@@ -400,44 +411,44 @@ def normalize_endpoint(endpoint: str) -> str:
         return endpoint.strip()
 
 
-def safe_load_json(path: Path):
-    logger.info("Attempting to load JSON from: %s", path)
-    if not path.exists():
-        logger.warning("File does not exist: %s", path)
-        return None
+def safe_load_json(path: Path, default=None):
     try:
-        data = json.loads(path.read_text(encoding="utf-8") or "null")
-        logger.info("JSON loaded successfully, %d items", len(data) if isinstance(data, list) else 1)
-        return data
-    except Exception as e:
-        logger.exception("Failed loading JSON: %s", path)
-        return None
+        if not path.exists():
+            return default
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return default
+        return json.loads(raw)
+    except Exception:
+        app.logger.error(f"Corrupted JSON detected, resetting: {path}")
+        try:
+            path.write_text(json.dumps(default, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return default
 
 
 def safe_write_json(path: Path, obj):
     try:
-        import tempfile
         path.parent.mkdir(parents=True, exist_ok=True)
-        # atomic write
+        # atomic write to temp file then replace
         fd, tmp_path = tempfile.mkstemp(dir=str(path.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as tf:
                 json.dump(obj, tf, ensure_ascii=False, indent=2)
                 tf.flush()
                 os.fsync(tf.fileno())
-            Path(tmp_path).replace(path)  # atomic replace
+            os.replace(tmp_path, str(path))
         finally:
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
                 except Exception:
                     pass
-        logger.info("JSON successfully written to %s (%d items)", path, len(obj) if isinstance(obj, list) else 1)
         return True
     except Exception:
         logger.exception("Failed writing JSON: %s", path)
         return False
-
 
 # JSON-backed subscriptions / notifications (fallback)
 def _read_subscriptions_json():
@@ -991,11 +1002,10 @@ def questions_page():
         return render_template("questions.html", questions=[], categories=["Other"], selected_category="", message=FOOTER_MESSAGE)
         
 
-@app.route("/coding")
+@app.route('/coding')
 def coding_page():
-    exercises = safe_load_json(CODING_LOCAL_PATH) or []
-    return render_template_safe("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
-
+    exercises = load_coding_exercises()
+    return render_template('coding.html', exercises=exercises, message=FOOTER_MESSAGE)
 
 
 @app.route("/health")
@@ -1069,32 +1079,72 @@ def admin_announcement():
     return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
 
 # Admin exercises route
-@app.route("/admin/exercises", methods=["GET", "POST"])
+@app.route("/admin/exercises", methods=["GET", "POST"]) 
 def admin_exercises():
-    ...
+    provided_key = request.args.get("key") or request.form.get("admin_key") or ""
+    if request.method == "GET" and not provided_key:
+        return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
+    if provided_key != ADMIN_KEY:
+        flash("Unauthorized admin key.", "warning")
+        return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
     if request.method == "POST":
-        data = {
-            "id": request.form.get("id"),
-            "title": request.form.get("title"),
-            "language": request.form.get("language"),
-            "difficulty": request.form.get("difficulty"),
-            "description": request.form.get("description"),
-            "starter": request.form.get("starter_code"),
-            "solution": request.form.get("solution_code"),
-            "sample_data": None
-        }
-        sample = request.form.get("sample_data")
-        if sample:
-            try:
-                data["sample_data"] = json.loads(sample)
-            except Exception:
-                data["sample_data"] = None
         try:
+            ex_id = (request.form.get("id") or "").strip()
+            title = (request.form.get("title") or "").strip()
+            language = (request.form.get("language") or "").strip()
+            difficulty = (request.form.get("difficulty") or "").strip()
+            description = (request.form.get("description") or "").strip()
+            starter = (request.form.get("starter_code") or request.form.get("starter") or "").strip()
+            solution = (request.form.get("solution_code") or request.form.get("solution") or "").strip()
+            sample_raw = (request.form.get("sample_data") or "").strip()
+            sample_data = None
+            if sample_raw:
+                try:
+                    sample_data = json.loads(sample_raw)
+                except Exception:
+                    sample_data = None
+            if not ex_id:
+                ex_id = str(int(time.time() * 1000))
             arr = safe_load_json(CODING_LOCAL_PATH) or []
-            arr = [e for e in arr if str(e.get("id")) != str(data.get("id"))]
-            arr.append(data)
+            if not isinstance(arr, list):
+                arr = []
+            existing_index = None
+            for i, e in enumerate(arr):
+                try:
+                    if str(e.get("id")) == str(ex_id):
+                        existing_index = i
+                        break
+                except Exception:
+                    continue
+            now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+            data = {
+                "id": ex_id,
+                "title": title,
+                "language": language,
+                "difficulty": difficulty,
+                "description": description,
+                "starter": starter,
+                "solution": solution,
+                "sample_data": sample_data,
+                "created_at": now
+            }
+            if existing_index is not None:
+                orig = arr[existing_index] or {}
+                data["created_at"] = orig.get("created_at", data["created_at"]) or data["created_at"]
+                data["updated_at"] = now
+                arr[existing_index] = data
+                action = "updated"
+            else:
+                data["updated_at"] = now
+                arr.append(data)
+                action = "added"
             safe_write_json(CODING_LOCAL_PATH, arr)
-            flash("Saved to local coding_exercises.json", "success")
+            flash(f"Exercise {action} successfully.", "success")
+        except Exception:
+            logger.exception("Failed saving exercise")
+            flash("Failed saving exercise", "danger")
+        return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
+    return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
 
 # Admin questions
 @app.route("/admin/questions", methods=["GET", "POST"]) 

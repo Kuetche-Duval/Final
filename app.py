@@ -170,6 +170,160 @@ else:
     logger.info("Using JSON storage for subscriptions / notifications (no sqlite). Set USE_SQLITE=true to enable SQLite.")
 
 # Helpers
+
+def initialize_drive_helpers():
+    """
+    Try to import and initialize drive and sheets helpers, returning a dict with status.
+    This will not raise but will return reasons why Drive/Sheets are unavailable.
+    """
+    info = {"gdrive_available": False, "gsheets_available": False, "errors": []}
+    # Check credentials file env var
+    cred_path = os.environ.get("SERVICE_ACCOUNT_JSON_PATH") or os.environ.get("GOOGLE_CREDENTIALS_PATH")
+    if not cred_path:
+        info["errors"].append("No SERVICE_ACCOUNT_JSON_PATH or GOOGLE_CREDENTIALS_PATH set.")
+        logger.warning("Google credentials path missing; Drive/Sheets disabled.")
+        return info
+
+    cp = Path(cred_path)
+    if not cp.exists():
+        info["errors"].append(f"Credentials file not found at {cred_path}")
+        logger.warning("Credentials file not found at %s", cred_path)
+        return info
+
+    # Try to import drive helper
+    try:
+        import drive as local_drive
+        # optional: call an init function if present
+        if hasattr(local_drive, "initialize") and callable(local_drive.initialize):
+            try:
+                local_drive.initialize(str(cp))
+            except Exception as e:
+                logger.exception("drive.initialize failed: %s", e)
+                info["errors"].append(f"drive.initialize failed: {e}")
+            else:
+                info["gdrive_available"] = True
+        else:
+            # still mark available; module can implement functions directly
+            info["gdrive_available"] = True
+        globals()['gdrive'] = local_drive
+        globals()['DRIVE_API_AVAILABLE'] = True
+        logger.info("Drive helper loaded from %s", getattr(local_drive, "__file__", "<module>"))
+    except Exception as e:
+        info["errors"].append(f"drive import failed: {e}")
+        logger.warning("Drive helper import failed: %s", e)
+
+    # Try to import sheets helper
+    try:
+        import sheets as local_sheets
+        globals()['gsheets'] = local_sheets
+        globals()['SHEETS_AVAILABLE'] = True
+        info["gsheets_available"] = True
+        logger.info("Sheets helper loaded from %s", getattr(local_sheets, "__file__", "<module>"))
+    except Exception as e:
+        info["errors"].append(f"sheets import failed: {e}")
+        logger.warning("Sheets helper import failed: %s", e)
+
+    return info
+
+# Attempt Drive/Sheets initialization (guarded)
+try:
+    drive_init_info = initialize_drive_helpers()
+    logger.info("Drive init: %s", drive_init_info)
+except Exception as err:
+    logger.exception("Drive initialization failed at runtime: %s", err)
+    drive_init_info = {"gdrive_available": False, "gsheets_available": False, "errors": [str(err)]}
+
+def validate_json_file(path: Path) -> tuple[bool, str]:
+    """
+    Quick JSON validity check. Returns (ok, error_message).
+    """
+    try:
+        txt = path.read_text(encoding="utf-8")
+        if not txt.strip():
+            return False, "Empty file"
+        json.loads(txt)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+def load_coding_exercises() -> list:
+    """
+    Robust loader for coding exercises: returns list (possibly empty).
+    Logs detailed error if file exists but is invalid.
+    Use this in the /coding route instead of calling safe_load_json directly.
+    """
+      try:
+        path = Path(os.environ.get("CODING_EXERCISES_PATH", DATA_DIR / "coding_exercises.json"))
+        logger.debug("Loading coding exercises from %s", path)
+        if not path.exists():
+            logger.info("Coding exercises file not found at %s — returning empty list", str(path))
+            return []
+        ok, err = validate_json_file(path)
+        if not ok:
+            logger.error("Coding exercises JSON invalid: %s — path=%s", err, str(path))
+            # optionally create a backup of the broken file for inspection
+            try:
+                backup = path.with_suffix(path.suffix + ".broken")
+                if not backup.exists():
+                    backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+                    logger.info("Backed up broken coding_exercises.json -> %s", str(backup))
+            except Exception:
+                logger.exception("Failed to backup broken coding_exercises.json")
+            return []
+        # load safely
+        arr = json.loads(path.read_text(encoding="utf-8") or "[]")
+        if not isinstance(arr, list):
+            logger.warning("Expected list in coding_exercises.json, got %s", type(arr))
+            return []
+        return arr
+    except Exception:
+        logger.exception("Unexpected error loading coding exercises")
+        return []
+
+def get_admin_questions_context():
+    """
+    Returns (rows, subjects) prepared for admin_questions.html
+    rows: list of dicts with keys index, subject, user, text, attempt
+    subjects: sorted unique subject list
+    """
+    try:
+        qfile = DATA_DIR / "questions_local.json"
+        raw = []
+        if qfile.exists():
+            try:
+                raw = json.loads(qfile.read_text(encoding="utf-8") or "[]")
+            except Exception:
+                logger.exception("admin: failed to parse questions_local.json; treating as empty")
+                raw = []
+        rows = []
+        for idx, r in enumerate(raw):
+            try:
+                if isinstance(r, dict):
+                    rows.append({
+                        "index": idx,
+                        "subject": r.get("subject",""),
+                        "user": r.get("name", r.get("user","")),
+                        "text": r.get("question", r.get("text","")),
+                        "attempt": r.get("attempt","")
+                    })
+                else:
+                    lst = list(r) if isinstance(r, (list, tuple)) else [r]
+                    rows.append({
+                        "index": idx,
+                        "subject": lst[0] if len(lst) > 0 else "",
+                        "user": lst[1] if len(lst) > 1 else "",
+                        "text": lst[2] if len(lst) > 2 else "",
+                        "attempt": lst[3] if len(lst) > 3 else ""
+                    })
+            except Exception:
+                logger.exception("Skipping malformed question row at index %s", idx)
+                continue
+        subjects = sorted(list({row["subject"] for row in rows if row.get("subject")}))
+        return rows, subjects
+    except Exception:
+        logger.exception("get_admin_questions_context failed")
+        return [], []
+
 def normalize_endpoint(endpoint: str) -> str:
     if not endpoint:
         return ""
@@ -702,8 +856,8 @@ def questions_page():
         
 @app.route('/coding')
 def coding_page():
-    exercises = safe_load_json(CODING_LOCAL_PATH) or []
-    return render_template('coding.html', exercises=exercises)
+    exercises = load_coding_exercises()
+    return render_template('coding.html', exercises=exercises, message=FOOTER_MESSAGE)
 
 @app.route("/health")
 def health_index():

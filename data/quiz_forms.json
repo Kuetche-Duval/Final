@@ -196,5 +196,101 @@
       "Applications"
     ],
     "notes": "20 MCQs including identities, solving trig equations, inverse trig, and applications."
+  },
+  {
+    "name": "Gravitational Fields — A-Level Physics (20 MCQs)",
+    "form_id": "1SwcSXLHbzRytS5KMVMwPHN9t5L0yqq-uNHbb2xMZOcM",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSe7GR1IFZqVQkWdqYBWUFI7dCwMPaayvD0oXcKc8rwqtST4qA/viewform",
+    "subject": [
+      "Physics"
+    ],
+    "topics": [
+      "Newton's law of gravitation",
+      "Gravitational field strength",
+      "Field lines & potential",
+      "Orbits & Kepler",
+      "Escape velocity"
+    ],
+    "notes": "Disguised Paper-2 style MCQs: short calculation + conceptual reasoning; concise option feedback."
+  },
+  {
+    "name": "Electric Fields — A-Level Physics (20 MCQs)",
+    "form_id": "1rYhhanug6my5AYtAbjdbG7Em6sf9_nPmq99KmnWSVxI",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScjR6Ocg1BJAkIm1Q4edI8N4qhMk8eQ3HUwoavb185d0BNZ6w/viewform",
+    "subject": [
+      "Physics"
+    ],
+    "topics": [
+      "Coulomb's law",
+      "E-field & potential",
+      "Field mapping",
+      "Capacitor basics (conceptual)",
+      "Gauss (qualitative)"
+    ],
+    "notes": "Paper-style MCQs combining short calculations and conceptual reasoning; feedback explains each option."
+  },
+  {
+    "name": "AC Circuits — A-Level Physics (20 MCQs)",
+    "form_id": "1liruk9BGnBBpoW49Wk_43uFQQFSyU4_5eKx7bpNmRhg",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSfnGR1Zil1Gzqu4XI2YqmVC5hGu7GPAzJRAaBJ8QGENy3w5qA/viewform",
+    "subject": [
+      "Physics"
+    ],
+    "topics": [
+      "AC vs DC",
+      "RLC circuits",
+      "Reactance & impedance",
+      "Phase relationships",
+      "Power in AC"
+    ],
+    "notes": "Paper-style MCQs: phasor reasoning, impedance calculations and conceptual phase/power questions."
+  },
+  {
+    "name": "Thermodynamics — A-Level Physics (20 MCQs)",
+    "form_id": "1NC-QXHKJDfYOT7YX5H6FQ9gg8V0RNZ-jY9rfqZWykzA",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdIt7VOZ01BPUBtgpr-I8vNbhTjGsQKjcvuG-xq2g4j0JxbCg/viewform",
+    "subject": [
+      "Physics"
+    ],
+    "topics": [
+      "Laws of thermodynamics",
+      "Internal energy",
+      "Heat transfer modes",
+      "PV work",
+      "Ideal gas relations"
+    ],
+    "notes": "Paper-style MCQs: small calculations, sign conventions and conceptual law applications."
+  },
+  {
+    "name": "Calorimetry — A-Level Physics (20 MCQs)",
+    "form_id": "1Due4iY9aRHY-d5mTe9g9ZKFgUw87cKuli_7Ry_wseIE",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSfORk19GHLfsf_b0AZeoPr0EAzwywbqh6FHE6s_VMXbOkv47g/viewform",
+    "subject": [
+      "Physics"
+    ],
+    "topics": [
+      "Heat capacity",
+      "Latent heat",
+      "Mixing problems",
+      "Energy conservation",
+      "Calorimeter corrections"
+    ],
+    "notes": "Questions combine calculations with method interpretation typical of paper 2 calorimetry tasks."
+  },
+  {
+    "name": "Capacitors — A-Level Physics (20 MCQs)",
+    "form_id": "1vYfD_PwAZZePWAKSDkU8HiAlK_umZb8ZoRFbR50KOE0",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSeZLBgO3Z4RnJnhkXKCEM0SkfM4gL7wGdyITmt3McIpguciKA/viewform",
+    "subject": [
+      "Physics"
+    ],
+    "topics": [
+      "Capacitance definition",
+      "Series/parallel combinations",
+      "Energy storage",
+      "Dielectrics",
+      "Transient RC circuits"
+    ],
+    "notes": "Paper 2 style MCQs focusing on calculations, equivalent C, energy and time-constant reasoning."
   }
 ]

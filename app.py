@@ -802,7 +802,6 @@ def quizzes_redirect():
     return redirect(url_for("quiz_forms"))
 
 @app.route("/content")
-@admin_required
 def content_page():
     timetable_today = []
     sheet_title = None
@@ -916,7 +915,6 @@ def health_detail(slug: str):
     return render_template("health_detail.html", plant=plant, message=FOOTER_MESSAGE)
 
 @app.route("/admin/announcement", methods=["GET", "POST"])
-@admin_required
 def admin_announcement():
     provided_key = request.args.get("key") or request.form.get("admin_key") or ""
     if request.method == "GET" and not provided_key:
@@ -965,7 +963,6 @@ def admin_announcement():
     return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
 
 @app.route("/admin/exercises", methods=["GET", "POST"])
-@admin_required
 def admin_exercises():
     provided_key = request.args.get("key") or request.form.get("admin_key") or ""
     if request.method == "GET" and not provided_key:
@@ -1030,7 +1027,6 @@ def admin_exercises():
     return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
 
 @app.route("/admin/questions", methods=["GET", "POST"])
-@admin_required
 def admin_questions():
     qfile = DATA_DIR / "questions_local.json"
     raw = []
@@ -1077,7 +1073,6 @@ def admin_questions():
     return render_template("admin_questions.html", key=request.args.get("key", ""), questions=rows, subjects=subjects, message=FOOTER_MESSAGE)
 
 @app.route("/exercise-table/<path:name>", methods=["GET", "POST"])
-@admin_required
 def exercise_table(name: str):
     if request.method == "GET":
         return make_response(jsonify({"ok": True, "endpoint": f"/exercise-table/{name}", "note": "POST SQL to this URL using form-data or JSON with key 'schema'"}), 200)
@@ -1300,13 +1295,11 @@ def notifications_ack():
         return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
 
 @app.route("/admin/debug/subscriptions")
-@admin_required
 def admin_debug_subs():
     subs = list_subscriptions()
     return make_response(jsonify({"ok": True, "count": len(subs), "subscriptions": subs}), 200)
 
 @app.route("/admin/debug/notifications")
-@admin_required
 def admin_debug_notifications():
     try:
         if USE_SQLITE and NN_LOCAL_DB:
@@ -1328,7 +1321,6 @@ def admin_debug_notifications():
         return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
 
 @app.route("/admin/debug/files")
-@admin_required
 def admin_debug_files():
     files = {
         "coding_exercises": CODING_LOCAL_PATH,

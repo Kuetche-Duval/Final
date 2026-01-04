@@ -96,7 +96,6 @@
     <div class="container d-flex flex-column flex-md-row justify-content-between align-items-center">
       <div class="small">&copy; {{ (now|default(None) and now.year) or 2025 }} Newton's Nerds</div>
       <div class="small text-center">{{ message or "" }}</div>
-      <div class="small text-end"><a href="{{ url_for('rules_page') }}" class="text-light text-decoration-none">Rules</a></div>
     </div>
   </footer>
 

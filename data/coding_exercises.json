@@ -1,12 +1,13 @@
 [
   {
     "id": "1",
-    "title": "Hello World",
-    "language": "Python",
-    "difficulty": "Easy",
-    "description": "Print Hello World",
-    "starter": "print()",
-    "solution": "print('Hello World')",
-    "sample_data": null
+    "title": "Sample: Sum two numbers",
+    "language": "python",
+    "difficulty": "easy",
+    "description": "Write a function that returns sum of two integers.",
+    "starter": "def add(a, b):\n    # TODO\n    pass",
+    "solution": "def add(a, b):\n    return a + b",
+    "sample_data": null,
+    "created_at": "2026-01-01T00:00:00Z"
   }
 ]

@@ -132,5 +132,69 @@
       "Optical fibre"
     ],
     "notes": "20 MCQs on communications physics with very explicit option-by-option explanations."
+  },
+  {
+    "name": "Differentiation — A-Level",
+    "form_id": "https://docs.google.com/forms/d/1TeP621iWeDvq9iHdHV0fBuV3LS2lbI_4IqJskXNMNwg/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScbhm_jbsPJMD5NMdglXGJddEodQz0yCtIoGoAdYafKBfDPzw/viewform",
+    "subject": [
+      "Mathematics"
+    ],
+    "topics": [
+      "Power rule",
+      "Chain rule",
+      "Product & Quotient",
+      "Implicit differentiation",
+      "Applications"
+    ],
+    "notes": "20 MCQs focused on differentiation — step-by-step guidance for each option."
+  },
+  {
+    "name": "Integration — A-Level",
+    "form_id": "https://docs.google.com/forms/d/1jccKnyoBIB0oYlJvDyGFtiIf5vH3OViTfd9LYkIpamM/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdhQKpnERt10RZIi6_QjlsnBnPaVOEYXf6MBcjHft9910pUXw/viewform",
+    "subject": [
+      "Mathematics"
+    ],
+    "topics": [
+      "Power rule",
+      "Substitution",
+      "Integration by parts (basic)",
+      "Definite integrals",
+      "Areas"
+    ],
+    "notes": "20 MCQs focused on integration techniques with guiding explanations."
+  },
+  {
+    "name": "Differential Equations — A-Level",
+    "form_id": "https://docs.google.com/forms/d/1ldpTnOYgioNrngBXmLaMFSauNuOs0vx1sz1BOvI5Pds/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSc7NOki03B85X7oiqI7Y3H-0AYW6H8vFYV_e4Y_dNK_yY9YNg/viewform",
+    "subject": [
+      "Mathematics"
+    ],
+    "topics": [
+      "First-order separable",
+      "Linear first-order",
+      "Second-order constant coefficients",
+      "Applications (growth/decay)",
+      "Initial conditions"
+    ],
+    "notes": "20 MCQs on differential equations (separable, linear, homogeneous, applications)."
+  },
+  {
+    "name": "Trigonometry — A-Level",
+    "form_id": "https://docs.google.com/forms/d/13asTrtIp4jrtavKZo8jK_foViKF2QLJ1TbmIUt2P_RY/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdE3vKRzGvJVSg6F4ZSKooA4yxEhi4Fx6jg595-mrHJx8ZmEg/viewform",
+    "subject": [
+      "Mathematics"
+    ],
+    "topics": [
+      "Identities",
+      "Solving equations",
+      "Radian measure",
+      "Graphs",
+      "Applications"
+    ],
+    "notes": "20 MCQs including identities, solving trig equations, inverse trig, and applications."
   }
 ]

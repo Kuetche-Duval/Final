@@ -1,13 +1,5 @@
-# Unified app.py — corrected version with schema/migration fixes and robust JSON fallback
-# Notes:
-# - SQLite schema for subscriptions now uses composite PK (endpoint, subject) and includes updated_at
-# - initialize_drive_helpers() is defined before being called
-# - single, corrected save_subscription/delete_subscription implementations (JSON + SQLite)
-# - safe_write_json used where possible
-# - created_at preserved on updates; updated_at added
-# - basic migration helper included for sqlite schema changes
-# - Warning: SUBS_LOCK protects only threads in the same process; for multi-process deployment use SQLite
-
+# Part 1 of app.py
+# Newton's Nerds - core + helpers
 import os
 import io
 import mimetypes
@@ -24,6 +16,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
+from functools import wraps
 
 from flask import (
     Flask, render_template, request, redirect, url_for, flash, send_file,
@@ -42,20 +35,18 @@ except Exception:
 
 load_dotenv()
 
+# ---- App init ----
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["JSON_SORT_KEYS"] = False
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24).hex()
 
+# Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("newtons_nerds")
 
-# Paths & config
-# Use app.root_path so relative executions still find data dir
+# ---- Paths & config ----
 DATA_DIR = Path(app.root_path) / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-# lock to serialize subscription file writes (thread-local only)
-SUBS_LOCK = threading.Lock()
 
 CODING_LOCAL_PATH = Path(os.environ.get("CODING_EXERCISES_PATH", DATA_DIR / "coding_exercises.json"))
 HEALTH_LOCAL_PATH = Path(os.environ.get("HEALTH_DATA_PATH", DATA_DIR / "health_data.json"))
@@ -63,23 +54,10 @@ QUIZ_LOCAL_PATH = Path(os.environ.get("QUIZ_FORMS_PATH", DATA_DIR / "quiz_forms.
 NOTIFICATIONS_FILE = Path(os.environ.get("NOTIFICATIONS_FILE", DATA_DIR / "notifications.json"))
 SUBSCRIPTIONS_FILE = Path(os.environ.get("SUBSCRIPTIONS_FILE", DATA_DIR / "subscriptions.json"))
 
-# DB choice: by default use JSON files, unless USE_SQLITE env var is true
+# DB choice: default JSON; set USE_SQLITE=true to enable sqlite backend
 USE_SQLITE = str(os.environ.get("USE_SQLITE", "")).lower() in ("1", "true", "yes")
 NN_LOCAL_DB = Path(os.environ.get("NN_LOCAL_DB", "nn_local.db")).resolve() if USE_SQLITE else None
 
-MOTIVATIONAL_QUOTES_VERSES = [
-    {"verse": "I can do all things through Christ who strengthens me.", "reference": "Philippians 4:13"},
-    {"verse": "If any of you lacks wisdom, let him ask God, who gives generously to all without reproach, and it will be given him.", "reference": "James 1:5"},
-    {"verse": "Trust in the Lord with all your heart, and do not lean on your own understanding. In all your ways acknowledge him, and he will make straight your paths.", "reference": "Proverbs 3:5-6"},
-    {"verse": "For I know the plans I have for you, declares the Lord, plans for welfare and not for evil, to give you a future and a hope.", "reference": "Jeremiah 29:11"},
-    {"verse": "Whatever you do, work heartily, as for the Lord and not for men.", "reference": "Colossians 3:23"},
-    {"verse": "Have I not commanded you? Be strong and courageous. Do not be frightened, and do not be dismayed, for the Lord your God is with you wherever you go.", "reference": "Joshua 1:9"},
-    {"verse": "Do not be anxious about anything, but in everything by prayer and supplication with thanksgiving let your requests be made known to God.", "reference": "Philippians 4:6"},
-    {"verse": "For God gave us a spirit not of fear but of power and love and self-control.", "reference": "2 Timothy 1:7"},
-    {"verse": "But they who wait for the Lord shall renew their strength; they shall mount up with wings like eagles; they shall run and not be weary; they shall walk and not faint.", "reference": "Isaiah 40:31"},
-    {"verse": "Let no one despise you for your youth, but set the believers an example in speech, in conduct, in love, in faith, in purity.", "reference": "1 Timothy 4:12"}
-]
-get_random_quote = lambda arr: random.choice(arr)
 FOOTER_MESSAGE = os.environ.get("FOOTER_MESSAGE", "Love one another ❤")
 COOKIE_MAX_AGE = 365 * 24 * 60 * 60
 
@@ -89,158 +67,140 @@ VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com").stri
 
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "") or ""
 
-# Drive & Sheets helper globals (populated by initialize_drive_helpers)
+# Small inspirational quotes used by homepage
+MOTIVATIONAL_QUOTES_VERSES = [
+    {"verse": "I can do all things through Christ who strengthens me.", "reference": "Philippians 4:13"},
+    {"verse": "If any of you lacks wisdom, let him ask God, who gives generously to all without reproach, and it will be given him.", "reference": "James 1:5"},
+    {"verse": "Trust in the Lord with all your heart, and do not lean on your own understanding.", "reference": "Proverbs 3:5-6"},
+]
+get_random_quote = lambda arr: random.choice(arr)
+
+# Lock for JSON subscription writes (thread-local)
+SUBS_LOCK = threading.Lock()
+
+# Drive & Sheets helpers (populated by initialize_drive_helpers)
 gdrive = None
 gsheets = None
 DRIVE_API_AVAILABLE = False
 SHEETS_AVAILABLE = False
 
+# ---- Admin decorator ----
 def admin_required(f):
-    """Decorator to protect routes with the admin key"""
-    from functools import wraps
     @wraps(f)
     def decorated(*args, **kwargs):
         provided = request.args.get("key") or request.form.get("admin_key") or ""
         if provided != ADMIN_KEY:
-            abort(403)  # Forbidden
+            # prefer JSON response for API-like requests, else render a template with 403
+            if request.is_json or request.path.startswith("/api/"):
+                return make_response(jsonify({"ok": False, "error": "unauthorized"}), 401)
+            flash("Unauthorized admin key.", "warning")
+            return render_template("error.html", message=FOOTER_MESSAGE, error="Unauthorized (admin key required)"), 403
         return f(*args, **kwargs)
     return decorated
 
-# ----------------------------
-# Helpers
-# ----------------------------
-
-def ensure_google_credentials_from_base64(
-    env_var_name: str,
-    output_path: str,
-    required_fields=("client_email", "private_key")
-):
-    """
-    Decode a base64-encoded Google service account JSON stored in an env var
-    and write it to output_path if it does not already exist.
-    """
-    if os.path.exists(output_path):
-        return output_path
-
-    b64 = os.environ.get(env_var_name, "").strip()
-    if not b64:
-        raise RuntimeError(f"Missing base64 credentials env var: {env_var_name}")
-
+# ---- Utilities ----
+def normalize_endpoint(endpoint: str) -> str:
+    if not endpoint:
+        return ""
     try:
-        raw = base64.b64decode(b64).decode("utf-8")
-        data = json.loads(raw)
+        u = urlparse(endpoint)
+        scheme = u.scheme or "https"
+        netloc = u.netloc or (u.path.split("/")[0] if u.path else "")
+        path = u.path or ""
+        return f"{scheme}://{netloc}{path}".rstrip("/")
+    except Exception:
+        return endpoint.strip()
 
-        # sanity check
-        for f in required_fields:
-            if f not in data:
-                raise RuntimeError(f"Invalid credentials JSON: missing {f}")
-
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-        logger.info("Google credentials written to %s", output_path)
-        return output_path
-
-    except Exception as e:
-        raise RuntimeError(f"Failed to decode base64 credentials: {e}")
-
-
-# --- Drive / Sheets initialization ---
-# --- Drive / Sheets initialization ---
-def initialize_drive_helpers():
-    """
-    Import and initialize drive and sheets helpers once.
-    Returns a dict with status and error messages.
-    """
-    global gdrive, gsheets, DRIVE_API_AVAILABLE, SHEETS_AVAILABLE
-    info = {"gdrive_available": False, "gsheets_available": False, "errors": []}
-
-    # Check credentials file
-    cred_path = os.environ.get("SERVICE_ACCOUNT_JSON_PATH") or os.environ.get("GOOGLE_CREDENTIALS_PATH")
-    if not cred_path:
-        info["errors"].append("No SERVICE_ACCOUNT_JSON_PATH or GOOGLE_CREDENTIALS_PATH set.")
-        logger.warning("Google credentials path missing; Drive/Sheets disabled.")
-        return info
-
-    cp = Path(cred_path)
-    if not cp.exists():
-        info["errors"].append(f"Credentials file not found at {cred_path}")
-        logger.warning("Credentials file not found at %s", cred_path)
-        return info
-
-    # ----- Drive helper -----
+def safe_load_json(path: Path, default=None):
     try:
-        import drive as local_drive
-        gdrive = local_drive
-        if hasattr(gdrive, "initialize") and callable(gdrive.initialize):
-            try:
-                gdrive.initialize(str(cp))
-            except Exception as e:
-                logger.exception("drive.initialize failed: %s", e)
-                info["errors"].append(f"drive.initialize failed: {e}")
-            else:
-                info["gdrive_available"] = True
-                DRIVE_API_AVAILABLE = True
-        else:
-            # module exists but has no initialize; still usable
-            info["gdrive_available"] = True
-            DRIVE_API_AVAILABLE = True
-        logger.info("Drive helper loaded from %s", getattr(gdrive, "__file__", "<module>"))
-    except Exception as e:
-        info["errors"].append(f"drive import failed: {e}")
-        logger.warning("Drive helper import failed: %s", e)
+        if not path.exists():
+            return default
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return default
+        return json.loads(raw)
+    except Exception:
+        logger.exception("Corrupted JSON detected, resetting: %s", path)
+        try:
+            path.write_text(json.dumps(default, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return default
 
-    # ----- Sheets helper -----
+def safe_write_json(path: Path, obj):
     try:
-        import sheets as local_sheets
-        gsheets = local_sheets
-        if hasattr(gsheets, "initialize") and callable(gsheets.initialize):
-            try:
-                gsheets.initialize(str(cp))
-            except Exception as e:
-                logger.exception("sheets.initialize failed: %s", e)
-                info["errors"].append(f"sheets.initialize failed: {e}")
-            else:
-                info["gsheets_available"] = True
-                SHEETS_AVAILABLE = True
-        else:
-            # module exists but has no initialize; still usable
-            info["gsheets_available"] = True
-            SHEETS_AVAILABLE = True
-        logger.info("Sheets helper loaded from %s", getattr(gsheets, "__file__", "<module>"))
-    except Exception as e:
-        info["errors"].append(f"sheets import failed: {e}")
-        logger.warning("Sheets helper import failed: %s", e)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tf:
+                json.dump(obj, tf, ensure_ascii=False, indent=2)
+                tf.flush()
+                os.fsync(tf.fileno())
+            os.replace(tmp_path, str(path))
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+        return True
+    except Exception:
+        logger.exception("Failed writing JSON: %s", path)
+        return False
 
-    return info
-
-# Ensure Google credentials from base64 if provided (this may create a service account file)
-try:
-    GOOGLE_CREDS_PATH = os.environ.get("GOOGLE_CREDENTIALS_PATH", "service_account.json")
+def validate_json_file(path: Path):
     try:
-        ensure_google_credentials_from_base64(
-            env_var_name="SERVICE_ACCOUNT_JSON_B64",
-            output_path=GOOGLE_CREDS_PATH
-        )
-        os.environ["SERVICE_ACCOUNT_JSON_PATH"] = GOOGLE_CREDS_PATH
+        txt = path.read_text(encoding="utf-8")
+        if not txt.strip():
+            return False, "Empty file"
+        json.loads(txt)
+        return True, ""
     except Exception as e:
-        logger.warning("Google credentials not initialized: %s", e)
-except Exception:
-    logger.exception("Unexpected error while attempting to initialize google credentials")
+        return False, str(e)
 
-# DB init and migration helpers
+# render_template_safe: always returns a Response (not a tuple)
+def render_template_safe(template_name: str, status: int = 200, **context) -> Response:
+    try:
+        html = render_template(template_name, **context)
+        return make_response(html, status)
+    except Exception as e:
+        logger.warning("Template %s failed to render: %s", template_name, e)
+        try:
+            html = render_template("error.html", message=FOOTER_MESSAGE, error=str(e), traceback=traceback.format_exc())
+            return make_response(html, 500)
+        except Exception:
+            body = f"Template rendering error: {template_name}\n\n{e}\n\n{traceback.format_exc()}"
+            return make_response(body, 500)
+
+# ---- JSON-backed helpers for subscriptions/notifications (fallback) ----
+def _read_subscriptions_json():
+    arr = safe_load_json(SUBSCRIPTIONS_FILE) or []
+    if not isinstance(arr, list):
+        return []
+    return arr
+
+def _write_subscriptions_json(arr):
+    return safe_write_json(Path(SUBSCRIPTIONS_FILE), arr)
+
+def _read_notifications_json():
+    arr = safe_load_json(NOTIFICATIONS_FILE) or []
+    if not isinstance(arr, list):
+        return []
+    return arr
+
+def _write_notifications_json(arr):
+    return safe_write_json(NOTIFICATIONS_FILE, arr)
+
+# ---- SQLite init & migration helpers (optional) ----
 def _migrate_subscriptions_schema(conn: sqlite3.Connection):
     cur = conn.cursor()
     try:
         cur.execute("PRAGMA table_info(subscriptions)")
         cols = [r[1] for r in cur.fetchall()]
-        # If table doesn't exist, nothing to do
         if not cols:
             return
         if "updated_at" in cols and "subject" in cols:
             return
-        # Perform migration: create new table and copy data
         cur.executescript("""
         BEGIN TRANSACTION;
         CREATE TABLE IF NOT EXISTS subscriptions_new (
@@ -265,12 +225,10 @@ def _migrate_subscriptions_schema(conn: sqlite3.Connection):
     except Exception:
         logger.exception("Migration of subscriptions schema failed; manual intervention may be required")
 
-
 def _init_sqlite_db(db_path: Path):
     try:
         conn = sqlite3.connect(str(db_path))
         c = conn.cursor()
-        # Create subscriptions table with composite PK (endpoint, subject)
         c.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (
                 endpoint TEXT NOT NULL,
@@ -297,7 +255,6 @@ def _init_sqlite_db(db_path: Path):
             )""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_notifications_endpoint_delivered ON notifications(endpoint, delivered)")
         conn.commit()
-        # Also attempt migrations if needed (safe no-op in most cases)
         try:
             _migrate_subscriptions_schema(conn)
         except Exception:
@@ -310,220 +267,140 @@ def _init_sqlite_db(db_path: Path):
 if USE_SQLITE and NN_LOCAL_DB:
     _init_sqlite_db(NN_LOCAL_DB)
 else:
-    logger.info("Using JSON storage for subscriptions / notifications (no sqlite). Set USE_SQLITE=true to enable SQLite.")
+    logger.info("Using JSON storage for subscriptions/notifications (no sqlite). Set USE_SQLITE=true to enable SQLite.")
 
-# JSON helpers
-
-def validate_json_file(path: Path) -> tuple[bool, str]:
+# ---- Drive & Sheets initialization ----
+def ensure_google_credentials_from_base64(env_var_name: str, output_path: str, required_fields=("client_email", "private_key")):
+    if os.path.exists(output_path):
+        return output_path
+    b64 = os.environ.get(env_var_name, "").strip()
+    if not b64:
+        raise RuntimeError(f"Missing base64 credentials env var: {env_var_name}")
     try:
-        txt = path.read_text(encoding="utf-8")
-        if not txt.strip():
-            return False, "Empty file"
-        json.loads(txt)
-        return True, ""
+        raw = base64.b64decode(b64).decode("utf-8")
+        data = json.loads(raw)
+        for f in required_fields:
+            if f not in data:
+                raise RuntimeError(f"Invalid credentials JSON: missing {f}")
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        logger.info("Google credentials written to %s", output_path)
+        return output_path
     except Exception as e:
-        return False, str(e)
+        raise RuntimeError(f"Failed to decode base64 credentials: {e}")
 
-
-def load_coding_exercises() -> list:
-    """
-    Robust loader for coding exercises: returns list (possibly empty).
-    """
+def initialize_drive_helpers():
+    global gdrive, gsheets, DRIVE_API_AVAILABLE, SHEETS_AVAILABLE
+    info = {"gdrive_available": False, "gsheets_available": False, "errors": []}
+    cred_path = os.environ.get("SERVICE_ACCOUNT_JSON_PATH") or os.environ.get("GOOGLE_CREDENTIALS_PATH")
+    if not cred_path:
+        info["errors"].append("No SERVICE_ACCOUNT_JSON_PATH or GOOGLE_CREDENTIALS_PATH set.")
+        logger.warning("Google credentials path missing; Drive/Sheets disabled.")
+        return info
+    cp = Path(cred_path)
+    if not cp.exists():
+        info["errors"].append(f"Credentials file not found at {cred_path}")
+        logger.warning("Credentials file not found at %s", cred_path)
+        return info
     try:
-        path = CODING_LOCAL_PATH if isinstance(CODING_LOCAL_PATH, Path) else Path(CODING_LOCAL_PATH)
-        logger.debug("Loading coding exercises from %s", path)
-        if not path.exists():
-            logger.info("Coding exercises file not found at %s — returning empty list", str(path))
-            return []
-        ok, err = validate_json_file(path)
-        if not ok:
-            logger.error("Coding exercises JSON invalid: %s — path=%s", err, str(path))
-            # optionally create a backup of the broken file for inspection
+        import drive as local_drive
+        gdrive = local_drive
+        if hasattr(gdrive, "initialize") and callable(gdrive.initialize):
             try:
-                backup = path.with_suffix(path.suffix + ".broken")
-                if not backup.exists():
-                    backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-                    logger.info("Backed up broken coding_exercises.json -> %s", str(backup))
-            except Exception:
-                logger.exception("Failed to backup broken coding_exercises.json")
-            return []
-        # load safely
-        arr = json.loads(path.read_text(encoding="utf-8") or "[]")
-        if not isinstance(arr, list):
-            logger.warning("Expected list in coding_exercises.json, got %s", type(arr))
-            return []
-        return arr
-    except Exception:
-        logger.exception("Unexpected error loading coding exercises")
-        return []
-
-
-def get_admin_questions_context():
-    try:
-        qfile = DATA_DIR / "questions_local.json"
-        raw = []
-        if qfile.exists():
-            try:
-                raw = json.loads(qfile.read_text(encoding="utf-8") or "[]")
-            except Exception:
-                logger.exception("admin: failed to parse questions_local.json; treating as empty")
-                raw = []
-        rows = []
-        for idx, r in enumerate(raw):
-            try:
-                if isinstance(r, dict):
-                    rows.append({
-                        "index": idx,
-                        "subject": r.get("subject", ""),
-                        "user": r.get("name", r.get("user", "")),
-                        "text": r.get("question", r.get("text", "")),
-                        "attempt": r.get("attempt", "")
-                    })
-                else:
-                    lst = list(r) if isinstance(r, (list, tuple)) else [r]
-                    rows.append({
-                        "index": idx,
-                        "subject": lst[0] if len(lst) > 0 else "",
-                        "user": lst[1] if len(lst) > 1 else "",
-                        "text": lst[2] if len(lst) > 2 else "",
-                        "attempt": lst[3] if len(lst) > 3 else ""
-                    })
-            except Exception:
-                logger.exception("Skipping malformed question row at index %s", idx)
-                continue
-        subjects = sorted(list({row["subject"] for row in rows if row.get("subject")}))
-        return rows, subjects
-    except Exception:
-        logger.exception("get_admin_questions_context failed")
-        return [], []
-
-
-def normalize_endpoint(endpoint: str) -> str:
-    if not endpoint:
-        return ""
-    try:
-        u = urlparse(endpoint)
-        scheme = u.scheme or "https"
-        netloc = u.netloc or (u.path.split("/")[0] if u.path else "")
-        path = u.path or ""
-        return f"{scheme}://{netloc}{path}".rstrip("/")
-    except Exception:
-        return endpoint.strip()
-
-
-def safe_load_json(path: Path, default=None):
-    try:
-        if not path.exists():
-            return default
-        raw = path.read_text(encoding="utf-8").strip()
-        if not raw:
-            return default
-        return json.loads(raw)
-    except Exception:
-        app.logger.error(f"Corrupted JSON detected, resetting: {path}")
-        try:
-            path.write_text(json.dumps(default, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-        return default
-
-
-def safe_write_json(path: Path, obj):
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # atomic write to temp file then replace
-        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as tf:
-                json.dump(obj, tf, ensure_ascii=False, indent=2)
-                tf.flush()
-                os.fsync(tf.fileno())
-            os.replace(tmp_path, str(path))
-        finally:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-        return True
-    except Exception:
-        logger.exception("Failed writing JSON: %s", path)
-        return False
-
-def render_template_safe(template_name: str, status: int = 200, **context) -> Response:
-    try:
-        html = render_template(template_name, **context)
-        return make_response(html, status)
+                gdrive.initialize(str(cp))
+            except Exception as e:
+                logger.exception("drive.initialize failed: %s", e)
+                info["errors"].append(f"drive.initialize failed: {e}")
+            else:
+                info["gdrive_available"] = True
+                DRIVE_API_AVAILABLE = True
+        else:
+            info["gdrive_available"] = True
+            DRIVE_API_AVAILABLE = True
+        logger.info("Drive helper loaded from %s", getattr(gdrive, "__file__", "<module>"))
     except Exception as e:
-        logger.warning("Template %s failed to render: %s", template_name, e)
+        info["errors"].append(f"drive import failed: {e}")
+        logger.warning("Drive helper import failed: %s", e)
+    try:
+        import sheets as local_sheets
+        gsheets = local_sheets
+        if hasattr(gsheets, "initialize") and callable(gsheets.initialize):
+            try:
+                gsheets.initialize(str(cp))
+            except Exception as e:
+                logger.exception("sheets.initialize failed: %s", e)
+                info["errors"].append(f"sheets.initialize failed: {e}")
+            else:
+                info["gsheets_available"] = True
+                SHEETS_AVAILABLE = True
+        else:
+            info["gsheets_available"] = True
+            SHEETS_AVAILABLE = True
+        logger.info("Sheets helper loaded from %s", getattr(gsheets, "__file__", "<module>"))
+    except Exception as e:
+        info["errors"].append(f"sheets import failed: {e}")
+        logger.warning("Sheets helper import failed: %s", e)
+    return info
+
+# Ensure Google credentials from base64 env var (optional)
+try:
+    GOOGLE_CREDS_PATH = os.environ.get("GOOGLE_CREDENTIALS_PATH", "service_account.json")
+    try:
+        ensure_google_credentials_from_base64(env_var_name="SERVICE_ACCOUNT_JSON_B64", output_path=GOOGLE_CREDS_PATH)
+        os.environ["SERVICE_ACCOUNT_JSON_PATH"] = GOOGLE_CREDS_PATH
+    except Exception as e:
+        logger.warning("Google credentials not initialized: %s", e)
+except Exception:
+    logger.exception("Unexpected error while attempting to initialize google credentials")
+
+# ---- Startup debug logging of key paths (temporary helpful logs) ----
+try:
+    logger.info("DATA_DIR: %s", str(DATA_DIR))
+    files_to_check = [
+        ("CODING_LOCAL_PATH", CODING_LOCAL_PATH),
+        ("QUIZ_LOCAL_PATH", QUIZ_LOCAL_PATH),
+        ("HEALTH_LOCAL_PATH", HEALTH_LOCAL_PATH),
+        ("NOTIFICATIONS_FILE", NOTIFICATIONS_FILE),
+        ("SUBSCRIPTIONS_FILE", SUBSCRIPTIONS_FILE),
+    ]
+    for name, p in files_to_check:
         try:
-            # fallback to error.html if present
-            html = render_template("error.html", message=FOOTER_MESSAGE, error=str(e), traceback=traceback.format_exc())
-            return make_response(html, 500)
+            exists = p.exists()
+            size = p.stat().st_size if exists else "n/a"
+            logger.info("%s -> %s (exists=%s, size=%s)", name, str(p), exists, size)
         except Exception:
-            # last-resort plaintext
-            body = f"Template rendering error: {template_name}\n\n{e}\n\n{traceback.format_exc()}"
-            return make_response(body, 500)
-
-# JSON-backed subscriptions / notifications (fallback)
-def _read_subscriptions_json():
-    arr = safe_load_json(SUBSCRIPTIONS_FILE) or []
-    if not isinstance(arr, list):
-        return []
-    return arr
-
-
-def _write_subscriptions_json(arr):
-    return safe_write_json(Path(SUBSCRIPTIONS_FILE), arr)
-
-
-def _read_notifications_json():
-    arr = safe_load_json(NOTIFICATIONS_FILE) or []
-    if not isinstance(arr, list):
-        return []
-    return arr
-
-
-def _write_notifications_json(arr):
-    return safe_write_json(NOTIFICATIONS_FILE, arr)
-
-# -----------------------------
-# Persistence helpers (single authoritative implementations)
-# -----------------------------
+            logger.exception("Failed to stat %s (%s)", name, p)
+except Exception:
+    logger.exception("Startup path debug logging failed")
+# Part 2 of app.py (routes, persistence functions, run)
+# ---- Persistence: subscriptions, notifications, coding loader ----
 
 def save_subscription(subject, client_id, subscription_obj):
     try:
-        # Normalize incoming subscription object
         if isinstance(subscription_obj, str):
             try:
                 subscription_obj = json.loads(subscription_obj)
             except Exception:
                 subscription_obj = {"endpoint": subscription_obj}
-
         if not isinstance(subscription_obj, dict):
             logger.warning("Invalid subscription object")
             return False
-
         endpoint = subscription_obj.get("endpoint") or subscription_obj.get("url")
         if not endpoint:
             logger.warning("Subscription missing endpoint")
             return False
-
         endpoint_norm = normalize_endpoint(endpoint)
         subject = subject or "Other"
         client_id = client_id or ""
-
         keys = subscription_obj.get("keys") or {}
         p256 = keys.get("p256dh", "")
         auth = keys.get("auth", "")
-
         now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-
         # SQLITE BACKEND
         if USE_SQLITE and NN_LOCAL_DB:
             with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
                 c = conn.cursor()
-                # REPLACE-like behavior but preserve created_at when present
                 c.execute("SELECT created_at FROM subscriptions WHERE endpoint=? AND subject=?", (endpoint_norm, subject))
                 row = c.fetchone()
                 created_at = row[0] if row and row[0] else now
@@ -544,8 +421,7 @@ def save_subscription(subject, client_id, subscription_obj):
                 )
                 conn.commit()
             return True
-
-        # JSON BACKEND (atomic + locked)
+        # JSON BACKEND
         with SUBS_LOCK:
             arr = []
             try:
@@ -557,24 +433,18 @@ def save_subscription(subject, client_id, subscription_obj):
             except Exception:
                 logger.exception("Failed reading subscriptions.json, starting fresh")
                 arr = []
-
             new_arr = []
             replaced = False
-
             for r in arr:
                 if not isinstance(r, dict):
                     continue
-
                 sub = r.get("subscription") or {}
                 ep = sub.get("endpoint") or sub.get("url")
-
                 try:
                     ep_norm = normalize_endpoint(ep) if ep else None
                 except Exception:
                     ep_norm = None
-
-                # Same endpoint + subject → replace
-                if ep_norm == endpoint_norm and r.get("subject") == subject:
+                if ep_norm == endpoint_norm and str(r.get("subject", "")).lower() == str(subject).lower():
                     new_arr.append({
                         "endpoint": endpoint_norm,
                         "subject": subject,
@@ -587,7 +457,6 @@ def save_subscription(subject, client_id, subscription_obj):
                     replaced = True
                 else:
                     new_arr.append(r)
-
             if not replaced:
                 new_arr.append({
                     "endpoint": endpoint_norm,
@@ -598,8 +467,6 @@ def save_subscription(subject, client_id, subscription_obj):
                     "created_at": now,
                     "updated_at": now
                 })
-
-            # Atomic write
             SUBSCRIPTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(dir=str(SUBSCRIPTIONS_FILE.parent))
             try:
@@ -614,13 +481,10 @@ def save_subscription(subject, client_id, subscription_obj):
                         os.remove(tmp_path)
                     except Exception:
                         pass
-
         return True
-
     except Exception:
         logger.exception("save_subscription failed")
         return False
-
 
 def list_subscriptions(subject=None):
     try:
@@ -640,12 +504,12 @@ def list_subscriptions(subject=None):
                     parsed = {}
                 out.append({"subject": subj, "client_id": client_id, "subscription": parsed, "created_at": created_at})
             return out
-
+        # JSON backend branch (case-insensitive subject matching)
         arr = _read_subscriptions_json()
         out = []
         for r in arr:
             try:
-                if subject and r.get("subject") != subject:
+                if subject and str(r.get("subject", "")).lower() != str(subject).lower():
                     continue
                 out.append({"subject": r.get("subject"), "client_id": r.get("client_id"), "subscription": r.get("subscription"), "created_at": r.get("created_at")})
             except Exception:
@@ -655,7 +519,6 @@ def list_subscriptions(subject=None):
         logger.exception("list_subscriptions failed")
         return []
 
-
 def delete_subscriptions_by_endpoint(endpoint):
     try:
         if not endpoint:
@@ -664,7 +527,7 @@ def delete_subscriptions_by_endpoint(endpoint):
         if USE_SQLITE and NN_LOCAL_DB:
             with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
                 c = conn.cursor()
-                c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint_norm, endpoint))
+                c.execute("DELETE FROM subscriptions WHERE endpoint=? OR endpoint=?", (endpoint_norm, endpoint_norm))
                 conn.commit()
             return
         arr = _read_subscriptions_json()
@@ -673,7 +536,6 @@ def delete_subscriptions_by_endpoint(endpoint):
     except Exception:
         logger.exception("delete_subscriptions_by_endpoint failed")
 
-
 def save_notification(endpoint, subject, title, body, data_obj=None):
     try:
         if not endpoint:
@@ -681,7 +543,6 @@ def save_notification(endpoint, subject, title, body, data_obj=None):
             return None
         endpoint_norm = normalize_endpoint(endpoint)
         now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-
         if USE_SQLITE and NN_LOCAL_DB:
             with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
                 c = conn.cursor()
@@ -691,9 +552,7 @@ def save_notification(endpoint, subject, title, body, data_obj=None):
                 nid = c.lastrowid
                 conn.commit()
             return nid
-
         arr = _read_notifications_json()
-        # generate id
         max_id = max([int(it.get("id", 0)) for it in arr], default=0)
         nid = int(max_id) + 1
         arr.append({
@@ -711,7 +570,6 @@ def save_notification(endpoint, subject, title, body, data_obj=None):
     except Exception:
         logger.exception("save_notification failed")
         return None
-
 
 def fetch_pending_notifications(endpoint):
     try:
@@ -731,14 +589,12 @@ def fetch_pending_notifications(endpoint):
                     data_obj = {}
                 out.append({"id": nid, "subject": subj, "title": title, "body": body, "data": data_obj, "created_at": created_at})
             return out
-
         arr = _read_notifications_json()
         out = [it for it in arr if normalize_endpoint(it.get("endpoint")) == endpoint_norm and not it.get("delivered")]
         return out
     except Exception:
         logger.exception("fetch_pending_notifications failed")
         return []
-
 
 def ack_notifications(endpoint, ids):
     try:
@@ -747,7 +603,6 @@ def ack_notifications(endpoint, ids):
         endpoint_norm = normalize_endpoint(endpoint)
         now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         changed = 0
-
         if USE_SQLITE and NN_LOCAL_DB:
             with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
                 c = conn.cursor()
@@ -760,7 +615,6 @@ def ack_notifications(endpoint, ids):
                         continue
                 conn.commit()
             return changed
-
         arr = _read_notifications_json()
         updated = False
         for it in arr:
@@ -776,7 +630,7 @@ def ack_notifications(endpoint, ids):
         logger.exception("ack_notifications failed")
         return 0
 
-# Push helper
+# ---- Push sending helper ----
 def _send_push_single(subscription, payload):
     if not PYWEBPUSH_AVAILABLE:
         return {"ok": False, "error": "pywebpush-not-available"}
@@ -790,7 +644,6 @@ def _send_push_single(subscription, payload):
         return {"ok": False, "error": str(ex), "status": status}
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
-
 
 def send_push_to_subject(subject, question_text, attempt_text):
     subs = list_subscriptions(subject) or []
@@ -807,7 +660,6 @@ def send_push_to_subject(subject, question_text, attempt_text):
     payload_template = {"title": title, "body": body, "url": "/questions", "subject": subject, "icon": icon_url, "badge": icon_url, "preview": {"question": q_preview, "attempt": a_preview}}
     detail = []
     sent = 0
-    # persist notifications
     for r in subs:
         sub = r.get("subscription") if isinstance(r, dict) else None
         ep = sub.get("endpoint") if sub else None
@@ -838,12 +690,6 @@ def send_push_to_subject(subject, question_text, attempt_text):
                 ok = True
                 sent += 1
                 detail.append({"endpoint": normalize_endpoint(endpoint), "ok": True})
-                try:
-                    now = datetime.utcnow().replace(microsecond=0).isoformat()
-                    # mark delivered in storage
-                    # No-op here; notifications were persisted earlier
-                except Exception:
-                    logger.exception("mark delivered failed")
                 break
             else:
                 status = res.get("status")
@@ -861,9 +707,35 @@ def send_push_to_subject(subject, question_text, attempt_text):
             detail.append({"endpoint": normalize_endpoint(endpoint), "ok": False, "error": "final-failure"})
     return {"sent": sent, "errors": [d for d in detail if not d.get("ok")], "detail": detail}
 
-# -----------------------------
-# Routes
-# -----------------------------
+# ---- Coding loader ----
+def load_coding_exercises():
+    try:
+        path = CODING_LOCAL_PATH if isinstance(CODING_LOCAL_PATH, Path) else Path(CODING_LOCAL_PATH)
+        logger.debug("Loading coding exercises from %s", path)
+        if not path.exists():
+            logger.info("Coding exercises file not found at %s — returning empty list", str(path))
+            return []
+        ok, err = validate_json_file(path)
+        if not ok:
+            logger.error("Coding exercises JSON invalid: %s — path=%s", err, str(path))
+            try:
+                backup = path.with_suffix(path.suffix + ".broken")
+                if not backup.exists():
+                    backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+                    logger.info("Backed up broken coding_exercises.json -> %s", str(backup))
+            except Exception:
+                logger.exception("Failed to backup broken coding_exercises.json")
+            return []
+        arr = json.loads(path.read_text(encoding="utf-8") or "[]")
+        if not isinstance(arr, list):
+            logger.warning("Expected list in coding_exercises.json, got %s", type(arr))
+            return []
+        return arr
+    except Exception:
+        logger.exception("Unexpected error loading coding exercises")
+        return []
+
+# ---- ROUTES ----
 
 @app.route("/service-worker.js")
 def service_worker():
@@ -872,7 +744,6 @@ def service_worker():
     except Exception:
         logger.exception("service-worker not found")
         return abort(404)
-
 
 @app.route("/favicon.ico")
 def favicon():
@@ -885,51 +756,50 @@ def favicon():
     svg = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="100%" height="100%" fill="#2b8cff"/></svg>'
     return make_response(svg, 200, {"Content-Type": "image/svg+xml"})
 
+@app.route("/static/icons/<path:filename>")
+def icons_fallback(filename: str):
+    icons_dir = Path(app.static_folder) / "icons"
+    candidate = icons_dir / filename
+    if candidate.exists():
+        return send_from_directory(str(candidate.parent), candidate.name)
+    if filename.lower().endswith(".png"):
+        logo = Path(app.static_folder) / "img" / "logo.png"
+        if logo.exists():
+            return send_from_directory(str(logo.parent), logo.name)
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192"><rect width="100%" height="100%" fill="#2b8cff"/></svg>"""
+    resp = make_response(svg)
+    resp.headers["Content-Type"] = "image/svg+xml"
+    return resp
+
+@app.route("/drive-image/<path:file_id>")
+def drive_image(file_id: str):
+    try:
+        if gdrive and hasattr(gdrive, "fetch_drive_image_bytes"):
+            try:
+                data, content_type = gdrive.fetch_drive_image_bytes(file_id)
+                if data:
+                    return Response(data, mimetype=content_type)
+            except Exception:
+                logger.exception("drive_image via gdrive failed")
+    except Exception:
+        logger.exception("drive_image top-level error")
+    logo = Path(app.static_folder) / "img" / "logo.png"
+    if logo.exists():
+        return send_from_directory(str(logo.parent), logo.name)
+    return abort(404)
 
 @app.route("/")
 def home_page():
-    return render_template("index.html", message=FOOTER_MESSAGE, quote=get_random_quote(MOTIVATIONAL_QUOTES_VERSES))
-
-@app.route("/rules", endpoint="rules_page")
-@admin_required
-def rules_page():
-    """
-    Serve the rules page.
-    - Try gsheets.read_rules() if available
-    - Else fall back to local JSON data/rules.json
-    """
-    rules = []
-
-    # Use gsheets global
-    if gsheets and SHEETS_AVAILABLE and hasattr(gsheets, "read_rules"):
-        try:
-            rules = gsheets.read_rules() or []
-        except Exception:
-            logger.exception("gsheets.read_rules failed")
-            rules = []
-
-    # fallback to JSON if no rules
-    if not rules:
-        try:
-            rules = safe_load_json(Path("data/rules.json")) or []
-        except Exception:
-            rules = []
-
-    if not isinstance(rules, list):
-        rules = []
-
-    return render_template("rules.html", rules=rules, message=FOOTER_MESSAGE)
+    return render_template_safe("index.html", message=FOOTER_MESSAGE, quote=get_random_quote(MOTIVATIONAL_QUOTES_VERSES))
 
 @app.route("/quiz-forms", endpoint="quiz_forms")
 def quiz_forms():
     forms = safe_load_json(QUIZ_LOCAL_PATH) or []
-    return render_template("quiz_forms.html", forms=forms, message=FOOTER_MESSAGE)
-
+    return render_template_safe("quiz_forms.html", forms=forms, message=FOOTER_MESSAGE)
 
 @app.route("/quizzes")
 def quizzes_redirect():
     return redirect(url_for("quiz_forms"))
-
 
 @app.route("/content")
 @admin_required
@@ -941,7 +811,18 @@ def content_page():
     form_list = safe_load_json(QUIZ_LOCAL_PATH) or []
     hero_image_id = os.environ.get("HERO_IMAGE_ID", "")
     notes_drive_url = os.environ.get("NOTES_DRIVE_URL", "")
-    return render_template("content.html",
+    # optionally load from gsheets if available
+    if gsheets and SHEETS_AVAILABLE:
+        try:
+            if hasattr(gsheets, "get_timetable_for_today"):
+                timetable_today = gsheets.get_timetable_for_today() or []
+            if hasattr(gsheets, "get_timetable_sheet_content"):
+                sheet_title, sheet_content = gsheets.get_timetable_sheet_content() or (None, None)
+            if hasattr(gsheets, "list_gallery"):
+                dr_values = gsheets.list_gallery() or dr_values
+        except Exception:
+            logger.exception("gsheets helpers failed; using local defaults")
+    return render_template_safe("content.html",
                                 message=FOOTER_MESSAGE,
                                 timetable_today=timetable_today,
                                 sheet_title=sheet_title,
@@ -952,14 +833,6 @@ def content_page():
                                 hero_image_id=hero_image_id,
                                 hero_title=os.environ.get("HERO_TITLE", "Stay Consistent"),
                                 hero_subtitle=os.environ.get("HERO_SUBTITLE", "Success = small efforts repeated daily."))
-
-
-@app.route("/api/vapid")
-def api_vapid():
-    if not VAPID_PUBLIC_KEY:
-        return jsonify({"ok": False, "error": "vapid-not-configured"}), 503
-    return jsonify({"ok": True, "publicKey": VAPID_PUBLIC_KEY})
-
 
 @app.route("/questions", methods=["GET", "POST"])
 def questions_page():
@@ -992,7 +865,6 @@ def questions_page():
             resp.set_cookie("nn_user", name, max_age=COOKIE_MAX_AGE, samesite='Lax')
             resp.set_cookie("nn_last_category", category, max_age=COOKIE_MAX_AGE, samesite='Lax')
             return resp
-
         qfile = DATA_DIR / "questions_local.json"
         raw = json.loads(qfile.read_text(encoding="utf-8") or "[]") if qfile.exists() else []
         questions = []
@@ -1017,17 +889,16 @@ def questions_page():
         logger.exception("questions_page failed")
         flash("Could not load questions", "danger")
         return render_template("questions.html", questions=[], categories=["Other"], selected_category="", message=FOOTER_MESSAGE)
-        
+
 @app.route("/coding")
 def coding_page():
-    exercises = safe_load_json(CODING_LOCAL_PATH) or []
+    exercises = load_coding_exercises() or []
     return render_template_safe("coding.html", exercises=exercises, message=FOOTER_MESSAGE)
 
 @app.route("/health")
 def health_index():
     plants = safe_load_json(HEALTH_LOCAL_PATH) or []
     return render_template("health.html", plants=plants, message=FOOTER_MESSAGE)
-
 
 @app.route("/health/<path:slug>")
 def health_detail(slug: str):
@@ -1043,7 +914,6 @@ def health_detail(slug: str):
     if not plant:
         plant = {"name": slug.replace("-", " ").title(), "virtues": [], "uses": "No details available.", "notes": "", "slug": slug}
     return render_template("health_detail.html", plant=plant, message=FOOTER_MESSAGE)
-
 
 @app.route("/admin/announcement", methods=["GET", "POST"])
 @admin_required
@@ -1094,14 +964,11 @@ def admin_announcement():
             return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
     return render_template("admin_announcement.html", key=provided_key, message=FOOTER_MESSAGE)
 
-# Admin exercises route
-@app.route("/admin/exercises", methods=["GET", "POST"]) 
+@app.route("/admin/exercises", methods=["GET", "POST"])
+@admin_required
 def admin_exercises():
     provided_key = request.args.get("key") or request.form.get("admin_key") or ""
     if request.method == "GET" and not provided_key:
-        return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
-    if provided_key != ADMIN_KEY:
-        flash("Unauthorized admin key.", "warning")
         return render_template("admin_exercises.html", key="", drive_file_id="", message=FOOTER_MESSAGE)
     if request.method == "POST":
         try:
@@ -1121,7 +988,7 @@ def admin_exercises():
                     sample_data = None
             if not ex_id:
                 ex_id = str(int(time.time() * 1000))
-            arr = safe_load_json(CODING_LOCAL_PATH) or []
+            arr = load_coding_exercises() or []
             if not isinstance(arr, list):
                 arr = []
             existing_index = None
@@ -1162,17 +1029,17 @@ def admin_exercises():
         return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
     return render_template("admin_exercises.html", key=provided_key, drive_file_id="", message=FOOTER_MESSAGE)
 
-# Admin questions
-@app.route("/admin/questions", methods=["GET", "POST"]) 
+@app.route("/admin/questions", methods=["GET", "POST"])
+@admin_required
 def admin_questions():
-    provided = request.args.get("key") or request.form.get("admin_key") or ""
-    if request.method == "GET" and not provided:
-        return render_template("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
-    if provided != ADMIN_KEY:
-        flash("Unauthorized admin key.", "warning")
-        return render_template("admin_questions.html", key="", questions=[], subjects=[], message=FOOTER_MESSAGE)
     qfile = DATA_DIR / "questions_local.json"
-    raw = json.loads(qfile.read_text(encoding="utf-8") or "[]") if qfile.exists() else []
+    raw = []
+    if qfile.exists():
+        try:
+            raw = json.loads(qfile.read_text(encoding="utf-8") or "[]")
+        except Exception:
+            logger.exception("admin: failed to parse questions_local.json; treating as empty")
+            raw = []
     rows = []
     for idx, r in enumerate(raw):
         try:
@@ -1195,7 +1062,7 @@ def admin_questions():
         except Exception:
             logger.exception("Failed deleting selected")
             flash("Failed deleting selected", "danger")
-        return redirect(url_for("admin_questions", key=provided))
+        return redirect(url_for("admin_questions", key=request.args.get("key", "")))
     if request.method == "POST" and request.form.get("action") == "delete_subject":
         subj = request.form.get("subject_to_delete") or ""
         if subj:
@@ -1206,38 +1073,11 @@ def admin_questions():
             except Exception:
                 logger.exception("Failed deleting subject")
                 flash("Failed deleting subject", "danger")
-        return redirect(url_for("admin_questions", key=provided))
-    return render_template("admin_questions.html", key=provided, questions=rows, subjects=subjects, message=FOOTER_MESSAGE)
+        return redirect(url_for("admin_questions", key=request.args.get("key", "")))
+    return render_template("admin_questions.html", key=request.args.get("key", ""), questions=rows, subjects=subjects, message=FOOTER_MESSAGE)
 
-
-# drive image route
-@app.route("/drive-image/<path:file_id>")
-def drive_image(file_id: str):
-    """
-    Serve an image stored on Google Drive by file_id.
-    - If gdrive.fetch_drive_image_bytes is present and returns bytes, send them.
-    - Otherwise fall back to static img/logo.png.
-    """
-    try:
-        if gdrive and hasattr(gdrive, "fetch_drive_image_bytes"):
-            try:
-                data, content_type = gdrive.fetch_drive_image_bytes(file_id)
-                if data:
-                    return Response(data, mimetype=content_type)
-            except Exception:
-                logger.exception("drive_image via gdrive failed")
-    except Exception:
-        logger.exception("drive_image top-level error")
-
-    # fallback to static logo
-    logo = Path(app.static_folder) / "img" / "logo.png"
-    if logo.exists():
-        return send_from_directory(str(logo.parent), logo.name)
-    return abort(404)
-
-
-# exercise_table route (safe sqlite preview)
-@app.route("/exercise-table/<path:name>", methods=["GET", "POST"]) 
+@app.route("/exercise-table/<path:name>", methods=["GET", "POST"])
+@admin_required
 def exercise_table(name: str):
     if request.method == "GET":
         return make_response(jsonify({"ok": True, "endpoint": f"/exercise-table/{name}", "note": "POST SQL to this URL using form-data or JSON with key 'schema'"}), 200)
@@ -1291,49 +1131,13 @@ def exercise_table(name: str):
         logger.exception("exercise_table error")
         return make_response(jsonify({"ok": False, "error": str(e)}), 500)
 
+@app.route("/api/vapid")
+def api_vapid():
+    if not VAPID_PUBLIC_KEY:
+        return jsonify({"ok": False, "error": "vapid-not-configured"}), 503
+    return jsonify({"ok": True, "publicKey": VAPID_PUBLIC_KEY})
 
-# subjects helper
-def get_subjects_for_endpoint(endpoint_norm):
-    subjects = []
-    try:
-        if USE_SQLITE and NN_LOCAL_DB:
-            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
-                c = conn.cursor()
-                c.execute("SELECT DISTINCT subject FROM subscriptions WHERE endpoint = ?", (endpoint_norm,))
-                rows = c.fetchall()
-                subjects = [r[0] for r in rows if r and r[0]]
-            return sorted(list(dict.fromkeys(subjects)))
-        with SUBS_LOCK:
-            if SUBSCRIPTIONS_FILE.exists():
-                try:
-                    with SUBSCRIPTIONS_FILE.open("r", encoding="utf-8") as f:
-                        arr = json.load(f) or []
-                        if not isinstance(arr, list):
-                            arr = []
-                except Exception:
-                    logger.exception("Failed reading subscriptions.json in get_subjects_for_endpoint")
-                    arr = []
-            else:
-                arr = []
-        for r in arr:
-            if not isinstance(r, dict):
-                continue
-            subj = r.get("subject") or "Other"
-            sub = r.get("subscription") or {}
-            ep = sub.get("endpoint") or sub.get("url")
-            try:
-                if ep and normalize_endpoint(ep) == endpoint_norm:
-                    subjects.append(subj)
-            except Exception:
-                continue
-        return sorted(list(dict.fromkeys(subjects)))
-    except Exception:
-        logger.exception("get_subjects_for_endpoint failed")
-        return []
-
-
-# save-subscription route
-@app.route("/save-subscription", methods=["POST"]) 
+@app.route("/save-subscription", methods=["POST"])
 def save_subscription_route():
     try:
         payload = request.get_json(force=True, silent=True) or {}
@@ -1345,8 +1149,7 @@ def save_subscription_route():
                 subscription = {"endpoint": subscription}
         subject = (payload.get("subject") or request.args.get("subject") or "Other")
         client_id = payload.get("client_id") or ""
-        if (not subscription or not isinstance(subscription, dict)
-                or not (subscription.get("endpoint") or subscription.get("url"))):
+        if (not subscription or not isinstance(subscription, dict) or not (subscription.get("endpoint") or subscription.get("url"))):
             return make_response(jsonify({"ok": False, "error": "subscription required"}), 400)
         endpoint = subscription.get("endpoint") or subscription.get("url")
         try:
@@ -1354,7 +1157,11 @@ def save_subscription_route():
         except Exception:
             normalized_endpoint = endpoint
         ok = save_subscription(subject, client_id, subscription)
-        subjects_for_endpoint = get_subjects_for_endpoint(normalized_endpoint)
+        subjects_for_endpoint = []
+        try:
+            subjects_for_endpoint = get_subjects_for_endpoint(normalized_endpoint)
+        except Exception:
+            subjects_for_endpoint = []
         resp = make_response(jsonify({"ok": ok, "subjects": subjects_for_endpoint}), (200 if ok else 500))
         try:
             if ok and normalized_endpoint:
@@ -1366,8 +1173,6 @@ def save_subscription_route():
         logger.exception("save-subscription failed")
         return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
 
-
-# delete_subscription implementation
 def delete_subscription(subject, subscription_obj):
     try:
         if isinstance(subscription_obj, str):
@@ -1385,10 +1190,7 @@ def delete_subscription(subject, subscription_obj):
         if USE_SQLITE and NN_LOCAL_DB:
             with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
                 c = conn.cursor()
-                c.execute(
-                    "DELETE FROM subscriptions WHERE endpoint=? AND subject=?",
-                    (endpoint_norm, subject)
-                )
+                c.execute("DELETE FROM subscriptions WHERE endpoint=? AND subject=?", (endpoint_norm, subject))
                 conn.commit()
             return True
         with SUBS_LOCK:
@@ -1431,9 +1233,7 @@ def delete_subscription(subject, subscription_obj):
         logger.exception("delete_subscription failed")
         return False
 
-
-# unsubscribe route
-@app.route("/unsubscribe", methods=["POST"]) 
+@app.route("/unsubscribe", methods=["POST"])
 def unsubscribe_route():
     try:
         payload = request.get_json(force=True, silent=True) or {}
@@ -1449,7 +1249,6 @@ def unsubscribe_route():
     except Exception:
         logger.exception("unsubscribe failed")
         return make_response(jsonify({"ok": False}), 500)
-
 
 @app.route("/subscriptions/check", methods=["GET"])
 def subscriptions_check():
@@ -1472,14 +1271,10 @@ def subscriptions_check():
         logger.exception("subscriptions_check top-level failed")
         return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
 
-
-@app.route("/notifications/pending", methods=["GET"]) 
+@app.route("/notifications/pending", methods=["GET"])
 def notifications_pending():
     try:
-        endpoint = (
-            request.args.get("endpoint", "").strip()
-            or (request.cookies.get("nn_subscription") or "").strip()
-        )
+        endpoint = (request.args.get("endpoint", "").strip() or (request.cookies.get("nn_subscription") or "").strip())
         if not endpoint:
             return jsonify({"ok": True, "items": []}), 200
         items = fetch_pending_notifications(endpoint)
@@ -1488,8 +1283,7 @@ def notifications_pending():
         app.logger.exception("notifications_pending failed")
         return jsonify({"ok": False, "items": []}), 200
 
-
-@app.route("/notifications/ack", methods=["POST"]) 
+@app.route("/notifications/ack", methods=["POST"])
 def notifications_ack():
     try:
         payload = request.get_json(force=True, silent=True) or {}
@@ -1505,6 +1299,68 @@ def notifications_ack():
         logger.exception("notifications_ack failed")
         return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
 
+@app.route("/admin/debug/subscriptions")
+@admin_required
+def admin_debug_subs():
+    subs = list_subscriptions()
+    return make_response(jsonify({"ok": True, "count": len(subs), "subscriptions": subs}), 200)
+
+@app.route("/admin/debug/notifications")
+@admin_required
+def admin_debug_notifications():
+    try:
+        if USE_SQLITE and NN_LOCAL_DB:
+            with sqlite3.connect(str(NN_LOCAL_DB)) as conn:
+                c = conn.cursor()
+                c.execute("SELECT id, endpoint, subject, title, body, data, created_at, delivered, delivered_at FROM notifications ORDER BY created_at DESC LIMIT 200")
+                rows = c.fetchall()
+            out = []
+            for r in rows:
+                out.append({
+                    "id": r[0], "endpoint": r[1], "subject": r[2], "title": r[3], "body": r[4],
+                    "data": json.loads(r[5]) if r[5] else {}, "created_at": r[6], "delivered": bool(r[7]), "delivered_at": r[8]
+                })
+            return make_response(jsonify({"ok": True, "count": len(out), "notifications": out}), 200)
+        arr = _read_notifications_json()
+        return make_response(jsonify({"ok": True, "count": len(arr), "notifications": arr}), 200)
+    except Exception:
+        logger.exception("admin_debug_notifications failed")
+        return make_response(jsonify({"ok": False, "error": "server-error"}), 500)
+
+@app.route("/admin/debug/files")
+@admin_required
+def admin_debug_files():
+    files = {
+        "coding_exercises": CODING_LOCAL_PATH,
+        "quiz_forms": QUIZ_LOCAL_PATH,
+        "health_data": HEALTH_LOCAL_PATH,
+        "notifications": NOTIFICATIONS_FILE,
+        "subscriptions": SUBSCRIPTIONS_FILE
+    }
+    out = {}
+    for name, p in files.items():
+        try:
+            entry = {"path": str(p), "exists": p.exists()}
+            if p.exists():
+                try:
+                    entry["size"] = p.stat().st_size
+                except Exception:
+                    entry["size"] = None
+                try:
+                    txt = p.read_text(encoding="utf-8")
+                    entry["preview"] = txt[:1000]
+                    try:
+                        json.loads(txt)
+                        entry["valid_json"] = True
+                    except Exception as je:
+                        entry["valid_json"] = False
+                        entry["json_error"] = str(je)
+                except Exception as e:
+                    entry["preview_error"] = str(e)
+            out[name] = entry
+        except Exception:
+            out[name] = {"path": str(p), "error": "failed to inspect file"}
+    return jsonify({"ok": True, "files": out})
 
 @app.errorhandler(404)
 def handle_404(e):
@@ -1513,35 +1369,14 @@ def handle_404(e):
     except Exception:
         return render_template("error.html", message=FOOTER_MESSAGE, error=str(e)), 404
 
-
 @app.errorhandler(Exception)
 def handle_exception(e):
     logger.error("Unhandled exception: %s\n%s", e, traceback.format_exc())
     if request.is_json or request.path.startswith("/api/"):
         return make_response(jsonify({"ok": False, "error": str(e)}), 500)
-    # In production you may want to hide `str(e)` to avoid leaking internals
     return render_template("error.html", status=500, message=FOOTER_MESSAGE, error=str(e)), 500
 
-
-def _log_templates():
-    needed = ["base.html", "index.html", "content.html", "questions.html", "quiz_forms.html",
-              "coding.html", "health.html", "health_detail.html", "rules.html",
-              "error.html", "admin_announcement.html", "admin_questions.html", "errors/404.html",
-              "admin_exercises.html"]
-    present, missing = [], []
-    for t in needed:
-        try:
-            app.jinja_env.get_or_select_template(t)
-            present.append(t)
-        except Exception:
-            missing.append(t)
-    logger.info("Templates present: %s", present)
-    if missing:
-        logger.warning("Templates missing: %s", missing)
-
-
-# Safe helper used by exercise_table
-def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
+def _safe_create_and_populate_sqlite(schema_sql: str, sample_data):
     import sqlite3 as _sqlite
     conn = _sqlite.connect(":memory:")
     conn.row_factory = _sqlite.Row
@@ -1590,8 +1425,7 @@ def _safe_create_and_populate_sqlite(schema_sql: str, sample_data) -> tuple:
     conn.commit()
     return conn, [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
 
-
-# Now attempt Drive/Sheets initialization (guarded)
+# Attempt Drive/Sheets initialization (guarded)
 try:
     drive_init_info = initialize_drive_helpers()
     logger.info("Drive init: %s", drive_init_info)
@@ -1599,7 +1433,23 @@ except Exception as err:
     logger.exception("Drive initialization failed at runtime: %s", err)
     drive_init_info = {"gdrive_available": False, "gsheets_available": False, "errors": [str(err)]}
 
-# Show template status
+# Startup template inventory logging
+def _log_templates():
+    needed = ["base.html", "index.html", "content.html", "questions.html", "quiz_forms.html",
+              "coding.html", "health.html", "health_detail.html", "rules.html",
+              "error.html", "admin_announcement.html", "admin_questions.html", "errors/404.html",
+              "admin_exercises.html"]
+    present, missing = [], []
+    for t in needed:
+        try:
+            app.jinja_env.get_or_select_template(t)
+            present.append(t)
+        except Exception:
+            missing.append(t)
+    logger.info("Templates present: %s", present)
+    if missing:
+        logger.warning("Templates missing: %s", missing)
+
 _log_templates()
 
 if __name__ == "__main__":

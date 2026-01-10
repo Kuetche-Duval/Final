@@ -1072,22 +1072,218 @@ def admin_questions():
         return redirect(url_for("admin_questions", key=request.args.get("key", "")))
     return render_template("admin_questions.html", key=request.args.get("key", ""), questions=rows, subjects=subjects, message=FOOTER_MESSAGE)
 
+# --- SQL PATCH START ---
+
+# Small constants for sandbox behaviour
+_SQL_MAX_ROWS = 1000        # max rows to keep per SELECT result
+_SQL_PROGRESS_CALLS = 5000  # abort if progress handler called more than this
+
+def mysql_to_sqlite_compat(sql_text: str) -> str:
+    """
+    Lightweight MySQL -> SQLite compatibility layer for typical GCE queries.
+    Not exhaustive, but covers common constructs used in A-Level examples.
+    """
+    if not sql_text:
+        return sql_text
+    s = sql_text
+
+    # Basic replacements (case-insensitive)
+    replacements = [
+        (r"\bNOW\(\)", "datetime('now')"),
+        (r"\bCURDATE\(\)", "date('now')"),
+        (r"\bAUTO_INCREMENT\b", "AUTOINCREMENT"),
+        (r"ENGINE\s*=\s*\w+", ""),
+    ]
+    for pat, repl in replacements:
+        s = re.sub(pat, repl, s, flags=re.I)
+
+    # Function-style replacements that need regex groups
+    try:
+        s = re.sub(r"DATE_FORMAT\(([^,]+),\s*'(%[^']*)'\)", lambda m: f"strftime('{m.group(2)}', {m.group(1)})", s, flags=re.I)
+    except Exception:
+        pass
+    try:
+        s = re.sub(r"\bDATEDIFF\s*\(\s*NOW\(\)\s*,\s*([^)]+)\)", lambda m: f"CAST((julianday(datetime('now')) - julianday({m.group(1)})) AS INTEGER)", s, flags=re.I)
+    except Exception:
+        pass
+    try:
+        # Convert DAYOFWEEK(x) -> (CAST(strftime('%w', x) AS INTEGER) + 1)  (SQLite %w: Sunday=0..6)
+        s = re.sub(r"\bDAYOFWEEK\s*\(\s*([^)]+)\s*\)", lambda m: f"(CAST(strftime('%w', {m.group(1)}) AS INTEGER) + 1)", s, flags=re.I)
+    except Exception:
+        pass
+
+    return s
+
+def set_query_timeout(conn: sqlite3.Connection, max_calls: int = _SQL_PROGRESS_CALLS):
+    """
+    Install a sqlite progress handler that aborts long-running queries.
+    """
+    state = {"calls": 0}
+    def _handler():
+        state["calls"] += 1
+        if state["calls"] > max_calls:
+            return 1  # non-zero aborts the running statement
+        return 0
+    try:
+        conn.set_progress_handler(_handler, 1000)
+    except Exception:
+        # older SQLite/python builds may not support this; ignore if unavailable
+        pass
+
+def split_sql_statements(sql: str):
+    """
+    Basic splitting of SQL text into statements by semicolon.
+    Suitable for classroom DDL/DML/SELECT usage (avoids executescript).
+    """
+    if not sql:
+        return []
+    return [s.strip() for s in re.split(r';\s*(?=\b)', sql) if s.strip()]
+
+def _is_query_statement(stmt: str) -> bool:
+    s = stmt.lstrip().lower()
+    return s.startswith("select") or s.startswith("with") or s.startswith("pragma") or s.startswith("explain")
+
+def _safe_create_and_populate_sqlite(schema_sql: str, sample_data):
+    """
+    Create an in-memory sqlite DB, run schema_sql (split into statements),
+    populate sample_data (dict of table -> list of dict rows), and return:
+      (conn, tables, statements_results)
+
+    statements_results: list of {sql, ok, type, columns, rows, error}
+    """
+    import sqlite3 as _sqlite
+    conn = _sqlite.connect(":memory:")
+    conn.row_factory = _sqlite.Row
+    cur = conn.cursor()
+
+    # Safety: enable foreign keys and set a timeout handler
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
+    except Exception:
+        pass
+    set_query_timeout(conn)
+
+    statements_results = []
+    tables = []
+
+    # Apply MySQL->SQLite compatibility to schema before splitting
+    schema_sql = mysql_to_sqlite_compat(schema_sql or "")
+
+    # Execute statements one by one, capturing SELECT outputs
+    if schema_sql:
+        stmts = split_sql_statements(schema_sql)
+        for s in stmts:
+            rec = {"sql": s, "ok": False, "type": None, "columns": [], "rows": [], "error": None}
+            try:
+                if _is_query_statement(s):
+                    rec["type"] = "select"
+                    try:
+                        cur.execute(s)
+                        if cur.description:
+                            cols = [d[0] for d in cur.description]
+                            rec["columns"] = cols
+                            fetched = cur.fetchall()
+                            # convert to dict rows but limit size
+                            rec["rows"] = [dict(r) for r in fetched[:_SQL_MAX_ROWS]]
+                        else:
+                            rec["columns"] = []
+                            rec["rows"] = []
+                        rec["ok"] = True
+                    except Exception as qe:
+                        rec["error"] = str(qe)
+                        rec["ok"] = False
+                else:
+                    rec["type"] = "ddl_or_dml"
+                    try:
+                        # use execute (not executescript) to ensure errors are caught and reported
+                        cur.execute(s)
+                        conn.commit()
+                        rec["ok"] = True
+                    except Exception as de:
+                        rec["error"] = str(de)
+                        rec["ok"] = False
+            except Exception as e:
+                rec["error"] = str(e)
+                rec["ok"] = False
+            statements_results.append(rec)
+
+    # Populate sample_data if provided (creates simple TEXT columns if table missing)
+    if sample_data and isinstance(sample_data, dict):
+        for table, rows in sample_data.items():
+            if not isinstance(rows, list):
+                continue
+            cols = []
+            for r in rows:
+                if isinstance(r, dict):
+                    for k in r.keys():
+                        if k not in cols:
+                            cols.append(k)
+            if not cols:
+                continue
+            try:
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+                if not cur.fetchone():
+                    cols_def = ", ".join([f'"{c}" TEXT' for c in cols])
+                    cur.execute(f'CREATE TABLE "{table}" ({cols_def});')
+                    conn.commit()
+            except Exception:
+                pass
+            placeholders = ", ".join(["?"] * len(cols))
+            col_list_sql = ", ".join([f'"{c}"' for c in cols])
+            insert_sql = f'INSERT INTO "{table}" ({col_list_sql}) VALUES ({placeholders})'
+            for r in rows:
+                try:
+                    vals = [str(r.get(c, "")) if isinstance(r, dict) else "" for c in cols]
+                    cur.execute(insert_sql, vals)
+                except Exception:
+                    continue
+        conn.commit()
+
+    # discover tables for preview
+    try:
+        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    except Exception:
+        tables = []
+
+    return conn, tables, statements_results
+
+
 @app.route("/exercise-table/<path:name>", methods=["GET", "POST"])
 def exercise_table(name: str):
+    """
+    POST JSON or form-data:
+      - schema: string (DDL/DML and/or queries)
+      - query: optional string (a SELECT/WITH/EXPLAIN to run after schema)
+      - sample or sample_data: optional JSON object for sample inserts { "TableName": [ {col:val}, ... ] }
+
+    Response JSON includes:
+      - ok, name, tables, preview (table previews), statements (per-statement execution results),
+        query_result (if a separate 'query' was provided or schema started with SELECT)
+    """
     if request.method == "GET":
-        return make_response(jsonify({"ok": True, "endpoint": f"/exercise-table/{name}", "note": "POST SQL to this URL using form-data or JSON with key 'schema'"}), 200)
+        return make_response(jsonify({"ok": True, "endpoint": f"/exercise-table/{name}", "note": "POST SQL to this URL using form-data or JSON with keys 'schema' and optional 'query' (and 'sample')"}), 200)
+
+    # read payload safely from JSON or form
     payload_schema = ""
     payload_sample = None
+    payload_query = None
     if request.is_json:
         try:
             j = request.get_json(silent=True) or {}
             payload_schema = j.get("schema") or j.get("sql") or ""
-            payload_sample = j.get("sample") or j.get("sample_data") or {}
+            payload_sample = j.get("sample") or j.get("sample_data") or None
+            payload_query = j.get("query") or j.get("select") or None
         except Exception:
             payload_schema = ""
             payload_sample = None
+            payload_query = None
+
     if not payload_schema:
         payload_schema = (request.form.get("schema") or request.form.get("sql") or "").strip()
+    if not payload_query:
+        payload_query = (request.form.get("query") or request.form.get("select") or "").strip() or None
+
+    # fallback: raw body
     if not payload_schema:
         try:
             raw = (request.get_data(as_text=True) or "").strip()
@@ -1096,35 +1292,73 @@ def exercise_table(name: str):
                     try:
                         j = json.loads(raw)
                         payload_schema = j.get("schema") or j.get("sql") or ""
-                        payload_sample = j.get("sample") or {}
+                        payload_query = payload_query or j.get("query")
+                        payload_sample = payload_sample or j.get("sample") or {}
                     except Exception:
                         payload_schema = raw
                 else:
                     payload_schema = raw
         except Exception:
             pass
-    if not payload_schema:
-        return make_response(jsonify({"ok": False, "error": "schema (SQL) required"}), 400)
+
     if payload_sample is None:
         try:
             sample_text = (request.form.get("sample") or request.form.get("sample_data") or "").strip()
             payload_sample = json.loads(sample_text) if sample_text else {}
         except Exception:
             payload_sample = {}
+
+    if not payload_schema and not payload_query:
+        return make_response(jsonify({"ok": False, "error": "schema (SQL) or query required"}), 400)
+
     try:
-        conn, tables = _safe_create_and_populate_sqlite(payload_schema, payload_sample)
+        # create sandbox DB and run schema statements
+        conn, tables, statements = _safe_create_and_populate_sqlite(payload_schema or "", payload_sample or {})
         preview = {}
+        # produce table previews (limit rows)
         for t in tables:
             try:
-                cur = conn.execute(f"SELECT * FROM \"{t}\" LIMIT 50")
+                cur = conn.execute(f'SELECT * FROM "{t}" LIMIT 50')
                 preview[t] = [dict(r) for r in cur.fetchall()]
             except Exception:
                 preview[t] = []
+
+        # If user provided a separate query, pre-process it (compat) and run it
+        query_result = None
+        if payload_query:
+            try:
+                # Apply MySQL->SQLite compatibility
+                payload_query_proc = mysql_to_sqlite_compat(payload_query)
+                cur = conn.cursor()
+                cur.execute(payload_query_proc)
+                cols = [d[0] for d in cur.description] if cur.description else []
+                rows = cur.fetchall()
+                # return at most _SQL_MAX_ROWS rows
+                query_result = {"ok": True, "columns": cols, "rows": [dict(r) for r in rows[:_SQL_MAX_ROWS]], "row_count": len(rows)}
+            except Exception as qe:
+                query_result = {"ok": False, "error": str(qe)}
+        else:
+            # If no separate query but schema itself included SELECT statements,
+            # include their results (already in statements list) under query_result if any select exists.
+            sel_stmts = [s for s in statements if s.get("type") == "select"]
+            if sel_stmts:
+                last = sel_stmts[-1]
+                query_result = {"ok": last.get("ok", False), "columns": last.get("columns", []), "rows": last.get("rows", []), "error": last.get("error")}
+
         conn.close()
-        return make_response(jsonify({"ok": True, "name": name, "tables": tables, "preview": preview}), 200)
+        return make_response(jsonify({
+            "ok": True,
+            "name": name,
+            "tables": tables,
+            "preview": preview,
+            "statements": statements,
+            "query_result": query_result
+        }), 200)
     except Exception as e:
         logger.exception("exercise_table error")
         return make_response(jsonify({"ok": False, "error": str(e)}), 500)
+
+# --- SQL PATCH END ---
 
 @app.route("/api/vapid")
 def api_vapid():
@@ -1367,55 +1601,6 @@ def handle_exception(e):
     if request.is_json or request.path.startswith("/api/"):
         return make_response(jsonify({"ok": False, "error": str(e)}), 500)
     return render_template("error.html", status=500, message=FOOTER_MESSAGE, error=str(e)), 500
-
-def _safe_create_and_populate_sqlite(schema_sql: str, sample_data):
-    import sqlite3 as _sqlite
-    conn = _sqlite.connect(":memory:")
-    conn.row_factory = _sqlite.Row
-    cur = conn.cursor()
-    if schema_sql:
-        try:
-            cur.executescript(schema_sql)
-        except Exception:
-            stmts = [s.strip() for s in re.split(r';\s*(?=\b)', schema_sql) if s.strip()]
-            for s in stmts:
-                try:
-                    cur.executescript(s)
-                except Exception:
-                    try:
-                        cur.execute(s)
-                    except Exception:
-                        continue
-    if sample_data and isinstance(sample_data, dict):
-        for table, rows in sample_data.items():
-            if not isinstance(rows, list):
-                continue
-            cols = []
-            for r in rows:
-                if isinstance(r, dict):
-                    for k in r.keys():
-                        if k not in cols:
-                            cols.append(k)
-            if not cols:
-                continue
-            try:
-                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
-                if not cur.fetchone():
-                    cols_def = ", ".join([f'"{c}" TEXT' for c in cols])
-                    cur.execute(f'CREATE TABLE "{table}" ({cols_def});')
-            except Exception:
-                pass
-            placeholders = ", ".join(["?"] * len(cols))
-            col_list_sql = ", ".join([f'"{c}"' for c in cols])
-            insert_sql = f'INSERT INTO "{table}" ({col_list_sql}) VALUES ({placeholders})'
-            for r in rows:
-                try:
-                    vals = [str(r.get(c, "")) if isinstance(r, dict) else "" for c in cols]
-                    cur.execute(insert_sql, vals)
-                except Exception:
-                    continue
-    conn.commit()
-    return conn, [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
 
 # Attempt Drive/Sheets initialization (guarded)
 try:

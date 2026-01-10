@@ -292,5 +292,36 @@
       "Transient RC circuits"
     ],
     "notes": "Paper 2 style MCQs focusing on calculations, equivalent C, energy and time-constant reasoning."
-  }
+  },
+  {
+      "name": "Physics A-Level — Mechanics & Measurements (Part 1)",
+      "form_id": "1XY2aLr9yGp2rSHitSHhIeeekDbbgAJa_whbf6hK8lm0",
+      "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSep-QuqIK4pLkz-3fPuUiAL3FjXd-aTYeVwsdeTptvuWu8o7A/viewform",
+      "subject": [
+        "Physics"
+      ],
+      "topics": [
+        "Physical quantities & units",
+        "Vectors & scalars",
+        "Kinematics",
+        "Newton’s laws",
+        "Work, energy & power"
+      ],
+      "notes": "GCE A-Level Physics — balanced MCQs with full reasoning."
+    },
+    {
+      "name": "Physics A-Level — Dynamics & Circular Motion (Part 2)",
+      "form_id": "12LmMpTCU8N6Co4dd9ENiuFKo-g8nMOttrUfDFpelxZw",
+      "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScTWyfvlFouMmn1vWXknSXMHUm5j-EAWMePP3lr8WLsPJUFtg/viewform",
+      "subject": [
+        "Physics"
+      ],
+      "topics": [
+        "Newton’s laws",
+        "Friction",
+        "Circular motion",
+        "Momentum & impulse"
+      ],
+      "notes": "Balanced MCQs — GCE A-Level standard"
+    }
 ]

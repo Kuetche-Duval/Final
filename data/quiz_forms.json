@@ -56,14 +56,6 @@
         "notes": "Part 2 continues into hybridisation, MO theory, bond order, resonance and physical properties resulting from bonding choices."
     },
     {
-        "name": "Structure & Bonding — Part 3",
-        "subject": ["Chemistry"],
-        "form_id": "",
-        "form_answer_link":"https://docs.google.com/forms/d/e/1FAIpQLSeIVUtLa31juKXQVMgKM5IDtnyL2qXLo83K8Z3VmLAdjkA6UA/viewform",
-        "topics": ["Crystal lattices and unit cells", "Packing (ccp/hcp/bcc)", "Ionic vs molecular vs covalent network solids", "Defects", "Intermolecular force trends"],
-        "notes": "Part 3 completes structure and bonding with solid-state structure, packing, defects and physical property consequences."
-    },
-    {
         "name": "Organic Chemistry — Part 1",
         "subject": ["Chemistry"],
         "form_id": "https://docs.google.com/forms/d/1wZDXL2HrO1I3gzA4cNjJALvGtChZ4vtVX8raQgsY5UA/edit",
@@ -78,14 +70,6 @@
         "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdxY8J95Nh6qv6M9a8bmoblf6nz2bIan-W5hnjI9VrJE69mxQ/viewform",
         "topics": ["Reaction mechanisms", "SN1/SN2", "E1/E2", "Electrophilic addition", "Oxidation/reduction of organics"],
         "notes": "Part 2 focuses on common mechanism types and the conditions that favour each pathway; essential for problem-solving."
-    },      
-    {
-        "name": "Organic Chemistry — Part 3",
-        "subject": ["Chemistry"],
-        "form_id": "",
-        "form_answer_link": "",
-        "topics": ["Halogenoalkane reactions", "Alcohols oxidation & substitution", "Carbonyl chemistry", "Esters and saponification", "Polymers"],
-        "notes": "Part 3 covers reactions typical to functional groups and applications including polymer and acyl chemistry."
     },
     {
         "name": "Inorganic Chemistry — Part 1",
@@ -137,9 +121,7 @@
     "name": "Differentiation — A-Level",
     "form_id": "https://docs.google.com/forms/d/1TeP621iWeDvq9iHdHV0fBuV3LS2lbI_4IqJskXNMNwg/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScbhm_jbsPJMD5NMdglXGJddEodQz0yCtIoGoAdYafKBfDPzw/viewform",
-    "subject": [
-      "Mathematics"
-    ],
+    "subject": ["Mathematics"],
     "topics": [
       "Power rule",
       "Chain rule",
@@ -153,9 +135,7 @@
     "name": "Integration — A-Level",
     "form_id": "https://docs.google.com/forms/d/1jccKnyoBIB0oYlJvDyGFtiIf5vH3OViTfd9LYkIpamM/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdhQKpnERt10RZIi6_QjlsnBnPaVOEYXf6MBcjHft9910pUXw/viewform",
-    "subject": [
-      "Mathematics"
-    ],
+    "subject": ["Mathematics"],
     "topics": [
       "Power rule",
       "Substitution",
@@ -169,9 +149,7 @@
     "name": "Differential Equations — A-Level",
     "form_id": "https://docs.google.com/forms/d/1ldpTnOYgioNrngBXmLaMFSauNuOs0vx1sz1BOvI5Pds/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSc7NOki03B85X7oiqI7Y3H-0AYW6H8vFYV_e4Y_dNK_yY9YNg/viewform",
-    "subject": [
-      "Mathematics"
-    ],
+    "subject": ["Mathematics"],
     "topics": [
       "First-order separable",
       "Linear first-order",
@@ -185,9 +163,7 @@
     "name": "Trigonometry — A-Level",
     "form_id": "https://docs.google.com/forms/d/13asTrtIp4jrtavKZo8jK_foViKF2QLJ1TbmIUt2P_RY/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdE3vKRzGvJVSg6F4ZSKooA4yxEhi4Fx6jg595-mrHJx8ZmEg/viewform",
-    "subject": [
-      "Mathematics"
-    ],
+    "subject": ["Mathematics"],
     "topics": [
       "Identities",
       "Solving equations",
@@ -201,9 +177,7 @@
     "name": "Gravitational Fields — A-Level Physics (20 MCQs)",
     "form_id": "https://docs.google.com/forms/d/1SwcSXLHbzRytS5KMVMwPHN9t5L0yqq-uNHbb2xMZOcM/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSe7GR1IFZqVQkWdqYBWUFI7dCwMPaayvD0oXcKc8rwqtST4qA/viewform",
-    "subject": [
-      "Physics"
-    ],
+    "subject": ["Physics"],
     "topics": [
       "Newton's law of gravitation",
       "Gravitational field strength",
@@ -217,9 +191,7 @@
     "name": "Electric Fields — A-Level Physics (20 MCQs)",
     "form_id": "https://docs.google.com/forms/d/1rYhhanug6my5AYtAbjdbG7Em6sf9_nPmq99KmnWSVxI/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScjR6Ocg1BJAkIm1Q4edI8N4qhMk8eQ3HUwoavb185d0BNZ6w/viewform",
-    "subject": [
-      "Physics"
-    ],
+    "subject": ["Physics"],
     "topics": [
       "Coulomb's law",
       "E-field & potential",
@@ -233,9 +205,7 @@
     "name": "AC Circuits — A-Level Physics (20 MCQs)",
     "form_id": "https://docs.google.com/forms/d/1liruk9BGnBBpoW49Wk_43uFQQFSyU4_5eKx7bpNmRhg/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSfnGR1Zil1Gzqu4XI2YqmVC5hGu7GPAzJRAaBJ8QGENy3w5qA/viewform",
-    "subject": [
-      "Physics"
-    ],
+    "subject": ["Physics"],
     "topics": [
       "AC vs DC",
       "RLC circuits",
@@ -249,9 +219,7 @@
     "name": "Thermodynamics — A-Level Physics (20 MCQs)",
     "form_id": "https://docs.google.com/forms/d/1NC-QXHKJDfYOT7YX5H6FQ9gg8V0RNZ-jY9rfqZWykzA/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdIt7VOZ01BPUBtgpr-I8vNbhTjGsQKjcvuG-xq2g4j0JxbCg/viewform",
-    "subject": [
-      "Physics"
-    ],
+    "subject": ["Physics"],
     "topics": [
       "Laws of thermodynamics",
       "Internal energy",
@@ -265,9 +233,7 @@
     "name": "Calorimetry — A-Level Physics (20 MCQs)",
     "form_id": "https://docs.google.com/forms/d/1Due4iY9aRHY-d5mTe9g9ZKFgUw87cKuli_7Ry_wseIE/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSfORk19GHLfsf_b0AZeoPr0EAzwywbqh6FHE6s_VMXbOkv47g/viewform",
-    "subject": [
-      "Physics"
-    ],
+    "subject": ["Physics"],
     "topics": [
       "Heat capacity",
       "Latent heat",
@@ -281,9 +247,7 @@
     "name": "Capacitors — A-Level Physics (20 MCQs)",
     "form_id": "https://docs.google.com/forms/d/1vYfD_PwAZZePWAKSDkU8HiAlK_umZb8ZoRFbR50KOE0/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSeZLBgO3Z4RnJnhkXKCEM0SkfM4gL7wGdyITmt3McIpguciKA/viewform",
-    "subject": [
-      "Physics"
-    ],
+    "subject": ["Physics"],
     "topics": [
       "Capacitance definition",
       "Series/parallel combinations",
@@ -297,9 +261,7 @@
       "name": "Physics A-Level — Mechanics & Measurements (Part 1)",
       "form_id": "https://docs.google.com/forms/d/1XY2aLr9yGp2rSHitSHhIeeekDbbgAJa_whbf6hK8lm0/edit",
       "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSep-QuqIK4pLkz-3fPuUiAL3FjXd-aTYeVwsdeTptvuWu8o7A/viewform",
-      "subject": [
-        "Physics"
-      ],
+      "subject": ["Physics"],
       "topics": [
         "Physical quantities & units",
         "Vectors & scalars",
@@ -313,9 +275,7 @@
       "name": "Physics A-Level — Dynamics & Circular Motion (Part 2)",
       "form_id": "https://docs.google.com/forms/d/12LmMpTCU8N6Co4dd9ENiuFKo-g8nMOttrUfDFpelxZw/edit",
       "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScTWyfvlFouMmn1vWXknSXMHUm5j-EAWMePP3lr8WLsPJUFtg/viewform",
-      "subject": [
-        "Physics"
-      ],
+      "subject": ["Physics"],
       "topics": [
         "Newton’s laws",
         "Friction",
@@ -328,7 +288,8 @@
     "name": "Biology — Cells & Microscopy (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/1YYYjVn41qE7RHuDKGXEePzd8I5schJW0UWO3aFUp9uE/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScO6K0HyP69VcQzT2vsc2M9nEVgLa-2DnombocXFX5bNmTbfQ/viewform",
-    "topics": [
+    "subject": ["Biology"],
+      "topics": [
       "Cell structure",
       "Organelles",
       "Microscopy",
@@ -340,6 +301,7 @@
     "name": "Biology — Biological Molecules (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/1ukugt_v47k2XN3Bd2bcIMwM6zpDy8ku8510bWM3A3PM/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSfIqEIzRWf8F29N2WVmdoEK5ommeDB957-S4x89VUGoXIK9uA/viewform",
+    "subject": ["Biology"],
     "topics": [
       "Carbohydrates",
       "Lipids",
@@ -352,6 +314,7 @@
     "name": "Biology — Enzymes & Metabolism (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/15EZpNzt7HkK54P6GFnU-xOgNOhVkzgDU3hlP_LyYPTQ/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSes5MOR52NNaZcNqh3prfXRHegTVqPj87pNCkJJJYRLuAGT_Q/viewform",
+    "subject": ["Biology"],
     "topics": [
       "Enzyme kinetics",
       "Factors affecting rate",
@@ -364,6 +327,7 @@
     "name": "Biology — Genetics & Inheritance (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/1XE2jBYOK5-krkNDMyHSoeSvzzWTeBn3lGSNSaC18vKU/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSfxfpA7GB4JY711hD2ASWcEJXw80ueQ_hCRthf4g2ujl-IyvQ/viewform",
+    "subject": ["Biology"],
     "topics": [
       "Mendelian crosses",
       "DNA structure & replication",
@@ -376,6 +340,7 @@
     "name": "Biology — Transport in Plants (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/17wXhGnzokmxD20Kms41G0kalbGaclJlRBIjW3Fh-aNc/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScR-0cRP70gxepYhcG4fsUyuLpnS3q3XbF7_gpeqfYaT0rz7w/viewform",
+    "subject": ["Biology"],
     "topics": [
       "Xylem & phloem",
       "Transpiration",
@@ -388,6 +353,7 @@
     "name": "Biology — Cells & Microscopy (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/1cE77BtG8IztTv8mfzXiTLV-7JihKfCoxt_dinql8Qgw/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScKlgY3WeMJcWu5LMUbD4D07j0EASSgUzZ_5tTMlt2uMWSgpQ/viewform",
+    "subject": ["Biology"],
     "topics": [
       "Cell structure",
       "Organelles",
@@ -400,6 +366,7 @@
     "name": "Biology — Biological Molecules (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/1Xk_QrIt1C3htEjRwH7B1cj2I6yUq8Y9NBEt4mA1-6VA/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSf50WxvDmF8qgLqlp9eneVTh3FJnJLlshkncEw9xALWe5655w/viewform",
+    "subject": ["Biology"],
     "topics": [
       "Carbohydrates",
       "Lipids",
@@ -412,6 +379,7 @@
     "name": "Biology — Enzymes & Metabolism (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/1Ps76yKw6mBWbjtcRXhs4UvPXo3dr1O6_cWg1GZNT6As/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSftxDXwzcwOwcG7L4ckr_hnEQjuBJdiHQNEoLGCoLxonHTcQQ/viewform",
+    "subject": ["Biology"],
     "topics": [
       "Enzyme kinetics",
       "Factors affecting rate",
@@ -424,6 +392,7 @@
     "name": "Biology — Genetics & Inheritance (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/1AfEMrP1toRNzE6JVGdehFT8GLSG_bDJmPlFjgg0s_OE/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSeSexF_5YnIS1aGq4M0iNM2K25oR-AhpEe7z_yzeXfKao5lag/viewform",
+    "subject": ["Biology"],
     "topics": [
       "Mendelian crosses",
       "DNA structure & replication",
@@ -436,6 +405,7 @@
     "name": "Biology — Transport in Plants (Lower Sixth / A-Level)",
     "form_id": "https://docs.google.com/forms/d/1JK9kzOGVNTOGzn95UNY8QgdUS7MvuqDhQ7VDSz52sYs/edit",
     "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSfL3TteNtpjTH8nBiG3Cj5FiCQne9XSKzi1_f6mr8XVfaJlGA/viewform",
+    "subject": ["Biology"],
     "topics": [
       "Xylem & phloem",
       "Transpiration",

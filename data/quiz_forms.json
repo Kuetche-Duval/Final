@@ -295,7 +295,8 @@
       "Microscopy",
       "Surface area:volume",
       "Cell transport"
-    ]
+    ],
+    "notes": "Balanced Biology MCQs — GCE A-Level standard"
   },
   {
     "name": "Biology — Biological Molecules (Lower Sixth / A-Level)",
@@ -308,7 +309,8 @@
       "Proteins",
       "Nucleic acids",
       "Water & inorganic ions"
-    ]
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
   },
   {
     "name": "Biology — Enzymes & Metabolism (Lower Sixth / A-Level)",
@@ -321,7 +323,8 @@
       "Cofactors & inhibitors",
       "ATP",
       "Metabolic pathways"
-    ]
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
   },
   {
     "name": "Biology — Genetics & Inheritance (Lower Sixth / A-Level)",
@@ -334,7 +337,8 @@
       "Genetic diagrams",
       "Codominance & linkage",
       "Mutation"
-    ]
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
   },
   {
     "name": "Biology — Transport in Plants (Lower Sixth / A-Level)",
@@ -347,7 +351,8 @@
       "Root uptake",
       "Water potential",
       "Translocation"
-    ]
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
   },
   {
     "name": "Biology — Cells & Microscopy (Lower Sixth / A-Level)",
@@ -360,7 +365,8 @@
       "Microscopy",
       "Surface area:volume",
       "Cell transport"
-    ]
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
   },
   {
     "name": "Biology — Biological Molecules (Lower Sixth / A-Level)",
@@ -373,7 +379,8 @@
       "Proteins",
       "Nucleic acids",
       "Water & inorganic ions"
-    ]
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
   },
   {
     "name": "Biology — Enzymes & Metabolism (Lower Sixth / A-Level)",
@@ -386,7 +393,8 @@
       "Cofactors & inhibitors",
       "ATP",
       "Metabolic pathways"
-    ]
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
   },
   {
     "name": "Biology — Genetics & Inheritance (Lower Sixth / A-Level)",
@@ -399,7 +407,8 @@
       "Genetic diagrams",
       "Codominance & linkage",
       "Mutation"
-    ]
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
   },
   {
     "name": "Biology — Transport in Plants (Lower Sixth / A-Level)",
@@ -412,6 +421,147 @@
       "Root uptake",
       "Water potential",
       "Translocation"
-    ]
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "Chemistry — Transition Metals (Part A) — Function 1",
+    "form_id": "https://docs.google.com/forms/d/1-JXf5C9bBaHVAx36I_r9NgIo1-P4-Ov_PuBa27E0xng/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdEsFxm1Dyy8BldC3vqEgCjm-sObFlLGusuiZSVJC_BFQZxJA/viewform",
+    "subject": ["Chemistry"],
+    "topics": [
+      "Transition elements",
+      "Electronic configuration",
+      "Variable oxidation states",
+      "Complexes",
+      "Catalysis"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "Chemistry — Transition Metals (Part B) — Function 1",
+    "form_id": "https://docs.google.com/forms/d/1gXhADSCR_xmHLHKksACsaVUoSEy_4sAjKRpcs3GRCOM/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSedPM-ireK1cJumoCiRhOWJSgpKip3msiXkDBoe6f24BePeXg/viewform",
+    "subject": ["Chemistry"],
+    "topics": [
+      "Coordination chemistry",
+      "Stability of complexes",
+      "Redox behaviour",
+      "Industrial catalysis",
+      "Spectrochemical series"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "Chemistry — Nitrogen (Part A) — Function 1",
+    "form_id": "https://docs.google.com/forms/d/1Us1MzKbmaxbIvFLoPFhZSyaFjhVsD0kIoyVIW1LzUlg/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSd8Y0Ik1IKQyUi-PBsidP-nKviYC_si1ZqG_deV7k7jrN7KVQ/viewform",
+    "subject": ["Chemistry"],
+    "topics": [
+      "Nitrogen cycle basics",
+      "Ammonia and ammonium",
+      "Nitrogen oxidation states",
+      "Nitration & industrial processes",
+      "Nitrogen-containing compounds"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "Chemistry — Nitrogen (Part B) — Function 1",
+    "form_id": "https://docs.google.com/forms/d/1TQGFO--4-2fwO5qwOy5AaKnvW8gqa_Se41TvhVUeELw/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScG34Z9vpEUL-hA6ERaRPSDN6XO-Z6Bhi_6W5Z2FzU04_kXnA/viewform",
+    "subject": ["Chemistry"],
+    "topics": [
+      "Amines and amides",
+      "Nitrogen heterocycles",
+      "Amino acids and proteins basics",
+      "Analytical tests",
+      "Industrial importance"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "Chemistry — Alcohols, Phenols & Ethers — Function 1",
+    "form_id": "https://docs.google.com/forms/d/15nt7t0VMpIWYEpRjMFvYHfjvruiC-oGGrMDe1BbHUNU/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScse71rF0jCbJyB-3r0mrk2SO7BDhC3gEQYaedhH4ppyaQk0Q/viewform",
+    "subject": ["Chemistry"],
+    "topics": [
+      "Alcohols reactions",
+      "Phenol acidity",
+      "Ethers cleavage",
+      "Tests & identification",
+      "Mechanisms"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "ICT — Computer Systems & Architecture (Part A) — Function ICT1",
+    "form_id": "https://docs.google.com/forms/d/1v49U62dVdOqYibLYOquF5zv5fvKW1KSCQTmxUDSnoQY/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSeHlkFZJ-gYGlVepIpbJlk_zg2BZfUinzyvbOkPqxsJGUG4Fw/viewform",
+    "subject": ["ICT"],
+    "topics": [
+      "CPU & components",
+      "Memory types",
+      "Storage",
+      "Number systems",
+      "Performance metrics"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "ICT — Computer Systems & Architecture (Part B) — Function ICT1",
+    "form_id": "https://docs.google.com/forms/d/1IoOXiYEDsSdquwOYlnQ9Mar6TrzcLmlBZ1NFWvSe1f0/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSd2d86imyWlEjFEKQUe_LPLhIItARD9Lbk2u-OQUuKhBkMsGA/viewform",
+    "subject": ["ICT"],
+    "topics": [
+      "Instruction set",
+      "Machine code vs high-level",
+      "Pipelining",
+      "Memory hierarchy",
+      "I/O systems"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "ICT — Networks & Internet (Part A) — Function ICT1",
+    "form_id": "https://docs.google.com/forms/d/121NkgxV7cbH1nyfM9Y7nIrxsBeviNSmUqtBWeR3CeXA/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLScgHTetWsb80VB8exo06jQCyJcEU2c31N1zAiB6DelKRZ47cQ/viewform",
+    "subject": ["ICT"],
+    "topics": [
+      "Network types",
+      "OSI vs TCP/IP",
+      "Routing & switching",
+      "IP addressing",
+      "Protocols"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "ICT — Networks & Internet (Part B) — Function ICT1",
+    "form_id": "https://docs.google.com/forms/d/1vBLAaGTEnYEtxcW1NqzAEknTniyEF_fcZdWsHDiWRoo/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSdE1p3T8E_KFtOvNOnWuXN0nR3MMzdYM2KFhFGvbfx9REzWrQ/viewform",
+    "subject": ["ICT"],
+    "topics": [
+      "Switching vs routing",
+      "Wireless technologies",
+      "Network security",
+      "Services (DNS, SMTP)",
+      "Bandwidth & latency"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
+  },
+  {
+    "name": "ICT — Programming & Algorithms (Lower Sixth) — Function ICT1",
+    "form_id": "https://docs.google.com/forms/d/1B9N_ZUjWDukNdtQsjwbnMroW4LgBYu2YQqk_GM6x73Y/edit",
+    "form_answer_link": "https://docs.google.com/forms/d/e/1FAIpQLSf7bVNt-a4P-EbsCLxLNw2L9C3cE7PXfoe_zEIOES4sd0sXww/viewform",
+    "subject": ["ICT"],
+    "topics": [
+      "Basic programming constructs",
+      "Flowcharts and pseudocode",
+      "Complexity (Big-O)",
+      "Data types",
+      "Problem-solving"
+    ],
+    "notes": "Balanced MCQs — GCE A-Level standard"
   }
 ]
